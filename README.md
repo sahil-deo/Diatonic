@@ -51,6 +51,17 @@ Settings → Apps → GitHub. Paste a personal access token with the `repo` scop
 
 Credentials and tokens are stored in the macOS Keychain (fallback: `~/.diatonic/secrets.json`, mode 0600).
 
+## Make it yours: quick actions, `/` commands and interface
+
+**Saved prompts and script buttons** (Settings → Actions, or **+ Add** on the bar above the message box). Each one can be a chip on the bar, a `/command`, a keyboard shortcut, or all three.
+
+- **Saved prompt:** text that is dropped into the message box (so you can tweak it) or sent straight away, optionally in a fresh chat. Placeholders: `{{input}}` (whatever you type after the command), `{{date}}`, `{{time}}`, `{{day}}`, `{{clipboard}}`. Example: `/summarize <paste text>` fills in `Summarize in 3 bullets: …`. A chip whose prompt needs `{{input}}` asks for it first.
+- **Script button:** runs a shell command from a saved action and streams its output into the chat as a live card (with Stop, Copy and *Send output to the agent*). Your input arrives as `$1` and `$INPUT`; it is never pasted into the command text, so it can't inject code. Optional working folder, timeout and "ask before running". Scripts need **Settings → Automation → Allow scripts** (the same switch as scheduled script jobs; off by default). The server only ever runs a *saved* action by id, never a command sent by the browser, and the agent has no tool to create or run these.
+- **`/` menu:** type `/` for your actions plus built-ins: `/new`, `/settings [tab]`, `/theme dark|light|system`, `/speak on|off`, `/panel <app>`, `/sidebar`, `/stop`, `/actions`, `/help`. Arrow keys to move, **Tab** to complete, **Enter** to run (`/say hello` passes "hello" as the argument), **Esc** to close.
+- **On the bar:** drag chips to reorder, right-click to edit, press a chip's shortcut from anywhere. **Add examples** loads a few starters.
+
+**Interface** (Settings → Interface), all applied live: theme, accent colour, density, text size, font, corner roundness, chat width, show/hide the sidebar (⌘B), quick-action bar, status bar, spoken-summary button and empty-chat suggestions, reorder or hide apps in the left rail, and a custom-CSS box for anything else (`--accent`, `--bg`, `--surface`, … are all variables). **Export** saves your appearance and actions to a JSON file; **Import** restores it (validated first, so a bad file changes nothing).
+
 ## Reminders, scheduled jobs, to-dos and notes
 
 Say what you want in plain words ("remind me to call mom tomorrow at 9", "every weekday at 8 give me my to-do briefing", "add a to-do to send the invoice by Friday", "jot down that the wifi password is on the fridge") or use the panels in the left rail.
@@ -121,8 +132,9 @@ Approvals work in any chat, including background ones. Every tool declares a ris
 |---|---|
 | ⌘K | Command palette |
 | ⌘, | Settings |
+| ⌘B | Show/hide the sidebar |
 | ⌘⇧O | New chat |
-| / | Focus the composer |
+| / | Focus the composer; typing it in the message box opens commands and saved prompts |
 | Hold ⌥⇧Space | Push-to-talk |
 | Enter / Shift+Enter | Send / new line |
 

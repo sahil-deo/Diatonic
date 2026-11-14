@@ -53,7 +53,24 @@ DEFAULTS: dict[str, Any] = {
         "summary_model": "",  # empty = same model as the agent
     },
     "apps": {},  # {app_id: {"enabled": bool, "settings": {}, "always_allow": []}}
-    "appearance": {"theme": "system"},
+    "appearance": {
+        "theme": "system",          # system | light | dark
+        "accent": "",               # #rrggbb, empty = theme default
+        "density": "comfortable",   # comfortable | compact
+        "font": "system",           # system | sans | serif | mono | rounded
+        "font_size": 14,            # px, 11-22
+        "radius": "default",        # sharp | default | round
+        "width": "default",         # narrow | default | wide | full (chat column)
+        "sidebar": "show",          # show | hide
+        "show_status_bar": True,
+        "show_quick_actions": True,
+        "show_suggestions": True,
+        "show_speak_button": True,
+        "rail_order": [],           # app ids, in the order you want them
+        "rail_hidden": [],
+        "custom_css": "",
+    },
+    "actions": [],  # saved prompts and script buttons; see diatonic/actions.py
     "notifications": {
         "native": True,        # macOS Notification Center, works with the browser closed
         "browser": False,      # web notifications while the page is open in the background

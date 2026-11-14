@@ -8,6 +8,9 @@ import { initSettings, openSettings } from "./settings.js";
 import { initPalette, openPalette } from "./palette.js";
 import { initPanel, openPanel, closePanel, refreshPanel } from "./panel.js";
 import { initInbox, loadInbox } from "./inbox.js";
+import { applyAppearance, railApps } from "./appearance.js";
+import { initActions, invoke as invokeAction } from "./actions.js";
+import { requestEdit } from "./settings-actions.js";
 
 /* ---------- theme ---------- */
 const mq = matchMedia("(prefers-color-scheme: light)");
@@ -22,7 +25,7 @@ function renderRail() {
   setIcon($("#rail-chat"), "chat", 20); setIcon($("#rail-settings"), "sliders", 20);
   $("#rail-chat").classList.toggle("active", !state.panelApp);
   const box = $("#rail-apps");
-  box.replaceChildren(...state.apps.filter((a) => a.enabled).map((a) => {
+  box.replaceChildren(...railApps(state.apps).map((a) => {
     const b = h("button", { class: `rail-btn ${state.panelApp === a.id ? "active" : ""}`, title: a.name, "aria-label": a.name,
       onclick: () => (state.panelApp === a.id ? closePanel() : a.panel ? openPanel(a.id) : openSettings("apps")), html: icon(a.icon, 20) });
     if (a.status && !a.status.connected) b.append(h("i", { class: "badge", title: a.status.detail }));
@@ -125,18 +128,29 @@ const commands = () => [
   { group: "Actions", label: state.config.voice.speak_summary ? "Turn off spoken summaries" : "Turn on spoken summaries", icon: "volume", run: () => setSpeak(!state.config.voice.speak_summary) },
   { group: "Actions", label: "Settings", icon: "sliders", hint: "⌘,", run: () => openSettings() },
   { group: "Actions", label: "Voice settings", icon: "mic", run: () => openSettings("voice") },
+  { group: "Actions", label: "Customize the interface", icon: "sliders", run: () => openSettings("interface") },
+  { group: "Actions", label: "Edit saved prompts and buttons", icon: "command", run: () => openSettings("actions") },
+  { group: "Actions", label: "Toggle sidebar", icon: "menu", hint: "⌘B", run: () => toggleSidebar() },
+  ...(state.config.actions || []).map((a) => ({ group: "Your actions", label: a.label, icon: a.kind === "script" ? "command" : "chat", hint: a.name ? "/" + a.name : "", run: () => invokeAction(a) })),
   { group: "Actions", label: "Theme: dark", icon: "chevron", run: () => setTheme("dark") },
   { group: "Actions", label: "Theme: light", icon: "chevron", run: () => setTheme("light") },
   ...state.apps.filter((a) => a.enabled && a.panel).map((a) => ({ group: "Apps", label: `Open ${a.name}`, icon: a.icon, run: () => openPanel(a.id) })),
   ...(state.panelApp ? [{ group: "Apps", label: "Close app panel", icon: "x", run: closePanel }] : []),
   ...state.conversations.slice(0, 15).map((c) => ({ group: "Conversations", label: c.title, icon: "chat", run: () => chat.openConversation(c.id) })),
 ];
+function toggleSidebar() {
+  if (matchMedia("(max-width: 820px)").matches) return $("#sidebar").classList.toggle("show");
+  const next = state.config.appearance.sidebar === "hide" ? "show" : "hide";
+  state.config.appearance.sidebar = next; applyAppearance();
+  api.putConfig({ appearance: { sidebar: next } }).then((c) => { state.config = c; }).catch(() => {});
+}
 async function setTheme(t) { state.config = await api.putConfig({ appearance: { theme: t } }); applyTheme(); }
 
 addEventListener("keydown", (e) => {
   const mod = e.metaKey || e.ctrlKey;
   if (mod && e.key.toLowerCase() === "k") { e.preventDefault(); openPalette(commands); }
   else if (mod && e.key === ",") { e.preventDefault(); openSettings(); }
+  else if (mod && e.key.toLowerCase() === "b" && !e.shiftKey) { e.preventDefault(); toggleSidebar(); }
   else if (mod && e.shiftKey && e.key.toLowerCase() === "o") { e.preventDefault(); chat.newChat(); }
   else if (e.key === "/" && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName) && !document.querySelector("dialog[open]")) { e.preventDefault(); input.focus(); }
 });
@@ -145,16 +159,18 @@ addEventListener("keydown", (e) => {
 async function boot() {
   const s = await api.state();
   state.config = s.config; state.apps = s.apps;
-  applyTheme();
+  applyTheme(); applyAppearance();
   setIcon($("#new-chat"), "plus", 18); setIcon($("#toggle-sidebar"), "menu", 18); setIcon($("#palette-btn"), "command", 18);
   paintSpeakToggle(); paintSend();
   initSettings(); initPalette(); initPanel();
   initVoiceUI({ setInput, send: (t) => chat.send(t), openSettings });
+  initActions({ newChat: () => chat.newChat(), openSettings, setTheme, setSpeak, openPanel, closePanel, toggleSidebar,
+    editAction: (id) => { requestEdit(id); openSettings("actions"); } });
   $("#new-chat").onclick = () => chat.newChat();
   $("#rail-chat").onclick = () => { closePanel(); input.focus(); };
   $("#rail-settings").onclick = () => openSettings();
   $("#palette-btn").onclick = () => openPalette(commands);
-  $("#toggle-sidebar").onclick = () => $("#sidebar").classList.toggle("show");
+  $("#toggle-sidebar").onclick = toggleSidebar;
   $("#speak-toggle").onclick = () => setSpeak(!state.config.voice.speak_summary);
 
   const inbox = initInbox({ onOpenChat: (id) => chat.openConversation(id) });
@@ -165,7 +181,8 @@ async function boot() {
   on("apps", () => { renderRail(); chat.renderEmpty?.(); });
   on("panel", renderRail);
   on("health", refreshHealth);
-  on("config", () => { applyTheme(); updateHint(); paintSpeakToggle(); });
+  on("config", () => { applyTheme(); applyAppearance(); updateHint(); paintSpeakToggle(); renderRail(); });
+  on("rail-changed", renderRail);
   on("prefill", (t) => { setInput(t); });
 
   renderRail(); chat.renderEmpty(); updateHint(); loadConvs(); refreshHealth(); loadInbox(); chat.startEventStream();

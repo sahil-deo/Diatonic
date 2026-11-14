@@ -26,7 +26,7 @@ export function updateHint(extra) {
   const el = $("#hint");
   if (mode === "recording") el.innerHTML = `<span class="live">● Listening…</span><span>release ${hk} or click the mic to finish</span>`;
   else if (mode === "transcribing") el.innerHTML = "<span>Transcribing…</span>";
-  else el.innerHTML = `<span>Enter to send · Shift+Enter for a new line</span><span>Hold ${hk} to talk</span>${extra ? `<span>${extra}</span>` : ""}`;
+  else el.innerHTML = `<span>Enter to send · Shift+Enter for a new line · / for commands</span><span>Hold ${hk} to talk</span>${extra ? `<span>${extra}</span>` : ""}`;
 }
 
 function voiceReady() {

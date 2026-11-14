@@ -4,26 +4,13 @@ import { state, emit } from "./store.js";
 import { speaker, eventToHotkey, prettyHotkey } from "./voice.js";
 import { paintSpeakToggle, setSpeak, updateHint } from "./voiceui.js";
 import { askBrowserPermission } from "./inbox.js";
+import { RESERVED, save, saveSoon, field, text, select, toggle } from "./form.js";
+import { actionsPane } from "./settings-actions.js";
+import { interfacePane } from "./settings-interface.js";
 
 const dlg = () => $("#settings");
 let tab = "agent";
-export const RESERVED = { "Meta+K": "command palette", "Meta+,": "settings", "Meta+Shift+O": "new chat" };
-
-async function save(patch) {
-  try { state.config = await api.putConfig(patch); emit("config"); }
-  catch (e) { toast(e.message, "error"); }
-}
-const saveSoon = debounce(save, 500);
-
-/* ---- field helpers ---- */
-const field = (label, input, help) => h("div", { class: "field" }, h("label", {}, label), input, help && h("div", { class: "help" }, help));
-const text = (v, onChange, o = {}) => h("input", { type: o.type || "text", value: v ?? "", placeholder: o.placeholder, list: o.list, step: o.step, min: o.min, max: o.max,
-  oninput: (e) => onChange(o.type === "number" ? Number(e.target.value) : e.target.value) });
-const select = (v, opts, onChange) => h("select", { onchange: (e) => onChange(e.target.value) },
-  opts.map(([val, lbl]) => h("option", { value: val, selected: val === v }, lbl)));
-const toggle = (label, desc, checked, onChange) => h("div", { class: "toggle-row" },
-  h("div", {}, h("div", {}, label), desc && h("div", { class: "d" }, desc)),
-  h("span", { class: "switch" }, h("input", { type: "checkbox", checked, "aria-label": label, onchange: (e) => onChange(e.target.checked) })));
+export { RESERVED };
 
 /* ---- panes ---- */
 function agentPane() {
@@ -174,7 +161,7 @@ function automationPane() {
     h("div", { class: "row" }, h("button", { class: "btn", onclick: () => api.post("/api/notifications/test").catch((e) => toast(e.message, "error")) }, "Send a test notification")),
     h("div", { style: "height:22px" }),
     h("div", { class: "p-section" }, "Scheduled jobs"),
-    toggle("Allow script jobs", "Lets jobs run shell commands on a schedule, with your user's permissions. Only you can turn this on. The agent can ask to create one, and you'll see the exact command to approve.", sc.allow_scripts, (x) => {
+    toggle("Allow scripts", "Lets scheduled jobs and your script buttons run shell commands with your user's permissions. Only you can turn this on. If the agent proposes a script job you'll see the exact command to approve.", sc.allow_scripts, (x) => {
       if (x && !confirm("Script jobs run shell commands as you, unattended. Only enable this if you want that. Continue?")) return renderPane();
       save({ scheduler: { allow_scripts: x } });
     }),
@@ -187,11 +174,7 @@ function automationPane() {
   ];
 }
 
-function appearancePane() {
-  return [field("Theme", select(state.config.appearance.theme, [["system", "Match system"], ["dark", "Dark"], ["light", "Light"]], (v) => save({ appearance: { theme: v } })))];
-}
-
-const TABS = [["agent", "Agent", agentPane], ["voice", "Voice", voicePane], ["apps", "Apps", appsPane], ["automation", "Automation", automationPane], ["appearance", "Appearance", appearancePane]];
+const TABS = [["agent", "Agent", agentPane], ["voice", "Voice", voicePane], ["apps", "Apps", appsPane], ["automation", "Automation", automationPane], ["actions", "Actions", actionsPane], ["interface", "Interface", interfacePane]];
 
 export async function refreshApps() {
   state.apps = await api.get("/api/apps"); emit("apps"); if (dlg().open) renderPane();
@@ -207,7 +190,7 @@ function renderPane() {
 const $$nav = () => [...dlg().querySelectorAll(".set-nav button")];
 
 export async function openSettings(which) {
-  if (which) tab = which;
+  if (which && TABS.some((t) => t[0] === which)) tab = which;
   state.health = await api.health().catch(() => state.health);
   const d = dlg();
   d.replaceChildren(
@@ -220,6 +203,7 @@ export async function openSettings(which) {
   renderPane();
 }
 
+export { renderPane as rerenderSettings };
 export function initSettings() {
   dlg().addEventListener("click", (e) => { if (e.target === dlg()) dlg().close(); });
   dlg().addEventListener("close", () => { paintSpeakToggle(); emit("health"); });

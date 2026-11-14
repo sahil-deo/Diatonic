@@ -28,7 +28,7 @@
 
   <main class="main">
     <header class="topbar">
-      <button class="icon-btn only-narrow" id="toggle-sidebar" aria-label="Conversations"></button>
+      <button class="icon-btn" id="toggle-sidebar" aria-label="Toggle sidebar" title="Toggle sidebar (⌘B)"></button>
       <div class="title" id="chat-title">New chat</div>
       <div class="grow"></div>
       <button class="chip-btn" id="speak-toggle" aria-pressed="false" title="Spoken summaries"><span id="speak-icon"></span><span>Spoken summary</span></button>
@@ -40,10 +40,14 @@
     <section class="messages" id="messages" aria-live="polite"></section>
 
     <footer class="composer-wrap">
+      <div class="qa-bar" id="qa-bar" role="toolbar" aria-label="Quick actions"></div>
+      <div class="composer-anchor">
+      <div class="slash hidden" id="slash" role="listbox" aria-label="Commands"></div>
       <div class="composer" id="composer">
         <textarea id="input" rows="1" placeholder="Ask Diatonic to do something…" aria-label="Message"></textarea>
         <button class="mic-btn" id="mic" aria-label="Voice input"><span id="mic-icon"></span><i class="level" id="mic-level"></i></button>
         <button class="send-btn" id="send" aria-label="Send"></button>
+      </div>
       </div>
       <div class="hint" id="hint"></div>
     </footer>

@@ -15,6 +15,7 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from .agent import approvals
+from .actions import ActionRunner, clean_actions, clean_appearance, export_bundle, import_bundle
 from .agent.guards import collapse_repeats
 from .agent.runs import RunBusy, RunManager
 from .agent.providers import ProviderError, make_provider
@@ -23,6 +24,7 @@ from .config import Config, home
 from .context import Context
 from .db import Database
 from .scheduler.engine import Scheduler
+from .scheduler.scripts import ScriptsDisabled
 from .scheduler.notify import Notifier
 from .scheduler.store import Store
 from .voice.models import VoiceSetup
@@ -74,6 +76,7 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
     ctx.notifier = Notifier(ctx, store, runs.broadcast)
     registry = registry or Registry(ctx).discover()
     ctx.scheduler = Scheduler(ctx, registry, runs, ctx.notifier, store)
+    action_runner = ActionRunner(ctx)
     stt, tts = STT(), TTS()
     setup = VoiceSetup(stt, tts)
     port = config.data["server"]["port"]
@@ -118,7 +121,49 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
                       "setup": setup.state}})
 
     async def put_config(request):
-        return JSONResponse(config.update(await request.json()))
+        patch = await request.json()
+        if "appearance" in patch:
+            try:
+                patch["appearance"] = clean_appearance(patch["appearance"])
+            except (ValueError, TypeError) as e:
+                return JSONResponse({"error": str(e)}, 400)
+        patch.pop("actions", None)  # actions go through the validating endpoint
+        return JSONResponse(config.update(patch))
+
+    # ---- quick actions -------------------------------------------------------
+    async def put_actions(request):
+        try:
+            config.data["actions"] = clean_actions(await request.json())
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, 400)
+        config.save()
+        return JSONResponse(config.data["actions"])
+
+    async def run_action(request):
+        a = action_runner.find(request.path_params["aid"])
+        if not a:
+            raise HTTPException(404, "No such action")
+        body = await request.json() if await request.body() else {}
+        try:
+            rid = action_runner.start(a, str(body.get("input", "")))
+        except ScriptsDisabled:
+            return JSONResponse({"error": "Scripts are turned off. Enable them in Settings → Automation.",
+                                 "code": "scripts_disabled"}, 403)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, 400)
+        return JSONResponse({"run_id": rid})
+
+    async def cancel_action(request):
+        return JSONResponse({"ok": action_runner.cancel(request.path_params["rid"])})
+
+    async def export_custom(request):
+        return JSONResponse(export_bundle(config), headers={"Content-Disposition": "attachment; filename=diatonic-customization.json"})
+
+    async def import_custom(request):
+        try:
+            return JSONResponse(import_bundle(config, await request.json()))
+        except (ValueError, TypeError) as e:
+            return JSONResponse({"error": str(e)}, 400)
 
     # ---- apps ------------------------------------------------------------
     async def put_app(request):
@@ -301,6 +346,11 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
         Route("/api/state", get_state),
         Route("/api/health", health),
         Route("/api/config", put_config, methods=["PUT"]),
+        Route("/api/actions", put_actions, methods=["PUT"]),
+        Route("/api/actions/runs/{rid}/cancel", cancel_action, methods=["POST"]),
+        Route("/api/actions/{aid}/run", run_action, methods=["POST"]),
+        Route("/api/customization/export", export_custom),
+        Route("/api/customization/import", import_custom, methods=["POST"]),
         Route("/api/apps", get_apps),
         Route("/api/apps/{app_id}/config", put_app, methods=["PUT"]),
         Route("/api/apps/{app_id}/secrets/{key}", clear_secret, methods=["DELETE"]),
@@ -325,6 +375,7 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
         ctx.scheduler.start()
         yield
         await ctx.scheduler.stop()
+        await action_runner.shutdown()
         await runs.shutdown()
         await ctx.http.aclose()
 
