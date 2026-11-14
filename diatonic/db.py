@@ -52,6 +52,14 @@ class Database:
               pinned INTEGER NOT NULL DEFAULT 0, enabled INTEGER NOT NULL DEFAULT 1, uses INTEGER NOT NULL DEFAULT 0,
               created_at REAL NOT NULL, updated_at REAL NOT NULL, last_used REAL);
             CREATE INDEX IF NOT EXISTS idx_mem_scope ON memories(scope, kind);
+            CREATE TABLE IF NOT EXISTS telemetry_runs (
+              id INTEGER PRIMARY KEY AUTOINCREMENT, started_at REAL NOT NULL, conv_id TEXT, source TEXT NOT NULL DEFAULT 'chat',
+              model TEXT, request TEXT, apps TEXT NOT NULL DEFAULT '[]', tools_offered INTEGER NOT NULL DEFAULT 0,
+              status TEXT NOT NULL, error TEXT, total_ms INTEGER, ttft_ms INTEGER, model_ms INTEGER, prefill_ms INTEGER,
+              gen_ms INTEGER, load_ms INTEGER, tool_ms INTEGER, model_calls INTEGER, tool_calls INTEGER, tool_errors INTEGER,
+              prompt_tokens INTEGER, completion_tokens INTEGER, answer_chars INTEGER,
+              guards TEXT NOT NULL DEFAULT '[]', steps TEXT NOT NULL DEFAULT '[]');
+            CREATE INDEX IF NOT EXISTS idx_tel_started ON telemetry_runs(started_at);
             PRAGMA foreign_keys = ON;
             """
         )

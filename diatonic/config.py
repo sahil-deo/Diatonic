@@ -76,6 +76,12 @@ DEFAULTS: dict[str, Any] = {
         "budget_chars": 600,    # most characters of facts added to the prompt (~150 tokens)
         "max_items": 8,         # most facts added to the prompt
     },
+    "telemetry": {
+        "enabled": True,        # one small row per run, written once at the end; no model calls
+        "store_text": True,     # keep the first 160 characters of each request (turn off for privacy)
+        "retention_days": 30,
+        "prefill_baseline": 250,  # tokens/s of an uncached prompt on this machine; used to estimate cache hits
+    },
     "actions": [],  # saved prompts and script buttons; see diatonic/actions.py
     "notifications": {
         "native": True,        # macOS Notification Center, works with the browser closed

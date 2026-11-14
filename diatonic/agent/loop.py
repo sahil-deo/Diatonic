@@ -131,9 +131,12 @@ def _dump(result) -> str:
 async def _generate(provider, messages, specs, holder: dict, options=None) -> AsyncIterator[dict]:
     """One model call. Streams tokens, cuts the stream the moment it starts repeating itself."""
     content, calls = "", []
-    holder.update(looped=False, truncated=False, tokens=0)
+    holder.update(looped=False, truncated=False, tokens=0, usage=None, ttft_ms=None)
+    t0 = time.monotonic()
     async with aclosing(provider.stream(messages, specs, options=options)) as stream:
         async for chunk in stream:
+            if holder["ttft_ms"] is None and (chunk.get("content") or chunk.get("tool_calls")):
+                holder["ttft_ms"] = (time.monotonic() - t0) * 1000   # perceived latency: first output after the request
             if chunk.get("content"):
                 content += chunk["content"]
                 cut = detect_loop(content)
@@ -147,9 +150,10 @@ async def _generate(provider, messages, specs, holder: dict, options=None) -> As
                 calls.extend(chunk["tool_calls"])
             if chunk.get("usage"):
                 holder["tokens"] = chunk["usage"].get("completion", 0)
+                holder["usage"] = chunk["usage"]
             if chunk.get("truncated"):
                 holder["truncated"] = True
-    holder.update(content=content, calls=calls)
+    holder.update(content=content, calls=calls, ms=(time.monotonic() - t0) * 1000)
 
 
 async def _execute(call: dict, tool_map: dict, registry, guard: RunGuard, out: dict, ctx=None,
@@ -275,6 +279,7 @@ async def run_agent(ctx, registry, conv_id: str, text: str, *, speak: bool = Fal
     provider = make_provider(ctx)
     guard = RunGuard(acfg)
     guard.approval_timeout = approval_timeout
+    trace = ctx.telemetry.begin(conv_id, text, "scheduled" if (readonly or approval_timeout is not None) else "chat", acfg["model"])
 
     history = build_history(ctx.db.history(conv_id, limit=int(acfg["history_messages"])), int(acfg["history_chars"]))
     prior_apps = ctx.db.apps_used(conv_id)
@@ -286,6 +291,7 @@ async def run_agent(ctx, registry, conv_id: str, text: str, *, speak: bool = Fal
     # With no app named in the request every app's tools are offered as a fallback, but app-specific facts aren't.
     facts = mem.relevant({a.id for a, _ in tool_map.values()} if (expects_tool or prior_apps) else set())
     specs = [tool_spec(a, t, mem.tool_notes(n)) for n, (a, t) in tool_map.items()]
+    trace.routing(sorted({a.id for a, _ in tool_map.values()}), len(specs))
     learner = LessonTracker() if acfg and ctx.config.data["memory"]["auto_learn"] and ctx.config.data["memory"]["enabled"] else None
     now = ctx.now().strftime("%A %Y-%m-%d %H:%M")
     messages = [{"role": "system", "content": build_system_prompt(ctx, registry) + facts_block(facts) + extra_system}, *history,
@@ -303,6 +309,7 @@ async def run_agent(ctx, registry, conv_id: str, text: str, *, speak: bool = Fal
 
     def note(kind: str, message: str) -> dict:
         guards.append(message)
+        trace.guard(kind)
         return {"type": "guard", "kind": kind, "message": message}
 
     try:
@@ -315,6 +322,7 @@ async def run_agent(ctx, registry, conv_id: str, text: str, *, speak: bool = Fal
                 yield ev
             content, calls = holder["content"], [] if forced else holder["calls"]
             tokens += holder["tokens"]
+            trace.model(holder["ms"], holder["usage"], holder["ttft_ms"], holder["looped"])
 
             if holder["looped"]:
                 guard.loops += 1
@@ -367,12 +375,14 @@ async def run_agent(ctx, registry, conv_id: str, text: str, *, speak: bool = Fal
                     async for ev in _execute(call, tool_map, registry, guard, out, ctx, learner):
                         if ev["type"] == "guard":
                             guards.append(ev["message"])
+                            trace.guard(ev["kind"])
                         elif ev["type"] == "tool_call":
                             cards[ev["id"]] = {k: ev[k] for k in ("id", "name", "app", "title", "args", "risk", "describe")}
                         elif ev["type"] == "tool_status":
                             cards[ev["id"]]["status"] = ev["status"]
                         elif ev["type"] == "tool_result":
                             cards[ev["id"]].update(ok=ev["ok"], preview=ev["preview"], ms=ev["ms"])
+                            trace.tool(cards[ev["id"]]["name"], ev["ms"], ev["ok"])
                             actions.append(f"{cards[ev['id']]['title']} ({cards[ev['id']]['app']}): "
                                            f"{'ok' if ev['ok'] else 'failed'}")
                         yield ev
@@ -389,9 +399,11 @@ async def run_agent(ctx, registry, conv_id: str, text: str, *, speak: bool = Fal
                 yield note("steps", "Stopped at the step limit before finishing.")
     except ProviderError as e:
         error, had_error = str(e), True
+        trace.guard("provider_error")
         yield {"type": "error", "message": error}
     except asyncio.CancelledError:
         # Stopped by the user: keep what was produced so the chat history stays coherent.
+        trace.finish("cancelled")
         partial = collapse_repeats("\n\n".join(texts))
         ctx.db.add_message(conv_id, "assistant", partial, {"tools": list(cards.values()), "stopped": True, "guards": guards})
         raise
@@ -400,7 +412,8 @@ async def run_agent(ctx, registry, conv_id: str, text: str, *, speak: bool = Fal
     if not final and not error:
         final = _fallback(list(cards.values()))
         yield {"type": "rewrite", "text": final}
-    ctx.db.add_message(conv_id, "assistant", final, {"tools": list(cards.values()), "error": error, "guards": guards})
+    perf = trace.finish("error" if error else "ok", error, len(final))
+    ctx.db.add_message(conv_id, "assistant", final, {"tools": list(cards.values()), "error": error, "guards": guards, "perf": perf})
     yield {"type": "message", "text": final}
 
     seconds = time.monotonic() - t0
@@ -418,4 +431,4 @@ async def run_agent(ctx, registry, conv_id: str, text: str, *, speak: bool = Fal
                 s = None
             if s:
                 yield {"type": "summary", "text": s}
-    yield {"type": "done", "seconds": round(seconds, 1), "tokens": tokens}
+    yield {"type": "done", "seconds": round(seconds, 1), "tokens": tokens, "perf": perf}

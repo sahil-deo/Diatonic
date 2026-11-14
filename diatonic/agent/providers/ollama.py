@@ -62,7 +62,10 @@ class OllamaProvider(Provider):
                             for c in msg["tool_calls"]]
                     if data.get("done"):
                         chunk["usage"] = {"prompt": data.get("prompt_eval_count", 0),
-                                          "completion": data.get("eval_count", 0)}
+                                          "completion": data.get("eval_count", 0),
+                                          "prefill_ms": int(data.get("prompt_eval_duration", 0) / 1e6),
+                                          "gen_ms": int(data.get("eval_duration", 0) / 1e6),
+                                          "load_ms": int(data.get("load_duration", 0) / 1e6)}
                         chunk["truncated"] = data.get("done_reason") == "length"
                     if chunk:
                         yield chunk

@@ -9,7 +9,7 @@ class ProviderError(Exception):
 
 class Provider:
     """chunk = {"content": str} and/or {"tool_calls": [{"name": str, "arguments": dict}]}
-    and, at the end, {"usage": {"prompt": int, "completion": int}, "truncated": bool}."""
+    and, at the end, {"usage": {"prompt", "completion", "prefill_ms", "gen_ms", "load_ms"}, "truncated": bool}."""
 
     def __init__(self, http, cfg: dict):
         self.http = http

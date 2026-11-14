@@ -51,6 +51,12 @@ Settings → Apps → GitHub. Paste a personal access token with the `repo` scop
 
 Credentials and tokens are stored in the macOS Keychain (fallback: `~/.diatonic/secrets.json`, mode 0600).
 
+## Telemetry: see how fast and reliable it is
+
+The **Telemetry** app (pulse icon in the left rail) shows, for the last 6 hours to 30 days: runs, median and 90th-percentile time, time to first output, generation speed, prompt size, **estimated cache reuse**, tool error rate, guard events, where the time goes (reading prompts, writing, tools, model loading), the last 40 runs as stacked bars, per-tool stats, and the slowest/recent/problem runs. Click a run for its timeline (each model call with prompt tokens, cache estimate and output tokens, each tool with its duration). Every reply also carries a faint line such as `5.4 s · 1.6k in · cache ~94% · 60 out`, and you can ask the agent "how fast has it been today?".
+
+It costs essentially nothing: a run only appends a few small records in memory, token counts and durations come free from Ollama's final stream chunk (no extra model calls), and there is **one small database write per run**, measured at about 0.4 ms against runs that take seconds. A failure while recording can never affect a run. Rows are kept 30 days (max 5,000). Turn recording off, or stop storing the first 160 characters of each request, from the panel's footer; **Clear data** wipes it. The cache figure is an estimate (Ollama reports the full prompt size but only the time spent on the uncached part). Planned work that this data should drive is in [`todo.md`](todo.md).
+
 ## Memory across chats (small and bounded)
 
 Two things keep the agent from repeating the same mistakes, and neither grows into a prompt burden:

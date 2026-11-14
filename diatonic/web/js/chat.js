@@ -85,6 +85,15 @@ addEventListener("keydown", (e) => {
   else if (e.key === "Escape" && !document.querySelector("dialog[open]")) { e.preventDefault(); pending[0].decide(false); }
 });
 
+const k = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+function perfLine(p) {
+  if (!p?.ms) return null;
+  const bits = [p.ms < 950 ? `${p.ms} ms` : `${(p.ms / 1000).toFixed(1)} s`, p.prompt_tokens ? `${k(p.prompt_tokens)} in` : null,
+    p.cache_pct != null ? `cache ~${p.cache_pct}%` : null, p.completion_tokens ? `${k(p.completion_tokens)} out` : null,
+    p.model_calls > 1 ? `${p.model_calls} model calls` : null].filter(Boolean);
+  return h("div", { class: "runmeta", title: `First output ${p.ttft_ms != null ? p.ttft_ms + " ms" : "n/a"} · open the Telemetry panel for details` }, bits.join(" · "));
+}
+
 /* ---------- live view ---------- */
 function newSeg(v) { v.seg = h("div", { class: "md cursor" }); v.segText = ""; v.wrap.append(v.seg); }
 function paint(v) { v.raf = 0; if (v.seg) { v.seg.innerHTML = md(v.segText); scroll(); } }
@@ -129,6 +138,7 @@ function applyEvent(v, ev) {
       cancelAnimationFrame(v.raf);
       if (v.seg) { v.seg.innerHTML = md(v.segText); v.seg.classList.remove("cursor"); if (!v.segText.trim()) v.seg.remove(); }
       [...v.approvals.keys()].forEach((id) => dropApproval(v, id));
+      { const pl = perfLine(ev.perf); if (pl) v.wrap.append(pl); }
       v.live = false; break;
   }
 }
@@ -249,6 +259,7 @@ export async function openConversation(id) {
       if (m.meta.error) wrap.append(h("div", { class: "err" }, m.meta.error));
       (m.meta.guards || []).forEach((g) => wrap.append(h("div", { class: "guard", html: `${icon("shield", 13)} ` }, g)));
       if (m.meta.stopped) wrap.append(h("div", { class: "stopped" }, "Stopped."));
+      { const pl = perfLine(m.meta.perf); if (pl) wrap.append(pl); }
       msgs.append(wrap);
     }
   }

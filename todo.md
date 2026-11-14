@@ -1,0 +1,65 @@
+# Diatonic TODO
+
+Ideas and follow-ups, in rough priority order. Use the **Telemetry** panel (left rail) to decide what is worth doing and to prove it worked: every item below says how to measure it.
+
+## Baseline (measured 2026-11-15)
+
+Apple M4, 16 GB, `qwen3:4b-instruct`, Ollama 100% on GPU.
+
+- Prompt processing about **190–290 tokens/s**, generation about **36 tokens/s** (microbenchmark). An identical prompt served from Ollama's prefix cache: 0.2 s instead of 7 s for 1.3k tokens. (An earlier note here assumed 50 tokens/s CPU; that was wrong.)
+- A typical lookup ("list my 3 most recent github repos") is **two model calls** of about 1.7k tokens each. Cold or cache-missed: 30 s. Repeated with a warm cache: 5.4 s (cache about 94%).
+- "hello, what is 2+2?" offered every tool: **4.8k-token prompt, 19.9 s, cache 0%**. This is the "no keyword matched, offer everything" fallback.
+- Over a 5-run sample: reading prompts 47% of wall time, writing 26%, model loading 14%, tools 5%.
+
+Targets: first-message-in-chat under 6 s, follow-ups under 3 s, plain lookups under 2 s.
+
+---
+
+## P1: latency (biggest wins first)
+
+- [ ] **Cache-friendly, append-only context.** Each turn we rebuild the history from the database, so it differs slightly from what was sent last time (the `(Now: …)` suffix, trimming, tool-trace replay) and Ollama re-reads the whole thing. Keep each chat's exact message list and only append to it; compact once, deliberately, when it outgrows the budget. *Expected:* follow-up messages drop from about 5–15 s of prompt reading to roughly zero. *Measure:* Telemetry "Cache reuse" and per-run prefill time for 2nd+ messages in a chat.
+- [ ] **Skip the second model call for plain lookups.** For list/show/what's-on requests, render the tool result with code (calendar events, to-dos, repos, reminders, notes) and show it immediately; only call the model when the request needs reasoning ("which is most urgent?", "summarize"). *Expected:* about 3 s saved per lookup, and no chance of the model misreporting the data. Needs a per-tool `render()` and a cheap "does this need the model?" rule.
+- [ ] **Tool-level routing.** Replace per-app keyword routing with a local scorer (no model) that ranks individual tools and offers the top 6–8. Today a reminder request still pulls in 18 tools. *Measure:* "Tools offered" and prompt size in run detail.
+  - [ ] Fix keyword overlaps (the calendar app lists "remind", which drags it into every reminder request).
+  - [ ] **Replace the "offer every tool" fallback** with no tools for requests that match nothing (plain chat), and **auto-expand** when the model calls a real tool we didn't offer: add that app's tools and continue instead of returning "no tool named".
+  - [ ] Optional: a tiny constrained classification call (enum output, about 8 tokens) for ambiguous requests only. Never on every request.
+- [ ] **Code-parsed fast paths for daily commands.** "Remind me in 20 minutes to …", "add a to-do …", "what's on my calendar today" can be recognised and executed in about 0.1 s with the existing time parser, falling back to the model for fuzzy phrasing. Show what was understood and keep approvals for anything that changes data.
+- [ ] **Eval harness.** About 40 realistic requests with the expected tool and arguments, run against the real model, comparing routing strategies and prompt changes (accuracy, steps, tokens, seconds). Store results; run nightly with our own scheduler; show regressions in the Telemetry panel. Every change in this file should be judged with it.
+
+## P2: speed and capability
+
+- [ ] **Stop reloading the model.** Model loading was 14% of sampled time. `keep_alive` is 30 minutes; with 16 GB consider keeping it loaded much longer (or forever).
+- [ ] **Pre-warm the prompt cache.** After idle or restart, send a 1-token request with the most likely prefix (the last-used tool set) so the first real message starts warm. A gamble that depends on predicting the tool set, so do it after the routing work.
+- [ ] **Benchmark Ollama settings.** Add `scripts/bench_ollama.py` (the 1.3k-token benchmark used above) and compare `OLLAMA_FLASH_ATTENTION=1`, `OLLAMA_KV_CACHE_TYPE=q8_0`, and `num_ctx` (8192 vs 4096). Also try MLX-based runtimes. Unmeasured; may be a free 10–30% on prompt processing.
+- [ ] **Model escalation instead of multi-agent.** Keep the 4B for everything; when guards fire (loop, repeated failures, step limit) or a request needs planning, retry that one request on an 8B model (about 5 GB; fits alongside the 4B in 16 GB, roughly 2× slower, much better at multi-step work). Run scheduled prompt jobs on the 8B since nobody waits for them. Downloading the model needs a decision first.
+- [ ] **Answer grounding check.** Verify in code that the numbers and names in the final answer appear in the tool results; if not, fall back to the direct rendering above or regenerate once. Targets the made-up "I've retrieved your repos…" answers seen earlier.
+- [ ] **Constrained decoding for tool calls** (Ollama `format` with a JSON schema: tool name enum plus arguments). Only worth it if Telemetry shows malformed or invalid calls, so first add a counter for them.
+- [ ] **Parallel tool execution** when the model emits several independent read calls in one step.
+- [ ] **Reference resolution.** "Close the second one", "snooze that" resolved against the last results in code (numbered handles), not by the model.
+- [ ] **Rolling state instead of history replay.** A short structured "what we were just doing" (last entities and results) in place of replaying old turns; cheaper and more cache-stable than summarising with the model.
+
+## Telemetry follow-ups
+
+- [ ] Count malformed/invalid tool calls and tool-selection misses separately (feeds the constrained-decoding decision).
+- [ ] Record approval wait time (currently lands in "Other") so human latency doesn't pollute model latency.
+- [ ] Real token-level cache accounting (Ollama tokenize) instead of the speed-based estimate; calibrate `prefill_baseline` automatically.
+- [ ] Per-app and per-routing-strategy breakdowns, and before/after comparison when a setting or prompt changes.
+- [ ] Regression alerts (median time up, cache down, error rate up) through the notification inbox.
+- [ ] CSV/JSON export.
+
+## Verification debt (built, but never exercised for real)
+
+- [ ] Push-to-talk and microphone capture in Zen/Firefox; Whisper `small.en` (about 500 MB) is not downloaded yet, and the Piper voice only in a throwaway test home.
+- [ ] Spoken summaries and reminders through Piper in the browser.
+- [ ] Google Calendar OAuth end to end with a real account (the app has only been exercised "not connected").
+- [ ] macOS Notification Center banners (tests deliberately never fire real ones), browser notifications, quiet hours.
+- [ ] Background service: `diatonic install-service` / `service-status` / `uninstall-service` (the launchd plist is generated and tested, never installed).
+- [ ] Quick-action bar drag-to-reorder, per-action keyboard shortcuts, and Import in Settings → Interface.
+- [ ] Notes folder pointed at an existing folder of markdown files.
+- [ ] Learned tool quirks ("Learned for next time") firing on a real rejection; so far covered only by tests.
+
+## Parked / decided against (for now)
+
+- **Classify-then-hand-off multi-agent.** On this hardware each hop is another full model call, the classifier prompt evicts Ollama's prefix cache, and cross-app requests need the union of tools anyway. Revisit with a stronger planner model; escalation (above) captures most of the benefit.
+- **Spoken approvals.** A misheard word shouldn't be able to authorise a change.
+- **Agent-created or agent-run script buttons.** Scripts only run from saved actions you create in the UI.
