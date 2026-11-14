@@ -115,6 +115,9 @@ const builtins = () => [
     app ? hooks.openPanel(app.id) : toast(`No app panel called “${q}”.`);
   } },
   { name: "sidebar", desc: "Show or hide the sidebar", run: () => hooks.toggleSidebar() },
+  { name: "remember", desc: "Remember a fact: /remember my default repo is …", run: (a) => !a.trim() ? toast("Usage: /remember <something short to remember>")
+    : api.post("/api/memories", { text: a.trim(), scope: "global" }).then((r) => toast(r.status === "duplicate" ? "Already remembered" : "Remembered")).catch((e) => toast(e.message, "error")) },
+  { name: "forget", desc: "Review and delete what's remembered", run: () => hooks.openSettings("memory") },
   { name: "stop", desc: "Stop the current chat's run", run: () => chat.stop() },
   { name: "actions", desc: "Edit your saved prompts and buttons", run: () => hooks.openSettings("actions") },
   { name: "help", desc: "Show all commands", run: () => setComposer("/") },

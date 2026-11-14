@@ -45,6 +45,13 @@ class Database:
               id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, notes TEXT NOT NULL DEFAULT '',
               due REAL, priority INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'open',
               reminder_id INTEGER, created_at REAL NOT NULL, completed_at REAL);
+            CREATE TABLE IF NOT EXISTS memories (
+              id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL,   -- fact | lesson
+              scope TEXT NOT NULL,            -- global | app:<id> | tool:<app>_<tool>
+              key TEXT, text TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'user',   -- user | agent | auto
+              pinned INTEGER NOT NULL DEFAULT 0, enabled INTEGER NOT NULL DEFAULT 1, uses INTEGER NOT NULL DEFAULT 0,
+              created_at REAL NOT NULL, updated_at REAL NOT NULL, last_used REAL);
+            CREATE INDEX IF NOT EXISTS idx_mem_scope ON memories(scope, kind);
             PRAGMA foreign_keys = ON;
             """
         )

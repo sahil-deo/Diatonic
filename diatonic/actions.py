@@ -17,7 +17,7 @@ from .scheduler.scripts import HARD_MAX_TIMEOUT, ScriptsDisabled, _env, _kill
 
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 HOTKEY_RE = re.compile(r"^(?:(?:Control|Alt|Shift|Meta)\+)+[A-Za-z0-9]+$|^F\d{1,2}$")
-BUILTIN_COMMANDS = {"new", "settings", "theme", "speak", "panel", "stop", "actions", "help", "sidebar"}
+BUILTIN_COMMANDS = {"new", "settings", "theme", "speak", "panel", "stop", "actions", "help", "sidebar", "remember", "forget"}
 MAX_ACTIONS = 100
 MAX_OUTPUT = 200_000
 

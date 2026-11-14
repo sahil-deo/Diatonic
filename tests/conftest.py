@@ -35,7 +35,22 @@ class FakeApp(App):
             self.calls.append(("nuke", a))
             return {"done": True}
 
+        async def lim(a):
+            self.calls.append(("lim", a))
+            return {"limit": a.get("limit")}
+
+        async def pick(a):
+            self.calls.append(("pick", a))
+            if a.get("mode") == "bad":
+                raise ToolError("422: mode 'bad' is not supported", bad_args=True)
+            if a.get("mode") == "down":
+                raise ToolError("503: service unavailable")
+            return {"mode": a.get("mode")}
+
         return [
+            Tool("lim", "limited", {"properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 30}}}, lim),
+            Tool("pick", "picks", {"properties": {"mode": {"type": "string", "enum": ["bad", "good", "down", "Fast"]},
+                                                  "count": {"type": "integer"}, "q": {"type": "string"}}}, pick),
             Tool("read", "read", {"properties": {"text": {"type": "string"}}, "required": ["text"]}, read),
             Tool("boom", "fails", {}, boom),
             Tool("nuke", "dangerous", {"properties": {"id": {"type": "integer"}}, "required": ["id"]},
@@ -47,10 +62,11 @@ class ScriptedProvider:
     """Yields pre-scripted chunk lists, one per model call; complete() returns `summary`."""
 
     def __init__(self, script, summary="NONE"):
-        self.script, self.summary, self.seen = list(script), summary, []
+        self.script, self.summary, self.seen, self.tools_seen = list(script), summary, [], []
 
     async def stream(self, messages, tools=None, model=None, options=None):
         self.seen.append(messages)
+        self.tools_seen.append(tools)
         for chunk in self.script.pop(0):
             yield chunk
 

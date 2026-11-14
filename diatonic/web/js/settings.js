@@ -7,6 +7,7 @@ import { askBrowserPermission } from "./inbox.js";
 import { RESERVED, save, saveSoon, field, text, select, toggle } from "./form.js";
 import { actionsPane } from "./settings-actions.js";
 import { interfacePane } from "./settings-interface.js";
+import { memoryPane } from "./settings-memory.js";
 
 const dlg = () => $("#settings");
 let tab = "agent";
@@ -174,7 +175,7 @@ function automationPane() {
   ];
 }
 
-const TABS = [["agent", "Agent", agentPane], ["voice", "Voice", voicePane], ["apps", "Apps", appsPane], ["automation", "Automation", automationPane], ["actions", "Actions", actionsPane], ["interface", "Interface", interfacePane]];
+const TABS = [["agent", "Agent", agentPane], ["voice", "Voice", voicePane], ["apps", "Apps", appsPane], ["automation", "Automation", automationPane], ["actions", "Actions", actionsPane], ["memory", "Memory", memoryPane], ["interface", "Interface", interfacePane]];
 
 export async function refreshApps() {
   state.apps = await api.get("/api/apps"); emit("apps"); if (dlg().open) renderPane();

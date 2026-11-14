@@ -13,7 +13,15 @@ READ, WRITE, DESTRUCTIVE = "read", "write", "destructive"
 
 
 class ToolError(Exception):
-    """Raised by a tool handler; the message is shown to the model and the user."""
+    """Raised by a tool handler; the message is shown to the model and the user.
+
+    `bad_args=True` means the service rejected the arguments (HTTP 400/422 and similar), as opposed to being
+    down, unauthorised or rate-limited. Only those failures can teach the harness a lesson.
+    """
+
+    def __init__(self, message: str = "", *, bad_args: bool = False):
+        super().__init__(message)
+        self.bad_args = bad_args
 
 
 @dataclass

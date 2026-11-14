@@ -51,6 +51,16 @@ Settings → Apps → GitHub. Paste a personal access token with the `repo` scop
 
 Credentials and tokens are stored in the macOS Keychain (fallback: `~/.diatonic/secrets.json`, mode 0600).
 
+## Memory across chats (small and bounded)
+
+Two things keep the agent from repeating the same mistakes, and neither grows into a prompt burden:
+
+1. **Forgiving tool arguments (fix at the source).** Most "lessons" are really harness bugs. A model asking for `limit=50` when a tool's maximum is 30 used to cost a failed call and a retry in *every* chat. Now harmless slips (a number over the maximum, `"5"` for 5, `"High"` for `high`, a comma-separated string for a list) are corrected silently, and the model is told when a value was clamped so it doesn't claim more results than it got. The GitHub limits also now match what GitHub allows (100).
+2. **A tiny memory for what code can't fix** (Settings → Memory, `/remember …`, or "remember that …" in chat, which asks first):
+   - **Facts** about you or your setup ("my default repo is sahil-deo/Mid-Map"), 200 characters each, 30 at most. Per request only facts for *everywhere* plus the apps that request involves are added to the prompt, capped at 8 facts / 600 characters (about 150 tokens). With no memory the prompt is byte-identical to before, so Ollama's cache still works.
+   - **Learned tool quirks.** When a tool *rejects* an argument and the retry with a different number, switch or fixed choice *works*, the harness records that for that one tool and appends it to that tool's description only. Learned without a model call, only from numbers/booleans/choices (never free text from a web page or an issue), never from outages or auth errors, shown in the chat as "Learned for next time: …", de-duplicated, forgotten after 90 days unused.
+   - You can see, edit, pin, disable or delete everything. Turn memory or auto-learning off in the same tab. Memory is only text in the prompt: it can't change approvals or any setting.
+
 ## Make it yours: quick actions, `/` commands and interface
 
 **Saved prompts and script buttons** (Settings → Actions, or **+ Add** on the bar above the message box). Each one can be a chip on the bar, a `/command`, a keyboard shortcut, or all three.

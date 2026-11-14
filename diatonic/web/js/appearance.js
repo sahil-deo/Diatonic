@@ -49,5 +49,5 @@ export function applyAppearance(a = state.config?.appearance) {
 /** Apps in the order and visibility the user chose for the left rail. */
 export function railApps(apps, a = state.config.appearance) {
   const hidden = new Set(a.rail_hidden), idx = (id) => { const i = a.rail_order.indexOf(id); return i < 0 ? 999 : i; };
-  return apps.filter((x) => x.enabled && !hidden.has(x.id)).sort((x, y) => idx(x.id) - idx(y.id));
+  return apps.filter((x) => x.enabled && x.panel && !hidden.has(x.id)).sort((x, y) => idx(x.id) - idx(y.id));
 }

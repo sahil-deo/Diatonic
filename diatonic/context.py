@@ -10,6 +10,7 @@ import httpx
 from . import secrets
 from .config import Config
 from .db import Database
+from .memory import MemoryStore
 
 
 def system_timezone_name() -> str:
@@ -28,6 +29,7 @@ class Context:
         self.db = db
         self.http = http or httpx.AsyncClient(timeout=httpx.Timeout(20.0, read=300.0))
         self.secrets = secrets
+        self.memory = MemoryStore(db, config)
         self.scheduler = None   # set by the server once the engine exists
         self.notifier = None
         self.broadcast = lambda ev: None   # pushes an event to every connected UI

@@ -145,7 +145,7 @@ class GCalApp(App):
                 msg = r.json()["error"]["message"]
             except Exception:
                 msg = r.text
-            raise ToolError(f"Google Calendar {r.status_code}: {msg[:300]}")
+            raise ToolError(f"Google Calendar {r.status_code}: {msg[:300]}", bad_args=r.status_code in (400, 422))
         return r.json() if r.content else {}
 
     # ---- shaping -------------------------------------------------------

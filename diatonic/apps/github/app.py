@@ -63,7 +63,7 @@ class GitHubApp(App):
                 msg = r.json().get("message", r.text)
             except Exception:
                 msg = r.text
-            raise ToolError(f"GitHub {r.status_code}: {msg[:300]}")
+            raise ToolError(f"GitHub {r.status_code}: {msg[:300]}", bad_args=r.status_code in (400, 422))
         if "diff" in headers["Accept"]:
             return r.text
         return r.json() if r.content else {}
@@ -110,7 +110,7 @@ class GitHubApp(App):
     def tools(self) -> list[Tool]:
         return [
             Tool("list_repos", "List the user's repositories, most recently updated first.",
-                 {"properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 50}}}, self.list_repos),
+                 {"properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 100}}}, self.list_repos),
             Tool("get_repo", "Get one repository's details: description, homepage, topics, default branch, last push.",
                  {"properties": {"repo": REPO}, "required": ["repo"]}, self.get_repo),
             Tool("update_repo", "Change a repository's description or homepage URL.",
@@ -121,11 +121,11 @@ class GitHubApp(App):
             Tool("list_issues", "List issues in a repository (pull requests excluded).",
                  {"properties": {"repo": REPO, "state": {"type": "string", "enum": ["open", "closed", "all"]},
                                  "labels": _str("Comma-separated label names"),
-                                 "limit": {"type": "integer", "minimum": 1, "maximum": 50}},
+                                 "limit": {"type": "integer", "minimum": 1, "maximum": 100}},
                   "required": ["repo"]}, self.list_issues),
             Tool("search_issues", "Search issues/PRs with GitHub syntax, e.g. 'is:open is:issue assignee:@me'.",
                  {"properties": {"query": _str("Search query"),
-                                 "limit": {"type": "integer", "minimum": 1, "maximum": 30}},
+                                 "limit": {"type": "integer", "minimum": 1, "maximum": 100}},
                   "required": ["query"]}, self.search_issues),
             Tool("get_issue", "Get one issue with its body and recent comments.",
                  {"properties": {"repo": REPO, "number": NUM}, "required": ["repo", "number"]}, self.get_issue),
@@ -145,7 +145,7 @@ class GitHubApp(App):
                  describe=lambda a: f"Close issue {a.get('repo')}#{a.get('number')}"),
             Tool("list_pulls", "List pull requests in a repository.",
                  {"properties": {"repo": REPO, "state": {"type": "string", "enum": ["open", "closed", "all"]},
-                                 "limit": {"type": "integer", "minimum": 1, "maximum": 50}},
+                                 "limit": {"type": "integer", "minimum": 1, "maximum": 100}},
                   "required": ["repo"]}, self.list_pulls),
             Tool("get_pull", "Get a pull request: status, mergeability, changed files and CI state.",
                  {"properties": {"repo": REPO, "number": NUM}, "required": ["repo", "number"]}, self.get_pull),

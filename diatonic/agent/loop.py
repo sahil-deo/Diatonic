@@ -19,6 +19,8 @@ import jsonschema
 from ..apps.base import ToolError
 from ..voice import summarizer
 from . import approvals
+from ..memory import LessonTracker, facts_block
+from .coerce import coerce_args
 from .guards import RunGuard, clip, collapse_repeats, detect_loop, looks_unfinished
 from .providers import ProviderError, make_provider
 
@@ -94,12 +96,12 @@ _OBVIOUS = {"summary", "description", "location", "title", "body", "query", "lab
             "max_results", "calendar_id", "attendees", "homepage", "number", "event_id", "reason", "method"}
 
 
-def tool_spec(app, tool) -> dict:
+def tool_spec(app, tool, notes: list[str] | tuple = ()) -> dict:
     props = {k: ({kk: vv for kk, vv in v.items() if kk != "description"} if k in _OBVIOUS else v)
              for k, v in tool.parameters.get("properties", {}).items()}
     params = {**tool.parameters, "properties": props}
-    return {"type": "function", "function": {"name": f"{app.id}_{tool.name}", "description": tool.description,
-                                             "parameters": params}}
+    desc = tool.description + (" Note: " + " ".join(notes) if notes else "")   # learned quirks ride along for free
+    return {"type": "function", "function": {"name": f"{app.id}_{tool.name}", "description": desc, "parameters": params}}
 
 
 def _args(raw) -> dict:
@@ -150,7 +152,8 @@ async def _generate(provider, messages, specs, holder: dict, options=None) -> As
     holder.update(content=content, calls=calls)
 
 
-async def _execute(call: dict, tool_map: dict, registry, guard: RunGuard, out: dict) -> AsyncIterator[dict]:
+async def _execute(call: dict, tool_map: dict, registry, guard: RunGuard, out: dict, ctx=None,
+                   learner: LessonTracker | None = None) -> AsyncIterator[dict]:
     """Run one tool call, yielding UI events. What the model should see goes in out['content']."""
     cid = uuid.uuid4().hex[:8]
     name, args = call["name"], _args(call["arguments"])
@@ -162,6 +165,7 @@ async def _execute(call: dict, tool_map: dict, registry, guard: RunGuard, out: d
         yield {"type": "guard", "kind": "unknown_tool", "message": f"The model asked for a tool that doesn't exist ({name})."}
         return
     app, tool = entry
+    args, clamps = coerce_args(args, tool.parameters)   # forgive harmless mistakes (limit 50 > max 30) instead of retrying
     key = guard.key(name, args)
 
     prev = guard.seen.get(key)
@@ -184,6 +188,8 @@ async def _execute(call: dict, tool_map: dict, registry, guard: RunGuard, out: d
                "args": args, "risk": tool.risk, "describe": "", "needs_approval": False}
         out.update(ok=False, content=f"Error: invalid arguments for {name}: {e.message}. Fix them and retry.")
         guard.errors += 1
+        if learner:
+            learner.on_failure(name, args, e.message)
         yield {"type": "tool_result", "id": cid, "ok": False, "preview": out["content"], "ms": 0}
         return
 
@@ -225,6 +231,8 @@ async def _execute(call: dict, tool_map: dict, registry, guard: RunGuard, out: d
         text, ok = _dump(result), True
     except ToolError as e:
         text, ok = f"Error: {e}", False
+        if learner and e.bad_args:
+            learner.on_failure(name, args, str(e))
     except asyncio.TimeoutError:
         text, ok = "Error: the app took too long to respond.", False
     except Exception as e:  # tool bugs shouldn't crash the run
@@ -233,8 +241,21 @@ async def _execute(call: dict, tool_map: dict, registry, guard: RunGuard, out: d
     guard.remember(key, ok=ok, content=clip(text, MAX_RESULT_CHARS), risk=tool.risk)
     if not ok:
         guard.errors += 1
-    out.update(ok=ok, content=clip(text, MAX_RESULT_CHARS))
+    content = clip(text, MAX_RESULT_CHARS)
+    if clamps and ok:
+        content = f"[adjusted: {'; '.join(clamps)}]\n" + content
+    out.update(ok=ok, content=content)
     yield {"type": "tool_result", "id": cid, "ok": ok, "preview": clip(text, 1500), "ms": ms}
+    if ok and learner and ctx is not None:
+        lesson = learner.on_success(name, args, tool.parameters, tool.title)
+        if lesson:
+            text_, lkey = lesson
+            try:
+                _, status = ctx.memory.add(text_, scope=f"tool:{name}", kind="lesson", source="auto", key=lkey)
+                yield {"type": "guard", "kind": "learned",
+                       "message": f"Learned for next time: {text_}" if status == "created" else f"Confirmed a known quirk: {text_}"}
+            except ValueError:
+                pass
 
 
 def _fallback(cards: list[dict]) -> str:
@@ -261,9 +282,13 @@ async def run_agent(ctx, registry, conv_id: str, text: str, *, speak: bool = Fal
     tool_map, expects_tool = select_tools(registry, text, prior_apps)
     if readonly:  # unattended runs may only read; nothing can be changed without a person present
         tool_map = {n: (a, t) for n, (a, t) in tool_map.items() if not t.needs_approval}
-    specs = [tool_spec(a, t) for a, t in tool_map.values()]
+    mem = ctx.memory
+    # With no app named in the request every app's tools are offered as a fallback, but app-specific facts aren't.
+    facts = mem.relevant({a.id for a, _ in tool_map.values()} if (expects_tool or prior_apps) else set())
+    specs = [tool_spec(a, t, mem.tool_notes(n)) for n, (a, t) in tool_map.items()]
+    learner = LessonTracker() if acfg and ctx.config.data["memory"]["auto_learn"] and ctx.config.data["memory"]["enabled"] else None
     now = ctx.now().strftime("%A %Y-%m-%d %H:%M")
-    messages = [{"role": "system", "content": build_system_prompt(ctx, registry) + extra_system}, *history,
+    messages = [{"role": "system", "content": build_system_prompt(ctx, registry) + facts_block(facts) + extra_system}, *history,
                 {"role": "user", "content": f"{text}\n\n(Now: {now})"}]
 
     cards: dict[str, dict] = {}
@@ -339,7 +364,7 @@ async def run_agent(ctx, registry, conv_id: str, text: str, *, speak: bool = Fal
                 if guard.calls >= guard.max_calls:
                     out.update(ok=False, content="Tool budget for this run is used up. Answer with what you have.")
                 else:
-                    async for ev in _execute(call, tool_map, registry, guard, out):
+                    async for ev in _execute(call, tool_map, registry, guard, out, ctx, learner):
                         if ev["type"] == "guard":
                             guards.append(ev["message"])
                         elif ev["type"] == "tool_call":

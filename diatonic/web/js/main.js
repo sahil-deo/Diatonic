@@ -128,6 +128,7 @@ const commands = () => [
   { group: "Actions", label: state.config.voice.speak_summary ? "Turn off spoken summaries" : "Turn on spoken summaries", icon: "volume", run: () => setSpeak(!state.config.voice.speak_summary) },
   { group: "Actions", label: "Settings", icon: "sliders", hint: "⌘,", run: () => openSettings() },
   { group: "Actions", label: "Voice settings", icon: "mic", run: () => openSettings("voice") },
+  { group: "Actions", label: "Memory: what the agent remembers", icon: "brain", run: () => openSettings("memory") },
   { group: "Actions", label: "Customize the interface", icon: "sliders", run: () => openSettings("interface") },
   { group: "Actions", label: "Edit saved prompts and buttons", icon: "command", run: () => openSettings("actions") },
   { group: "Actions", label: "Toggle sidebar", icon: "menu", hint: "⌘B", run: () => toggleSidebar() },

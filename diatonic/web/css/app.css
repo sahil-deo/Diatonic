@@ -310,3 +310,4 @@ html[data-density="compact"] .md p { margin: .35em 0; } html[data-density="compa
 .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 9px; overflow: hidden; } .seg button { border: 0; background: var(--surface-2); padding: 6px 12px; color: var(--muted); } .seg button.on { background: var(--accent); color: var(--accent-ink); }
 .rail-edit { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 9px; margin-bottom: 5px; background: var(--surface-2); }
 textarea.css-edit { font-family: var(--mono); font-size: 12.5px; min-height: 140px; }
+.icon-btn.pinned { color: var(--warn); } .mem-text { cursor: text; }

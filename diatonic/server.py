@@ -330,12 +330,48 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
         store.mark_read(n["id"])
         return JSONResponse({"ok": True, "unread": store.unread_count()})
 
+    # ---- memory ----------------------------------------------------------------
+    def mem_json():
+        rows = ctx.memory.all()
+        facts = [r for r in rows if r["kind"] == "fact" and r["enabled"]]
+        return {"items": rows, "cfg": config.data["memory"],
+                "facts_chars": sum(len(r["text"]) for r in facts), "apps": [{"id": a.id, "name": a.name} for a in registry.apps.values()]}
+
+    async def list_memories(request):
+        return JSONResponse(mem_json())
+
+    async def add_memory(request):
+        b = await request.json()
+        try:
+            row, status = ctx.memory.add(str(b.get("text", "")), scope=str(b.get("scope", "global")), source="user",
+                                         pinned=bool(b.get("pinned")))
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, 400)
+        return JSONResponse({**mem_json(), "status": status, "item": row})
+
+    async def update_memory(request):
+        try:
+            row = ctx.memory.update(int(request.path_params["mid"]), **(await request.json()))
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, 400)
+        if not row:
+            raise HTTPException(404)
+        return JSONResponse(mem_json())
+
+    async def delete_memory(request):
+        ctx.memory.delete(int(request.path_params["mid"]))
+        return JSONResponse(mem_json())
+
     async def test_notification(request):
         await ctx.notifier.send("Test notification", "If you can see this, notifications work.", kind="info",
                                 speak_text="This is a test notification.")
         return JSONResponse({"ok": True})
 
     routes = [
+        Route("/api/memories", list_memories),
+        Route("/api/memories", add_memory, methods=["POST"]),
+        Route("/api/memories/{mid}", update_memory, methods=["PUT"]),
+        Route("/api/memories/{mid}", delete_memory, methods=["DELETE"]),
         Route("/api/notifications", list_notifications),
         Route("/api/notifications/test", test_notification, methods=["POST"]),
         Route("/api/notifications/read-all", read_all, methods=["POST"]),
@@ -372,6 +408,7 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
 
     @asynccontextmanager
     async def lifespan(app):
+        ctx.memory.prune()
         ctx.scheduler.start()
         yield
         await ctx.scheduler.stop()

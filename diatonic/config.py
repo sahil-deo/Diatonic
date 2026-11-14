@@ -70,6 +70,12 @@ DEFAULTS: dict[str, Any] = {
         "rail_hidden": [],
         "custom_css": "",
     },
+    "memory": {
+        "enabled": True,
+        "auto_learn": True,     # learn tool quirks from error -> fixed-retry pairs (no model involved)
+        "budget_chars": 600,    # most characters of facts added to the prompt (~150 tokens)
+        "max_items": 8,         # most facts added to the prompt
+    },
     "actions": [],  # saved prompts and script buttons; see diatonic/actions.py
     "notifications": {
         "native": True,        # macOS Notification Center, works with the browser closed
