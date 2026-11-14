@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Diatonic</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%237c9cff'/%3E%3Cpath d='M8 12h16M8 16h16M8 20h16' stroke='%230e0f13' stroke-width='2' stroke-linecap='round'/%3E%3Ccircle cx='20' cy='16' r='3' fill='%230e0f13'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<div class="shell" id="shell">
+  <nav class="rail" aria-label="Apps">
+    <div class="logo" title="Diatonic"><svg viewBox="0 0 32 32" width="28" height="28"><rect width="32" height="32" rx="9" fill="var(--accent)"/><path d="M8 12h16M8 16h16M8 20h16" stroke="var(--bg)" stroke-width="2" stroke-linecap="round"/><circle cx="20" cy="16" r="3" fill="var(--bg)"/></svg></div>
+    <button class="rail-btn active" id="rail-chat" title="Chat" aria-label="Chat"></button>
+    <div class="rail-sep"></div>
+    <div id="rail-apps" class="rail-apps"></div>
+    <div class="grow"></div>
+    <button class="rail-btn" id="rail-settings" title="Settings (⌘,)" aria-label="Settings"></button>
+  </nav>
+
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-head">
+      <h1>Diatonic</h1>
+      <button class="icon-btn" id="new-chat" title="New chat (⌘⇧O)" aria-label="New chat"></button>
+    </div>
+    <div class="conv-list" id="conv-list" role="list"></div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <button class="icon-btn only-narrow" id="toggle-sidebar" aria-label="Conversations"></button>
+      <div class="title" id="chat-title">New chat</div>
+      <div class="grow"></div>
+      <button class="chip-btn" id="speak-toggle" aria-pressed="false" title="Spoken summaries"><span id="speak-icon"></span><span>Spoken summary</span></button>
+      <button class="icon-btn" id="palette-btn" title="Commands (⌘K)" aria-label="Commands"></button>
+    </header>
+
+    <section class="messages" id="messages" aria-live="polite"></section>
+
+    <footer class="composer-wrap">
+      <div class="composer" id="composer">
+        <textarea id="input" rows="1" placeholder="Ask Diatonic to do something…" aria-label="Message"></textarea>
+        <button class="mic-btn" id="mic" aria-label="Voice input"><span id="mic-icon"></span><i class="level" id="mic-level"></i></button>
+        <button class="send-btn" id="send" aria-label="Send"></button>
+      </div>
+      <div class="hint" id="hint"></div>
+    </footer>
+  </main>
+
+  <aside class="panel hidden" id="panel" aria-label="App panel">
+    <div class="panel-head"><div class="title" id="panel-title"></div><div class="grow"></div>
+      <button class="icon-btn" id="panel-refresh" aria-label="Refresh"></button>
+      <button class="icon-btn" id="panel-close" aria-label="Close"></button></div>
+    <div class="panel-body" id="panel-body"></div>
+  </aside>
+
+  <footer class="statusbar" id="statusbar">
+    <span class="status" id="st-agent"><i class="dot"></i><span>Connecting…</span></span>
+    <span class="status" id="st-voice"></span>
+    <div class="grow"></div>
+    <span class="status muted">⌘K commands · ⌘, settings</span>
+  </footer>
+</div>
+
+<dialog id="settings" class="modal"></dialog>
+<dialog id="palette" class="modal palette"></dialog>
+<div id="toasts" class="toasts" role="status"></div>
+<script type="module" src="/js/main.js"></script>
+</body>
+</html>
