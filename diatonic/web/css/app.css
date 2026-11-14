@@ -49,6 +49,12 @@ svg.i { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-widt
 .conv span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .conv .del { opacity: 0; border: 0; background: none; color: var(--faint); padding: 2px; border-radius: 6px; display: grid; }
 .conv:hover .del { opacity: 1; } .conv .del:hover { color: var(--danger); }
+.conv .ind { flex: none; display: grid; place-items: center; width: 16px; height: 16px; }
+.conv .ind .spin { width: 11px; height: 11px; }
+.conv .ind.wait { color: var(--warn); } .conv .ind.unread::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.rail-btn .badge.warn { background: var(--warn); } .rail-btn .badge.busy { background: var(--accent); animation: blink 1.2s steps(2) infinite; }
+.statusbar button.link { text-decoration: underline dotted; }
+.stopped { color: var(--faint); font-size: 12px; margin: 4px 0; }
 .empty-list { color: var(--faint); padding: 16px 10px; font-size: 13px; }
 
 .main { grid-row: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); }

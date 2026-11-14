@@ -41,7 +41,7 @@ def main() -> None:
     print(f"\n  Diatonic  →  {url}\n")
     if args.open:
         webbrowser.open(url)
-    uvicorn.run(create_app(cfg), host=host, port=port, log_level="warning")
+    uvicorn.run(create_app(cfg), host=host, port=port, log_level="warning", timeout_graceful_shutdown=2)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,8 @@
 export const state = {
   config: null, apps: [], health: null,
-  convId: null, conversations: [], running: false, panelApp: null,
+  convId: null, conversations: [], panelApp: null,
+  runs: {},            // conversation id -> {status: "running" | "waiting", title}
+  unread: new Set(),   // conversations that finished while you were elsewhere
 };
 const bus = new EventTarget();
 export const emit = (name, detail) => bus.dispatchEvent(new CustomEvent(name, { detail }));

@@ -142,3 +142,95 @@ def test_history_is_replayed_without_tool_traces(env, monkeypatch):
     asyncio.run(go("second"))
     roles = [(m["role"], m["content"]) for m in p.seen[1] if m["role"] != "system"]
     assert roles == [("user", "first"), ("assistant", "one"), ("user", "second")]
+
+
+# ---------- concurrent background runs ----------
+from diatonic.agent.runs import RunBusy, RunManager  # noqa: E402
+
+
+class GatedProvider(ScriptedProvider):
+    """Blocks inside stream() until its gate opens, so runs overlap."""
+
+    def __init__(self, gate, text):
+        super().__init__([])
+        self.gate, self.text = gate, text
+
+    async def stream(self, messages, tools=None, model=None):
+        await self.gate.wait()
+        yield {"content": self.text}
+
+
+def test_chats_run_concurrently_and_independently(env, monkeypatch):
+    ctx, reg, app, db = env
+    async def go():
+        runs = RunManager()
+        a, b = db.create_conversation("A"), db.create_conversation("B")
+        g1, g2 = asyncio.Event(), asyncio.Event()
+        queue = [GatedProvider(g1, "answer A"), GatedProvider(g2, "answer B")]
+        monkeypatch.setattr(loop, "make_provider", lambda c: queue.pop(0))
+        sub = runs.subscribe()
+        ra = runs.start(ctx, reg, a, "q1", False)
+        rb = runs.start(ctx, reg, b, "q2", False)
+        await asyncio.sleep(0.05)
+        assert len(runs.runs) == 2  # both in flight at once
+        with pytest.raises(RunBusy):  # a chat can't have two overlapping runs
+            runs.start(ctx, reg, a, "again", False)
+        g2.set()  # B finishes first; A is still blocked
+        await asyncio.sleep(0.1)
+        assert set(runs.runs) == {a["id"]}
+        assert db.messages(b["id"])[-1]["content"] == "answer B"
+        g1.set()
+        await asyncio.wait([ra.task, rb.task])
+        assert runs.runs == {}
+        evs = []
+        while not sub.empty():
+            evs.append(sub.get_nowait())
+        # every event is tagged and sequenced per run
+        for cid in (a["id"], b["id"]):
+            seqs = [e["seq"] for e in evs if e["conversation_id"] == cid]
+            assert seqs == list(range(1, len(seqs) + 1))
+            assert [e["type"] for e in evs if e["conversation_id"] == cid][0] == "run_start"
+            assert [e["type"] for e in evs if e["conversation_id"] == cid][-1] == "done"
+        # a late viewer can replay the buffered events
+        assert [e["type"] for e in ra.replay()["events"]][-1] == "done"
+
+    asyncio.run(go())
+
+
+def test_cancel_keeps_partial_and_cleans_up(env, monkeypatch):
+    ctx, reg, app, db = env
+
+    async def go():
+        runs = RunManager()
+        conv = db.create_conversation("C")
+        monkeypatch.setattr(loop, "make_provider", lambda c: GatedProvider(asyncio.Event(), "never"))
+        run = runs.start(ctx, reg, conv, "hang", False)
+        await asyncio.sleep(0.05)
+        assert runs.cancel(conv["id"])
+        await asyncio.wait([run.task])
+        types_ = [e["type"] for e in run.events]
+        assert "cancelled" in types_ and types_[-1] == "done"
+        assert conv["id"] not in runs.runs
+        assert db.messages(conv["id"])[-1]["meta"].get("stopped") is True
+        assert not runs.cancel(conv["id"])  # nothing left to cancel
+
+    asyncio.run(go())
+
+
+def test_approval_waits_in_background_and_status_tracks(env, monkeypatch):
+    ctx, reg, app, db = env
+
+    async def go():
+        runs = RunManager()
+        conv = db.create_conversation("D")
+        p = ScriptedProvider([[call("fake_nuke", id=3)], [{"content": "done"}]])
+        monkeypatch.setattr(loop, "make_provider", lambda c: p)
+        run = runs.start(ctx, reg, conv, "nuke", False)
+        await asyncio.sleep(0.1)
+        assert run.status == "waiting" and runs.snapshot()[0]["status"] == "waiting"
+        pending_id = next(e["id"] for e in run.events if e["type"] == "tool_call")
+        approvals.resolve(pending_id, True)  # approved from "elsewhere", no stream attached
+        await asyncio.wait([run.task])
+        assert app.calls == [("nuke", {"id": 3})]
+
+    asyncio.run(go())

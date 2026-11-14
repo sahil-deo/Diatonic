@@ -4,6 +4,7 @@ A local, modular agentic harness. One configurable agent, many **apps** (GitHub,
 
 - **Agent:** Ollama with `qwen3:4b-instruct` by default; provider, model and prompts are configurable in Settings.
 - **Apps:** each app is a self-contained folder that contributes tools to the agent and an optional side panel to the UI. Adding one never touches core code.
+- **Parallel chats:** every chat runs as a background task on the server. Start one, switch to another, even close the tab; runs keep going and you're alerted when one finishes or needs approval.
 - **Safe by default:** anything that changes data asks for your approval first (per-tool "always allow" is available).
 - **Voice:** push-to-talk dictation with local Whisper (`small.en`); an optional spoken *summary* (not the whole reply) with local Piper.
 - **Lightweight:** Python backend on Starlette; vanilla HTML/CSS/JS frontend (no React, no build step, no frontend dependencies).
@@ -49,9 +50,20 @@ Settings → Apps → GitHub. Paste a personal access token with the `repo` scop
 
 Credentials and tokens are stored in the macOS Keychain (fallback: `~/.diatonic/secrets.json`, mode 0600).
 
+## Running several chats at once
+
+Each conversation is its own background run, so you can start a task, hit **New chat** (⌘⇧O) and start another while the first is still working.
+
+- The sidebar shows a spinner on chats that are working, an amber shield on ones waiting for your approval, and a blue dot on ones that finished while you were elsewhere. The status bar and the tab title summarize how many are active; click the status bar item to jump to one.
+- Switching back to a running chat replays what it has done so far and carries on live.
+- Spoken summaries and approval alerts from a background chat are prefixed with its title ("In *Calendar prep*: …").
+- A chat runs one task at a time; **Stop** (the square button) cancels it and keeps what it produced.
+- Runs are separate from the browser connection but live in the server process: restarting `diatonic` stops them.
+- Ollama decides how many requests it serves at once. If background chats seem to queue behind each other, start Ollama with more parallelism, e.g. `OLLAMA_NUM_PARALLEL=2 ollama serve` (costs extra memory for each slot).
+
 ## Approvals
 
-Every tool declares a risk level: `read` runs immediately; `write` and `destructive` show an approval card (**⌘↵** approve, **Esc** deny) with exactly what will happen. Voice input never approves anything, so a mis-heard word can't merge a PR. Mark specific tools *always allow* under Settings → Apps.
+Approvals work in any chat, including background ones. Every tool declares a risk level: `read` runs immediately; `write` and `destructive` show an approval card (**⌘↵** approve, **Esc** deny) with exactly what will happen. Voice input never approves anything, so a mis-heard word can't merge a PR. Mark specific tools *always allow* under Settings → Apps.
 
 ## Keyboard
 

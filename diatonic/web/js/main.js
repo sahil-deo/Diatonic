@@ -30,8 +30,15 @@ function renderRail() {
 }
 
 /* ---------- conversations ---------- */
-async function renderConvs() {
-  state.conversations = await api.conversations();
+async function loadConvs() { state.conversations = await api.conversations(); renderConvs(); }
+function indicator(id) {
+  const r = state.runs[id];
+  if (r) return h("span", { class: `ind ${r.status === "waiting" ? "wait" : ""}`, title: r.status === "waiting" ? "Needs your approval" : "Working…",
+    html: r.status === "waiting" ? icon("shield", 14) : '<span class="spin"></span>' });
+  if (state.unread.has(id)) return h("span", { class: "ind unread", title: "New activity" });
+  return null;
+}
+function renderConvs() {
   const list = $("#conv-list");
   if (!state.conversations.length) return list.replaceChildren(h("div", { class: "empty-list" }, "No conversations yet."));
   const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
@@ -45,7 +52,7 @@ async function renderConvs() {
     ...cs.map((c) => h("div", { class: `conv ${c.id === state.convId ? "active" : ""}`, role: "listitem", tabindex: 0,
       onclick: () => { chat.openConversation(c.id); $("#sidebar").classList.remove("show"); },
       onkeydown: (e) => { if (e.key === "Enter") chat.openConversation(c.id); } },
-      h("span", {}, c.title),
+      h("span", {}, c.title), indicator(c.id),
       h("button", { class: "del", "aria-label": "Delete conversation", html: icon("trash", 14),
         onclick: (e) => { e.stopPropagation(); chat.removeConversation(c.id); } })))]));
 }
@@ -54,7 +61,7 @@ async function renderConvs() {
 const input = $("#input");
 function autosize() { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 200) + "px"; }
 function paintSend() {
-  const b = $("#send"), running = state.running;
+  const b = $("#send"), running = chat.busy();
   b.classList.toggle("stop", running);
   b.disabled = !running && !input.value.trim();
   setIcon(b, running ? "stop" : "send", 18);
@@ -65,7 +72,7 @@ function setInput(text) {
   autosize(); paintSend(); input.focus();
 }
 function submit() {
-  if (state.running) return chat.stop();
+  if (chat.busy()) return chat.stop();
   const t = input.value; if (!t.trim()) return;
   input.value = ""; autosize(); paintSend(); chat.send(t);
 }
@@ -88,6 +95,23 @@ function renderStatus() {
   const ready = v.stt.ready && v.tts.ready;
   vs.replaceChildren(h("i", { class: `dot ${ready ? "ok" : "warn"}` }),
     ready ? "Voice ready" : h("button", { onclick: () => openSettings("voice") }, v.stt.available ? "Download voice models" : "Set up voice"));
+}
+/* attention indicators: sidebar, status bar, tab title, rail badge */
+function paintRuns() {
+  paintSend(); renderConvs();
+  const all = Object.entries(state.runs), waiting = all.filter(([, r]) => r.status === "waiting");
+  const el = $("#st-runs");
+  if (!all.length) el.replaceChildren();
+  else {
+    const first = (waiting[0] || all[0])[0];
+    el.replaceChildren(h("i", { class: `dot ${waiting.length ? "warn" : "ok"}` }),
+      h("button", { class: "link", onclick: () => chat.openConversation(first) },
+        waiting.length ? `${waiting.length} waiting for approval` : `${all.length} chat${all.length > 1 ? "s" : ""} working`));
+  }
+  document.title = waiting.length ? "⚠ Approval needed · Diatonic" : all.length ? "Working… · Diatonic" : "Diatonic";
+  const rb = $("#rail-chat"); rb.querySelector(".badge")?.remove();
+  const others = all.filter(([id]) => id !== state.convId);
+  if (others.length || state.unread.size) rb.append(h("i", { class: `badge ${others.some(([, r]) => r.status === "waiting") ? "warn" : "busy"}` }));
 }
 async function refreshHealth() {
   try { state.health = await api.health(); } catch { state.health = { agent: { ok: false, error: "Diatonic server not reachable." } }; }
@@ -132,15 +156,15 @@ async function boot() {
   $("#toggle-sidebar").onclick = () => $("#sidebar").classList.toggle("show");
   $("#speak-toggle").onclick = () => setSpeak(!state.config.voice.speak_summary);
 
-  on("running", paintSend);
-  on("conversations-changed", renderConvs);
+  on("runs-changed", paintRuns);
+  on("conversations-changed", loadConvs);
   on("apps", () => { renderRail(); chat.renderEmpty?.(); });
   on("panel", renderRail);
   on("health", refreshHealth);
   on("config", () => { applyTheme(); updateHint(); paintSpeakToggle(); });
   on("prefill", (t) => { setInput(t); });
 
-  renderRail(); chat.renderEmpty(); updateHint(); renderConvs(); refreshHealth();
+  renderRail(); chat.renderEmpty(); updateHint(); loadConvs(); refreshHealth(); chat.startEventStream();
   setInterval(refreshHealth, 20000);
 
   const q = new URLSearchParams(location.search);

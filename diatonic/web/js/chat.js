@@ -1,48 +1,51 @@
-import { $, h, esc, toast } from "./dom.js";
-import { icon, setIcon } from "./icons.js";
-import { api, streamChat } from "./api.js";
+// Chat view. Runs live on the server, so any number of chats can work at once; this module
+// renders the one you're looking at and tracks status/notifications for the rest.
+import { $, h, toast } from "./dom.js";
+import { icon } from "./icons.js";
+import { api, streamEvents } from "./api.js";
 import { render as md } from "./md.js";
 import { state, emit } from "./store.js";
 import { speaker } from "./voice.js";
 
 const msgs = $("#messages");
-let abort = null;
-const pending = []; // approvals awaiting a decision: {id, resolve}
+let view = null;        // live rendering state for the visible conversation: {cid, wrap, seg, ...}
+let sending = false;    // a POST /api/chat is in flight
+let early = [];         // events that arrived before the POST returned our conversation id
+let pending = [];       // approval boxes in the visible conversation: {id, decide}
+
+export const busy = () => sending || !!(state.convId && state.runs[state.convId]);
 
 /* ---------- empty state ---------- */
 const SUGGESTIONS = {
   gcal: [["Calendar", "What's on my calendar today?"], ["Calendar", "When am I free tomorrow afternoon for 45 minutes?"]],
   github: [["GitHub", "Show my open issues assigned to me"], ["GitHub", "What pull requests need my attention?"]],
 };
+const greeting = () => { const hr = new Date().getHours(); return hr < 5 ? "Burning the midnight oil?" : hr < 12 ? "Good morning." : hr < 18 ? "Good afternoon." : "Good evening."; };
 function renderEmpty() {
   const apps = state.apps.filter((a) => a.enabled);
   const chips = apps.flatMap((a) => SUGGESTIONS[a.id] || []).slice(0, 4);
+  view = null; pending = [];
   msgs.replaceChildren(h("div", { class: "empty" },
     h("h2", {}, greeting()),
-    h("p", {}, apps.length ? `Connected: ${apps.map((a) => a.name).join(", ")}. Ask in text or hold the mic.` : "Enable an app in Settings to get started."),
+    h("p", {}, apps.length ? `Connected: ${apps.map((a) => a.name).join(", ")}. Ask in text or hold the mic. Chats keep working in the background.` : "Enable an app in Settings to get started."),
     h("div", { class: "suggestions" }, chips.map(([k, t]) => h("button", { class: "suggestion", onclick: () => send(t) }, h("small", {}, k), t)))));
 }
-const greeting = () => { const hr = new Date().getHours(); return hr < 5 ? "Burning the midnight oil?" : hr < 12 ? "Good morning." : hr < 18 ? "Good afternoon." : "Good evening."; };
 
-/* ---------- message building ---------- */
+/* ---------- rendering ---------- */
 const nearBottom = () => msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 140;
 const scroll = (force) => { if (force || nearBottom()) msgs.scrollTo({ top: msgs.scrollHeight }); };
-
-function userBubble(text) {
-  return h("div", { class: "msg user" }, h("div", { class: "bubble" }, text));
-}
+const appName = (id) => state.apps.find((a) => a.id === id)?.name || id || "Tool";
+const userBubble = (text) => h("div", { class: "msg user" }, h("div", { class: "bubble" }, text));
 
 function toolCard(t, live) {
-  const stateEl = h("span", { class: "tool-state" });
-  const meta = h("span", { class: "t-meta" });
-  const argsPre = h("pre", {}, JSON.stringify(t.args || {}, null, 2));
+  const stateEl = h("span", { class: "tool-state" }), meta = h("span", { class: "t-meta" });
   const resPre = h("pre", {}, t.preview || "");
-  const resBox = h("div", {}, h("div", { class: "lbl" }, "Result"), resPre);
   const card = h("div", { class: "tool", "data-id": t.id },
     h("div", { class: "tool-head", onclick: () => card.classList.toggle("open") },
       stateEl, h("span", { class: "t-app" }, `${appName(t.app)} ·`), h("span", { class: "t-title" }, t.title), meta),
-    h("div", { class: "tool-body" }, h("div", { class: "lbl" }, "Arguments"), argsPre, resBox));
-  const api_ = {
+    h("div", { class: "tool-body" }, h("div", { class: "lbl" }, "Arguments"), h("pre", {}, JSON.stringify(t.args || {}, null, 2)),
+      h("div", { class: "lbl" }, "Result"), resPre));
+  const c = {
     el: card,
     set(status, extra = {}) {
       stateEl.innerHTML = status === "running" ? '<span class="spin"></span>'
@@ -54,116 +57,184 @@ function toolCard(t, live) {
       if (status === "denied") meta.textContent = "denied";
     },
   };
-  if (!live) api_.set(t.status === "denied" ? "denied" : t.ok === false ? "fail" : "ok", { ms: t.ms });
-  return api_;
+  if (!live) c.set(t.status === "denied" ? "denied" : t.ok === false ? "fail" : "ok", { ms: t.ms });
+  return c;
 }
-const appName = (id) => state.apps.find((a) => a.id === id)?.name || id || "Tool";
 
-function approvalBox(ev, card, onDone) {
+function approvalBox(ev, v) {
   const box = h("div", { class: `approval ${ev.risk === "destructive" ? "destructive" : ""}` });
-  const decide = (ok) => {
-    const i = pending.findIndex((p) => p.id === ev.id); if (i >= 0) pending.splice(i, 1);
-    box.remove();
-    api.approve(ev.id, ok).catch(() => toast("Couldn't send your decision", "error"));
-    onDone(ok);
-  };
+  const decide = (ok) => api.approve(ev.id, ok).catch(() => toast("Couldn't send your decision", "error"));
   box.append(
     h("div", { class: "a-top", html: `${icon("shield", 15)} ${ev.risk === "destructive" ? "Needs approval · irreversible" : "Needs approval"}` }),
     h("div", { class: "a-what" }, ev.describe || ev.title),
     h("div", { class: "a-btns" },
       h("button", { class: "btn primary", onclick: () => decide(true) }, "Approve", h("kbd", {}, "⌘↵")),
       h("button", { class: "btn", onclick: () => decide(false) }, "Deny", h("kbd", {}, "Esc"))));
+  v.approvals.set(ev.id, box);
   pending.push({ id: ev.id, decide });
   return box;
+}
+function dropApproval(v, id) {
+  v.approvals.get(id)?.remove(); v.approvals.delete(id);
+  pending = pending.filter((p) => p.id !== id);
 }
 
 addEventListener("keydown", (e) => {
   if (!pending.length) return;
   if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); pending[0].decide(true); }
-  else if (e.key === "Escape") { e.preventDefault(); pending[0].decide(false); }
+  else if (e.key === "Escape" && !document.querySelector("dialog[open]")) { e.preventDefault(); pending[0].decide(false); }
 });
+
+/* ---------- live view ---------- */
+function newSeg(v) { v.seg = h("div", { class: "md cursor" }); v.segText = ""; v.wrap.append(v.seg); }
+function paint(v) { v.raf = 0; if (v.seg) { v.seg.innerHTML = md(v.segText); scroll(); } }
+
+function newView(cid) {
+  const v = { cid, wrap: h("div", { class: "msg assistant" }), seg: null, segText: "", raf: 0, cards: new Map(), approvals: new Map(), lastSeq: 0, live: true };
+  msgs.append(v.wrap); newSeg(v);
+  view = v; pending = [];
+  return v;
+}
+
+/** Render one run event into the view. Pure rendering: no speech, no side effects outside the DOM. */
+function applyEvent(v, ev) {
+  v.lastSeq = Math.max(v.lastSeq, ev.seq || 0);
+  switch (ev.type) {
+    case "token":
+      if (!v.seg) newSeg(v);
+      v.segText += ev.text; if (!v.raf) v.raf = requestAnimationFrame(() => paint(v)); break;
+    case "tool_call": {
+      if (v.seg) { v.seg.classList.remove("cursor"); if (!v.segText.trim()) v.seg.remove(); }
+      v.seg = null;
+      const c = toolCard(ev, true); v.cards.set(ev.id, c); v.wrap.append(c.el);
+      if (ev.needs_approval) { c.set("wait"); v.wrap.append(approvalBox(ev, v)); } else c.set("running");
+      scroll(); break;
+    }
+    case "tool_status":
+      dropApproval(v, ev.id);
+      v.cards.get(ev.id)?.set(ev.status === "denied" ? "denied" : "running"); break;
+    case "tool_result":
+      dropApproval(v, ev.id);
+      v.cards.get(ev.id)?.set(ev.ok ? "ok" : (ev.preview === "Denied by you" ? "denied" : "fail"), { ms: ev.ms, preview: ev.preview }); break;
+    case "error": v.wrap.append(h("div", { class: "err" }, ev.message)); scroll(); break;
+    case "message":
+      if (v.seg) { cancelAnimationFrame(v.raf); v.seg.innerHTML = md(v.segText); v.seg.classList.remove("cursor"); }
+      break;
+    case "cancelled": v.wrap.append(h("div", { class: "stopped" }, "Stopped.")); break;
+    case "done":
+      cancelAnimationFrame(v.raf);
+      if (v.seg) { v.seg.innerHTML = md(v.segText); v.seg.classList.remove("cursor"); if (!v.segText.trim()) v.seg.remove(); }
+      [...v.approvals.keys()].forEach((id) => dropApproval(v, id));
+      v.live = false; break;
+  }
+}
+
+function replay(v, events) {
+  for (const ev of events) if (ev.seq > v.lastSeq) applyEvent(v, ev);
+  if (v.raf) { cancelAnimationFrame(v.raf); paint(v); }
+}
 
 /* ---------- sending ---------- */
 export async function send(text) {
   text = text.trim();
-  if (!text || state.running) return;
+  if (!text) return;
+  if (busy()) return toast("This chat is still working. Stop it, or start a new chat to run things in parallel.");
   if (!state.health?.agent?.ok) toast(state.health?.agent?.error || "The agent isn't reachable.", "error");
   speaker.stop();
   if (!msgs.querySelector(".msg")) msgs.replaceChildren();
-  msgs.append(userBubble(text));
-  const body = h("div", { class: "body md streaming" });
-  const wrap = h("div", { class: "msg assistant" }, body);
-  msgs.append(wrap); scroll(true);
-
-  let seg = null, segText = "", raf = 0;
-  const cards = new Map();
-  const paint = () => { raf = 0; seg.innerHTML = md(segText); scroll(); };
-  const newSeg = () => { seg = h("div", { class: "md cursor" }); segText = ""; wrap.append(seg); };
-  body.remove(); newSeg(); // first segment replaces the placeholder body
-
-  state.running = true; emit("running", true);
-  abort = new AbortController();
-  const speakOn = () => state.config.voice.speak_summary;
-  const rules = () => state.config.voice.speak_when;
-
+  const bubble = userBubble(text); msgs.append(bubble);
+  const v = newView(null);
+  sending = true; early = []; emit("runs-changed"); scroll(true);
   try {
-    await streamChat({ conversation_id: state.convId, message: text, speak: speakOn() }, (ev) => {
-      switch (ev.type) {
-        case "conversation":
-          state.convId = ev.id; $("#chat-title").textContent = ev.title; emit("conversations-changed"); break;
-        case "token":
-          if (!seg) newSeg();
-          segText += ev.text; if (!raf) raf = requestAnimationFrame(paint); break;
-        case "tool_call": {
-          if (seg) { seg.classList.remove("cursor"); if (!segText.trim()) seg.remove(); }
-          seg = null;
-          const c = toolCard(ev, true); cards.set(ev.id, c); wrap.append(c.el);
-          if (ev.needs_approval) {
-            c.set("wait");
-            wrap.append(approvalBox(ev, c, (ok) => { if (!ok) c.set("denied"); else c.set("running"); }));
-          } else c.set("running");
-          scroll(); break;
-        }
-        case "tool_result": {
-          const c = cards.get(ev.id);
-          c?.set(ev.ok ? "ok" : (ev.preview === "Denied by you" ? "denied" : "fail"), { ms: ev.ms, preview: ev.preview }); break;
-        }
-        case "notify":
-          if (speakOn() && rules().approvals && !(rules().only_unfocused && document.hasFocus())) speaker.speak(ev.text);
-          break;
-        case "summary":
-          if (speakOn() && !(rules().only_unfocused && document.hasFocus())) speaker.speak(ev.text);
-          break;
-        case "error":
-          wrap.append(h("div", { class: "err" }, ev.message)); scroll(); break;
-        case "message":
-          if (seg) { cancelAnimationFrame(raf); seg.innerHTML = md(segText); seg.classList.remove("cursor"); }
-          break;
-      }
-    }, abort.signal);
+    const r = await api.chat({ conversation_id: state.convId, message: text, speak: state.config.voice.speak_summary });
+    if (view !== v) return; // you moved to another chat while the request was in flight; the run continues in the background
+    state.convId = v.cid = r.conversation_id;
+    $("#chat-title").textContent = r.title;
+    state.runs[v.cid] = { status: r.run.status, title: r.title };
+    replay(v, r.run.events);
+    early.forEach((ev) => ev.conversation_id === v.cid && ev.seq > v.lastSeq && applyEvent(v, ev));
   } catch (e) {
-    if (e.name !== "AbortError") wrap.append(h("div", { class: "err" }, e.message));
+    if (view === v) { v.wrap.remove(); bubble.remove(); view = null; if (!msgs.querySelector(".msg")) renderEmpty(); emit("prefill", text); }
+    toast(e.message, "error");
   } finally {
-    seg?.classList.remove("cursor");
-    pending.splice(0).forEach((p) => api.approve(p.id, false).catch(() => {}));
-    wrap.querySelectorAll(".approval").forEach((a) => a.remove());
-    state.running = false; abort = null; emit("running", false); emit("conversations-changed");
+    sending = false; early = []; emit("runs-changed"); emit("conversations-changed");
   }
 }
 
-export function stop() { abort?.abort(); }
+export async function stop() {
+  const cid = state.convId;
+  if (cid && state.runs[cid]) await api.cancel(cid).catch(() => {});
+}
+
+/* ---------- global event stream ---------- */
+const titleOf = (cid) => state.runs[cid]?.title || state.conversations.find((c) => c.id === cid)?.title || "a chat";
+const short = (s) => (s.length > 40 ? s.slice(0, 40) + "…" : s);
+
+function shouldSpeak(kind) {
+  const v = state.config.voice;
+  if (!v.speak_summary) return false;
+  if (kind === "notify" && !v.speak_when.approvals) return false;
+  return !(v.speak_when.only_unfocused && document.hasFocus());
+}
+
+function onEvent(ev) {
+  if (ev.type === "hello") return resync(ev.runs);
+  const cid = ev.conversation_id;
+  const title = ev.type === "run_start" ? ev.title : titleOf(cid); // other events' `title` is a tool title
+
+  // status bookkeeping for the sidebar / status bar
+  if (ev.type === "done") delete state.runs[cid]; else state.runs[cid] = { status: ev.status, title };
+  if (ev.type === "run_start" || ev.type === "done") emit("conversations-changed");
+  emit("runs-changed");
+
+  // render into the visible conversation
+  const viewed = view && state.convId === cid;
+  if (sending && view && !view.cid) early.push(ev);
+  else if (viewed && ev.seq > view.lastSeq) applyEvent(view, ev);
+
+  // speech and notifications (live events only; replays never speak)
+  const where = viewed ? "" : `In ${short(title)}: `;
+  if (ev.type === "notify" && shouldSpeak("notify")) speaker.speak(where + ev.text);
+  if (ev.type === "summary" && shouldSpeak("summary")) speaker.speak(where + ev.text);
+  if (!viewed) {
+    if (ev.type === "tool_call" && ev.needs_approval) toast(`“${short(title)}” needs your approval`, "", { label: "Open", run: () => openConversation(cid) });
+    if (ev.type === "done") { state.unread.add(cid); emit("runs-changed"); toast(`“${short(title)}” finished`, "", { label: "Open", run: () => openConversation(cid) }); }
+  }
+}
+
+async function resync(runList) {
+  state.runs = Object.fromEntries(runList.map((r) => [r.conversation_id, { status: r.status, title: r.title }]));
+  emit("runs-changed");
+  const v = view;
+  if (!v?.cid || !v.live) return;
+  // We may have missed events while disconnected: catch up, or reload if the run ended meanwhile.
+  const c = await api.conversation(v.cid).catch(() => null);
+  if (!c || view !== v) return;
+  if (c.run) replay(v, c.run.events); else openConversation(v.cid);
+}
+
+export function startEventStream() {
+  (async function loop() {
+    let delay = 500;
+    for (;;) {
+      try { await streamEvents((ev) => { delay = 500; onEvent(ev); }); } catch { /* server down: retry */ }
+      await new Promise((r) => setTimeout(r, delay));
+      delay = Math.min(delay * 2, 8000);
+    }
+  })();
+}
 
 /* ---------- conversations ---------- */
-export async function newChat() {
-  if (state.running) stop();
-  state.convId = null; $("#chat-title").textContent = "New chat"; renderEmpty(); emit("conversations-changed"); $("#input").focus();
+export function newChat() {
+  state.convId = null; $("#chat-title").textContent = "New chat";
+  renderEmpty(); emit("runs-changed"); emit("conversations-changed"); $("#input").focus();
 }
 
 export async function openConversation(id) {
-  if (state.running) stop();
   const c = await api.conversation(id);
-  state.convId = id; $("#chat-title").textContent = c.title;
-  msgs.replaceChildren();
+  state.convId = id; state.unread.delete(id);
+  $("#chat-title").textContent = c.title;
+  msgs.replaceChildren(); view = null; pending = [];
   for (const m of c.messages) {
     if (m.role === "user") msgs.append(userBubble(m.content));
     else {
@@ -171,16 +242,19 @@ export async function openConversation(id) {
       (m.meta.tools || []).forEach((t) => wrap.append(toolCard(t, false).el));
       if (m.content) wrap.append(h("div", { class: "md", html: md(m.content) }));
       if (m.meta.error) wrap.append(h("div", { class: "err" }, m.meta.error));
+      if (m.meta.stopped) wrap.append(h("div", { class: "stopped" }, "Stopped."));
       msgs.append(wrap);
     }
   }
-  if (!c.messages.length) renderEmpty();
-  scroll(true); emit("conversations-changed");
+  if (c.run) { const v = newView(id); replay(v, c.run.events); }
+  else if (!c.messages.length) renderEmpty();
+  scroll(true); emit("runs-changed"); emit("conversations-changed");
 }
 
 export async function removeConversation(id) {
   await api.deleteConversation(id);
-  if (state.convId === id) await newChat(); else emit("conversations-changed");
+  delete state.runs[id]; state.unread.delete(id);
+  if (state.convId === id) newChat(); else emit("conversations-changed");
 }
 
 export { renderEmpty };

@@ -15,7 +15,7 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from .agent import approvals
-from .agent.loop import run_agent
+from .agent.runs import RunBusy, RunManager
 from .agent.providers import ProviderError, make_provider
 from .apps.registry import Registry
 from .config import Config, home
@@ -67,6 +67,7 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
     registry = registry or Registry(ctx).discover()
     stt, tts = STT(), TTS()
     setup = VoiceSetup(stt, tts)
+    runs = RunManager()
     port = config.data["server"]["port"]
     hosts = allowed_hosts or {f"localhost:{port}", f"127.0.0.1:{port}", f"[::1]:{port}"}
 
@@ -151,7 +152,8 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
         c = db.get_conversation(request.path_params["cid"])
         if not c:
             raise HTTPException(404)
-        return JSONResponse({**c, "messages": db.messages(c["id"])})
+        run = runs.runs.get(c["id"])
+        return JSONResponse({**c, "messages": db.messages(c["id"]), "run": run.replay() if run else None})
 
     async def patch_conv(request):
         body = await request.json()
@@ -159,7 +161,10 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
         return JSONResponse({"ok": True})
 
     async def delete_conv(request):
-        db.delete_conversation(request.path_params["cid"])
+        cid = request.path_params["cid"]
+        if runs.cancel(cid):
+            await asyncio.sleep(0.05)
+        db.delete_conversation(cid)
         return JSONResponse({"ok": True})
 
     # ---- chat ------------------------------------------------------------
@@ -173,16 +178,31 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
             conv["title"] = (text[:48] + "…") if len(text) > 48 else text
             db.rename(conv["id"], conv["title"])
 
+        try:
+            run = runs.start(ctx, registry, conv, text, bool(body.get("speak")))
+        except RunBusy:
+            return JSONResponse({"error": "This chat is still working. Stop it first, or start a new chat."}, 409)
+        return JSONResponse({"conversation_id": conv["id"], "title": conv["title"], "run": run.replay()})
+
+    async def cancel_run(request):
+        return JSONResponse({"ok": runs.cancel(request.path_params["cid"])})
+
+    async def events(request):
+        """One long-lived stream carrying every run's events, tagged with conversation_id."""
+        q = runs.subscribe()
+
         async def gen():
-            yield sse({"type": "conversation", "id": conv["id"], "title": conv["title"]})
             try:
-                async for ev in run_agent(ctx, registry, conv["id"], text, speak=bool(body.get("speak"))):
+                yield sse({"type": "hello", "runs": runs.snapshot()})
+                while True:
+                    try:
+                        ev = await asyncio.wait_for(q.get(), 15)
+                    except asyncio.TimeoutError:
+                        yield ": ping\n\n"
+                        continue
                     yield sse(ev)
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:  # never leave the stream hanging
-                yield sse({"type": "error", "message": f"{type(e).__name__}: {e}"})
-                yield sse({"type": "done"})
+            finally:
+                runs.unsubscribe(q)
 
         return StreamingResponse(gen(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
@@ -235,6 +255,8 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
         Route("/api/conversations/{cid}", patch_conv, methods=["PATCH"]),
         Route("/api/conversations/{cid}", delete_conv, methods=["DELETE"]),
         Route("/api/chat", chat, methods=["POST"]),
+        Route("/api/conversations/{cid}/cancel", cancel_run, methods=["POST"]),
+        Route("/api/events", events),
         Route("/api/approvals/{aid}", approve, methods=["POST"]),
         Route("/api/voice/transcribe", transcribe, methods=["POST"]),
         Route("/api/voice/tts", speak, methods=["POST"]),
@@ -246,9 +268,10 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
     @asynccontextmanager
     async def lifespan(app):
         yield
+        await runs.shutdown()
         await ctx.http.aclose()
 
     app = Starlette(routes=routes, lifespan=lifespan,
                     middleware=[Middleware(LocalOnly, allowed_hosts=hosts)])
-    app.state.ctx, app.state.registry = ctx, registry
+    app.state.ctx, app.state.registry, app.state.runs = ctx, registry, runs
     return app

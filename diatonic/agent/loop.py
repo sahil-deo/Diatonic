@@ -1,6 +1,7 @@
 """The agent loop: model -> tool calls -> approvals -> results -> model, streamed as events."""
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 import uuid
@@ -159,6 +160,11 @@ async def run_agent(ctx, registry, conv_id: str, text: str, *, speak: bool = Fal
     except ProviderError as e:
         error, had_error = str(e), True
         yield {"type": "error", "message": error}
+    except asyncio.CancelledError:
+        # Stopped by the user: keep what was produced so the chat history stays coherent.
+        partial = "\n\n".join(texts)
+        ctx.db.add_message(conv_id, "assistant", partial, {"tools": list(cards.values()), "stopped": True})
+        raise
 
     final = "\n\n".join(texts)
     ctx.db.add_message(conv_id, "assistant", final, {"tools": list(cards.values()), "error": error})

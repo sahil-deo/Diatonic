@@ -17,10 +17,11 @@ export function h(tag, attrs = {}, ...kids) {
   return el;
 }
 
-export function toast(msg, kind = "") {
-  const t = h("div", { class: `toast ${kind}` }, msg);
+export function toast(msg, kind = "", action = null) {
+  const t = h("div", { class: `toast ${kind}` }, msg,
+    action && h("button", { class: "btn sm", style: "margin-left:12px", onclick: () => { action.run(); t.remove(); } }, action.label));
   $("#toasts").append(t);
-  setTimeout(() => t.remove(), kind === "error" ? 6000 : 3200);
+  setTimeout(() => t.remove(), action ? 9000 : kind === "error" ? 6000 : 3200);
 }
 
 export function relTime(iso) {

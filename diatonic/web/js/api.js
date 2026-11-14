@@ -30,15 +30,19 @@ export const api = {
   },
 };
 
-/** POST a chat message and invoke onEvent for every server-sent event. */
-export async function streamChat(body, onEvent, signal) {
-  const r = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
-  if (!r.ok) throw new Error(`Chat failed (${r.status})`);
+/** Start a run in the background; events arrive on the global stream. */
+api.chat = (body) => j("POST", "/api/chat", body);
+api.cancel = (cid) => j("POST", `/api/conversations/${cid}/cancel`);
+
+/** Long-lived stream of every run's events. Resolves when the connection drops. */
+export async function streamEvents(onEvent, signal) {
+  const r = await fetch("/api/events", { signal });
+  if (!r.ok) throw new Error(`Event stream failed (${r.status})`);
   const reader = r.body.getReader(), dec = new TextDecoder();
   let buf = "";
   for (;;) {
     const { done, value } = await reader.read();
-    if (done) break;
+    if (done) return;
     buf += dec.decode(value, { stream: true });
     let i;
     while ((i = buf.indexOf("\n\n")) >= 0) {
