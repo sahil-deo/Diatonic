@@ -6,7 +6,8 @@ import * as chat from "./chat.js";
 import { initVoiceUI, paintSpeakToggle, setSpeak, updateHint } from "./voiceui.js";
 import { initSettings, openSettings } from "./settings.js";
 import { initPalette, openPalette } from "./palette.js";
-import { initPanel, openPanel, closePanel } from "./panel.js";
+import { initPanel, openPanel, closePanel, refreshPanel } from "./panel.js";
+import { initInbox, loadInbox } from "./inbox.js";
 
 /* ---------- theme ---------- */
 const mq = matchMedia("(prefers-color-scheme: light)");
@@ -156,6 +157,9 @@ async function boot() {
   $("#toggle-sidebar").onclick = () => $("#sidebar").classList.toggle("show");
   $("#speak-toggle").onclick = () => setSpeak(!state.config.voice.speak_summary);
 
+  const inbox = initInbox({ onOpenChat: (id) => chat.openConversation(id) });
+  on("notification", inbox.onNotification);
+  on("app_changed", (ev) => { if (state.panelApp === ev.app && !$("#panel-body").dataset.dirty) refreshPanel(); });
   on("runs-changed", paintRuns);
   on("conversations-changed", loadConvs);
   on("apps", () => { renderRail(); chat.renderEmpty?.(); });
@@ -164,7 +168,7 @@ async function boot() {
   on("config", () => { applyTheme(); updateHint(); paintSpeakToggle(); });
   on("prefill", (t) => { setInput(t); });
 
-  renderRail(); chat.renderEmpty(); updateHint(); loadConvs(); refreshHealth(); chat.startEventStream();
+  renderRail(); chat.renderEmpty(); updateHint(); loadConvs(); refreshHealth(); loadInbox(); chat.startEventStream();
   setInterval(refreshHealth, 20000);
 
   const q = new URLSearchParams(location.search);

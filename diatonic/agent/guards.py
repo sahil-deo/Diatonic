@@ -112,6 +112,7 @@ class RunGuard:
         self.max_calls = int(cfg.get("max_tool_calls", 10))
         self.calls = self.dups = self.errors = self.loops = 0
         self.nudged = False
+        self.approval_timeout: float | None = None
         self.seen: dict[str, dict] = {}
 
     def expired(self) -> bool:

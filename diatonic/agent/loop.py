@@ -187,6 +187,15 @@ async def _execute(call: dict, tool_map: dict, registry, guard: RunGuard, out: d
         yield {"type": "tool_result", "id": cid, "ok": False, "preview": out["content"], "ms": 0}
         return
 
+    blocked = tool.precheck(args) if tool.precheck else None
+    if blocked:  # don't ask the user to approve something that cannot run
+        yield {"type": "tool_call", "id": cid, "name": name, "app": app.id, "title": tool.title, "args": args,
+               "risk": tool.risk, "describe": "", "needs_approval": False}
+        out.update(ok=False, content=f"Error: {blocked}")
+        guard.errors += 1
+        yield {"type": "tool_result", "id": cid, "ok": False, "preview": out["content"], "ms": 0}
+        return
+
     describe = tool.describe(args) if tool.describe else tool.title
     needs = tool.needs_approval and not registry.is_always_allowed(app, tool)
     yield {"type": "tool_call", "id": cid, "name": name, "app": app.id, "title": tool.title, "args": args,
@@ -197,7 +206,9 @@ async def _execute(call: dict, tool_map: dict, registry, guard: RunGuard, out: d
         fut = approvals.request(cid)
         yield {"type": "notify", "text": f"I need your approval: {describe}"}
         try:
-            approved = await fut
+            approved = await asyncio.wait_for(fut, guard.approval_timeout)
+        except asyncio.TimeoutError:
+            approved = False  # unattended and nobody answered
         finally:
             approvals.discard(cid)
         yield {"type": "tool_status", "id": cid, "status": "approved" if approved else "denied"}
@@ -235,20 +246,24 @@ def _fallback(cards: list[dict]) -> str:
     return "I didn't manage to answer that. Try rephrasing, or break it into smaller steps."
 
 
-async def run_agent(ctx, registry, conv_id: str, text: str, *, speak: bool = False) -> AsyncIterator[dict]:
+async def run_agent(ctx, registry, conv_id: str, text: str, *, speak: bool = False, readonly: bool = False,
+                    approval_timeout: float | None = None, extra_system: str = "") -> AsyncIterator[dict]:
     cfg = ctx.config.data
     acfg = cfg["agent"]
     t0 = time.monotonic()
     provider = make_provider(ctx)
     guard = RunGuard(acfg)
+    guard.approval_timeout = approval_timeout
 
     history = build_history(ctx.db.history(conv_id, limit=int(acfg["history_messages"])), int(acfg["history_chars"]))
     prior_apps = ctx.db.apps_used(conv_id)
     ctx.db.add_message(conv_id, "user", text)
     tool_map, expects_tool = select_tools(registry, text, prior_apps)
+    if readonly:  # unattended runs may only read; nothing can be changed without a person present
+        tool_map = {n: (a, t) for n, (a, t) in tool_map.items() if not t.needs_approval}
     specs = [tool_spec(a, t) for a, t in tool_map.values()]
     now = ctx.now().strftime("%A %Y-%m-%d %H:%M")
-    messages = [{"role": "system", "content": build_system_prompt(ctx, registry)}, *history,
+    messages = [{"role": "system", "content": build_system_prompt(ctx, registry) + extra_system}, *history,
                 {"role": "user", "content": f"{text}\n\n(Now: {now})"}]
 
     cards: dict[str, dict] = {}

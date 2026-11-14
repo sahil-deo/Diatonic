@@ -2,6 +2,7 @@ export const state = {
   config: null, apps: [], health: null,
   convId: null, conversations: [], panelApp: null,
   runs: {},            // conversation id -> {status: "running" | "waiting", title}
+  inbox: [], unreadCount: 0,   // notification inbox
   unread: new Set(),   // conversations that finished while you were elsewhere
 };
 const bus = new EventTarget();

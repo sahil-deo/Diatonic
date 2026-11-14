@@ -42,4 +42,5 @@ class Registry:
         return {f"{a.id}_{t.name}": (a, t) for a in self.enabled() for t in a.tools()}
 
     def is_always_allowed(self, app: App, tool: Tool) -> bool:
-        return tool.name in self.ctx.app_cfg(app.id)["always_allow"]
+        allowed = self.ctx.app_cfg(app.id).get("always_allow")
+        return tool.name in (app.default_allow if allowed is None else allowed)

@@ -28,6 +28,9 @@ class Context:
         self.db = db
         self.http = http or httpx.AsyncClient(timeout=httpx.Timeout(20.0, read=300.0))
         self.secrets = secrets
+        self.scheduler = None   # set by the server once the engine exists
+        self.notifier = None
+        self.broadcast = lambda ev: None   # pushes an event to every connected UI
 
     def app_cfg(self, app_id: str) -> dict:
         return self.config.app(app_id)

@@ -7,6 +7,9 @@ async function j(method, url, body) {
 
 export const api = {
   get: (u) => j("GET", u),
+  post: (u, b) => j("POST", u, b || {}),
+  put: (u, b) => j("PUT", u, b || {}),
+  del: (u) => j("DELETE", u),
   state: () => j("GET", "/api/state"),
   health: () => j("GET", "/api/health"),
   putConfig: (patch) => j("PUT", "/api/config", patch),

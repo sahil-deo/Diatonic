@@ -15,8 +15,9 @@ async function load() {
   try {
     const mod = await import(`/apps/${app.id}.js`);
     if (my !== seq) return;
-    body.replaceChildren();
-    await mod.render(body, { api, h, esc, toast, prompt: (t) => emit("prefill", t) });
+    body.replaceChildren(); delete body.dataset.dirty;
+    $("#shell").classList.toggle("panel-wide", !!mod.wide);
+    await mod.render(body, { api, h, esc, toast, reload: load, prompt: (t) => emit("prefill", t) });
   } catch (e) { body.replaceChildren(h("div", { class: "p-empty" }, `Couldn't load ${app.name}: ${e.message}`)); }
 }
 
@@ -27,7 +28,7 @@ export function openPanel(appId) {
 }
 export function closePanel() {
   state.panelApp = null; seq++;
-  $("#shell").classList.remove("panel-open"); $("#panel").classList.add("hidden"); emit("panel");
+  $("#shell").classList.remove("panel-open", "panel-wide"); $("#panel").classList.add("hidden"); emit("panel");
 }
 export function initPanel() {
   setIcon($("#panel-refresh"), "refresh", 16); setIcon($("#panel-close"), "x", 16);

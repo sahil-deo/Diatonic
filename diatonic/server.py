@@ -22,6 +22,9 @@ from .apps.registry import Registry
 from .config import Config, home
 from .context import Context
 from .db import Database
+from .scheduler.engine import Scheduler
+from .scheduler.notify import Notifier
+from .scheduler.store import Store
 from .voice.models import VoiceSetup
 from .voice.stt import STT
 from .voice.tts import TTS
@@ -65,10 +68,14 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
     config = config or Config()
     db = db or Database(home() / "diatonic.db")
     ctx = Context(config, db)
+    runs = RunManager()
+    store = Store(db)
+    ctx.broadcast = runs.broadcast
+    ctx.notifier = Notifier(ctx, store, runs.broadcast)
     registry = registry or Registry(ctx).discover()
+    ctx.scheduler = Scheduler(ctx, registry, runs, ctx.notifier, store)
     stt, tts = STT(), TTS()
     setup = VoiceSetup(stt, tts)
-    runs = RunManager()
     port = config.data["server"]["port"]
     hosts = allowed_hosts or {f"localhost:{port}", f"127.0.0.1:{port}", f"[::1]:{port}"}
 
@@ -89,7 +96,8 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
         return {"id": a.id, "name": a.name, "icon": a.icon, "description": a.description, "panel": a.panel,
                 "enabled": cfg["enabled"], "fields": fields, "status": await a.status() if cfg["enabled"] else None,
                 "tools": [{"name": t.name, "title": t.title, "risk": t.risk, "description": t.description,
-                           "always_allow": t.name in cfg["always_allow"]} for t in a.tools()]}
+                           "always_allow": t.name in (a.default_allow if cfg.get("always_allow") is None else cfg["always_allow"])}
+                          for t in a.tools()]}
 
     async def get_state(request):
         apps = list(await asyncio.gather(*(app_info(a) for a in registry.apps.values())))
@@ -245,7 +253,51 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
         await asyncio.sleep(0)
         return JSONResponse(setup.state)
 
+    # ---- notification inbox ----------------------------------------------
+    async def list_notifications(request):
+        return JSONResponse({"items": store.notifications(50), "unread": store.unread_count()})
+
+    async def read_notification(request):
+        store.mark_read(int(request.path_params["nid"]))
+        return JSONResponse({"unread": store.unread_count()})
+
+    async def read_all(request):
+        store.mark_read(None)
+        return JSONResponse({"unread": 0})
+
+    async def delete_notification(request):
+        store.delete_notification(int(request.path_params["nid"]))
+        return JSONResponse({"unread": store.unread_count()})
+
+    async def clear_notifications(request):
+        store.delete_notification(None)
+        return JSONResponse({"unread": 0})
+
+    async def snooze_notification(request):
+        """Re-fire a reminder later: creates a fresh one-off reminder with the same text."""
+        n = store.notification(int(request.path_params["nid"]))
+        if not n:
+            raise HTTPException(404)
+        minutes = int((await request.json()).get("minutes", 10))
+        text = n["data"].get("text") or n["body"]
+        ctx.scheduler.create(name=text, kind="notify", when=f"in {max(1, minutes)} minutes",
+                             payload={"text": text}, created_by="user")
+        store.mark_read(n["id"])
+        return JSONResponse({"ok": True, "unread": store.unread_count()})
+
+    async def test_notification(request):
+        await ctx.notifier.send("Test notification", "If you can see this, notifications work.", kind="info",
+                                speak_text="This is a test notification.")
+        return JSONResponse({"ok": True})
+
     routes = [
+        Route("/api/notifications", list_notifications),
+        Route("/api/notifications/test", test_notification, methods=["POST"]),
+        Route("/api/notifications/read-all", read_all, methods=["POST"]),
+        Route("/api/notifications/clear", clear_notifications, methods=["POST"]),
+        Route("/api/notifications/{nid}/read", read_notification, methods=["POST"]),
+        Route("/api/notifications/{nid}/snooze", snooze_notification, methods=["POST"]),
+        Route("/api/notifications/{nid}", delete_notification, methods=["DELETE"]),
         Route("/api/state", get_state),
         Route("/api/health", health),
         Route("/api/config", put_config, methods=["PUT"]),
@@ -270,7 +322,9 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
 
     @asynccontextmanager
     async def lifespan(app):
+        ctx.scheduler.start()
         yield
+        await ctx.scheduler.stop()
         await runs.shutdown()
         await ctx.http.aclose()
 

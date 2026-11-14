@@ -54,6 +54,20 @@ DEFAULTS: dict[str, Any] = {
     },
     "apps": {},  # {app_id: {"enabled": bool, "settings": {}, "always_allow": []}}
     "appearance": {"theme": "system"},
+    "notifications": {
+        "native": True,        # macOS Notification Center, works with the browser closed
+        "browser": False,      # web notifications while the page is open in the background
+        "speak": True,         # say reminders aloud when the spoken-summary toggle is on
+        "quiet_enabled": False,
+        "quiet_start": "22:00",
+        "quiet_end": "07:00",
+    },
+    "scheduler": {
+        "allow_scripts": False,   # script jobs run shell commands: off until you turn it on
+        "script_timeout": 60,     # seconds (hard max 900)
+        "keep_prompt_chats": 5,   # chats kept per scheduled prompt
+        "approval_timeout": 900,  # unattended runs deny writes nobody approves within this
+    },
     "timezone": "",  # empty = system timezone
     "_v": 2,
 }
@@ -106,5 +120,4 @@ class Config:
         a = self.data["apps"].setdefault(app_id, {})
         a.setdefault("enabled", True)
         a.setdefault("settings", {})
-        a.setdefault("always_allow", [])
         return a

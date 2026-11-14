@@ -3,6 +3,7 @@ import { api } from "./api.js";
 import { state, emit } from "./store.js";
 import { speaker, eventToHotkey, prettyHotkey } from "./voice.js";
 import { paintSpeakToggle, setSpeak, updateHint } from "./voiceui.js";
+import { askBrowserPermission } from "./inbox.js";
 
 const dlg = () => $("#settings");
 let tab = "agent";
@@ -157,11 +158,40 @@ function appsPane() {
   });
 }
 
+function automationPane() {
+  const n = state.config.notifications, sc = state.config.scheduler;
+  const quiet = (key) => h("input", { type: "time", value: n[key], onchange: (e) => save({ notifications: { [key]: e.target.value } }) });
+  return [
+    h("div", { class: "p-section" }, "Notifications"),
+    toggle("macOS notifications", "Banners in Notification Center, even when the browser is closed. They appear under “Script Editor” because they're sent with AppleScript.", n.native, (x) => save({ notifications: { native: x } })),
+    toggle("Browser notifications", "Shown while this page is open in a background tab.", n.browser, async (x) => {
+      if (x && (await askBrowserPermission()) !== "granted") { toast("Allow notifications for localhost:5005 in your browser first.", "error"); return renderPane(); }
+      save({ notifications: { browser: x } });
+    }),
+    toggle("Speak reminders", "Reads reminders and finished jobs aloud. Needs the Spoken summary toggle on.", n.speak, (x) => save({ notifications: { speak: x } })),
+    toggle("Quiet hours", "No banners or speech in this window; everything still lands in the inbox.", n.quiet_enabled, (x) => save({ notifications: { quiet_enabled: x } })),
+    h("div", { class: "row", style: "margin:12px 0 4px" }, field("From", quiet("quiet_start")), field("Until", quiet("quiet_end"))),
+    h("div", { class: "row" }, h("button", { class: "btn", onclick: () => api.post("/api/notifications/test").catch((e) => toast(e.message, "error")) }, "Send a test notification")),
+    h("div", { style: "height:22px" }),
+    h("div", { class: "p-section" }, "Scheduled jobs"),
+    toggle("Allow script jobs", "Lets jobs run shell commands on a schedule, with your user's permissions. Only you can turn this on. The agent can ask to create one, and you'll see the exact command to approve.", sc.allow_scripts, (x) => {
+      if (x && !confirm("Script jobs run shell commands as you, unattended. Only enable this if you want that. Continue?")) return renderPane();
+      save({ scheduler: { allow_scripts: x } });
+    }),
+    h("div", { style: "height:12px" }),
+    h("div", { class: "row" },
+      field("Script timeout (s)", text(sc.script_timeout, (v) => saveSoon({ scheduler: { script_timeout: v } }), { type: "number", min: 5, max: 900 })),
+      field("Chats kept per prompt job", text(sc.keep_prompt_chats, (v) => saveSoon({ scheduler: { keep_prompt_chats: v } }), { type: "number", min: 1, max: 50 })),
+      field("Unattended approval wait (s)", text(sc.approval_timeout, (v) => saveSoon({ scheduler: { approval_timeout: v } }), { type: "number", min: 30 }))),
+    h("div", { class: "notice" }, "Reminders and jobs only fire while Diatonic is running. To keep it running in the background and start at login, run ", h("code", {}, "diatonic install-service"), " in a terminal (see the README). Anything due while it was off fires once, late, when it starts again."),
+  ];
+}
+
 function appearancePane() {
   return [field("Theme", select(state.config.appearance.theme, [["system", "Match system"], ["dark", "Dark"], ["light", "Light"]], (v) => save({ appearance: { theme: v } })))];
 }
 
-const TABS = [["agent", "Agent", agentPane], ["voice", "Voice", voicePane], ["apps", "Apps", appsPane], ["appearance", "Appearance", appearancePane]];
+const TABS = [["agent", "Agent", agentPane], ["voice", "Voice", voicePane], ["apps", "Apps", appsPane], ["automation", "Automation", automationPane], ["appearance", "Appearance", appearancePane]];
 
 export async function refreshApps() {
   state.apps = await api.get("/api/apps"); emit("apps"); if (dlg().open) renderPane();

@@ -183,6 +183,7 @@ function shouldSpeak(kind) {
 
 function onEvent(ev) {
   if (ev.type === "hello") return resync(ev.runs);
+  if (ev.type === "notification" || ev.type === "app_changed") return emit(ev.type, ev); // not tied to a chat
   const cid = ev.conversation_id;
   const title = ev.type === "run_start" ? ev.title : titleOf(cid); // other events' `title` is a tool title
 

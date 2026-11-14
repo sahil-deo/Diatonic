@@ -50,14 +50,19 @@ class RunManager:
     def snapshot(self) -> list[dict]:
         return [r.snapshot() for r in self.runs.values()]
 
+    def broadcast(self, ev: dict) -> None:
+        """Push a non-run event (notifications, data changes) to every connected UI."""
+        for q in list(self._subs):
+            q.put_nowait(ev)
+
     # ---- lifecycle -----------------------------------------------------
-    def start(self, ctx, registry, conv: dict, text: str, speak: bool) -> Run:
+    def start(self, ctx, registry, conv: dict, text: str, speak: bool, **opts) -> Run:
         if conv["id"] in self.runs:
             raise RunBusy(conv["id"])
         run = Run(conv["id"], conv["title"])
         self.runs[run.conv_id] = run
         self._publish(run, {"type": "run_start", "title": run.title})
-        run.task = asyncio.create_task(self._drive(run, ctx, registry, text, speak))
+        run.task = asyncio.create_task(self._drive(run, ctx, registry, text, speak, opts))
         return run
 
     def cancel(self, conv_id: str) -> bool:
@@ -73,10 +78,10 @@ class RunManager:
             t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def _drive(self, run: Run, ctx, registry, text: str, speak: bool) -> None:
+    async def _drive(self, run: Run, ctx, registry, text: str, speak: bool, opts: dict) -> None:
         finished = False
         try:
-            async for ev in agent_loop.run_agent(ctx, registry, run.conv_id, text, speak=speak):
+            async for ev in agent_loop.run_agent(ctx, registry, run.conv_id, text, speak=speak, **opts):
                 finished = finished or ev["type"] == "done"
                 if ev["type"] == "done":
                     self.runs.pop(run.conv_id, None)  # before publishing, so late readers see the DB

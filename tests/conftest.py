@@ -6,6 +6,7 @@ import pytest
 _tmp = tempfile.mkdtemp()
 os.environ["DIATONIC_HOME"] = _tmp
 os.environ["DIATONIC_SECRETS_BACKEND"] = "file"
+os.environ["DIATONIC_NO_NATIVE"] = "1"  # tests must never pop real macOS notifications
 
 from diatonic.apps.base import DESTRUCTIVE, READ, App, Tool, ToolError  # noqa: E402
 from diatonic.apps.registry import Registry  # noqa: E402
@@ -69,3 +70,21 @@ def env(tmp_path):
     app = FakeApp(ctx)
     reg.register(app)
     return ctx, reg, app, db
+
+
+@pytest.fixture
+def sched(env):
+    """env + a real Scheduler/Notifier/Store wired to the context, capturing broadcast events."""
+    from diatonic.agent.runs import RunManager
+    from diatonic.scheduler.engine import Scheduler
+    from diatonic.scheduler.notify import Notifier
+    from diatonic.scheduler.store import Store
+
+    ctx, reg, app, db = env
+    events = []
+    ctx.broadcast = events.append
+    store = Store(db)
+    ctx.notifier = Notifier(ctx, store, events.append)
+    runs = RunManager()
+    ctx.scheduler = Scheduler(ctx, reg, runs, ctx.notifier, store)
+    return ctx, reg, ctx.scheduler, store, runs, events

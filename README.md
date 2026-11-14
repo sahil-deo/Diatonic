@@ -2,6 +2,7 @@
 
 A local, modular agentic harness. One configurable agent, many **apps** (GitHub, Google Calendar, …), voice in and a short spoken summary out. Everything runs on your machine at **http://localhost:5005**.
 
+- **Apps:** GitHub, Google Calendar, **Scheduler** (reminders and scheduled prompt/script jobs), **To-dos** and **Notes**, all controllable by the agent and by hand.
 - **Agent:** Ollama with `qwen3:4b-instruct` by default; provider, model and prompts are configurable in Settings.
 - **Apps:** each app is a self-contained folder that contributes tools to the agent and an optional side panel to the UI. Adding one never touches core code.
 - **Parallel chats:** every chat runs as a background task on the server. Start one, switch to another, even close the tab; runs keep going and you're alerted when one finishes or needs approval.
@@ -49,6 +50,34 @@ Settings → Apps → GitHub. Paste a personal access token with the `repo` scop
 4. Paste the client ID and secret into Settings → Apps → Google Calendar, save, then click **Connect Google**.
 
 Credentials and tokens are stored in the macOS Keychain (fallback: `~/.diatonic/secrets.json`, mode 0600).
+
+## Reminders, scheduled jobs, to-dos and notes
+
+Say what you want in plain words ("remind me to call mom tomorrow at 9", "every weekday at 8 give me my to-do briefing", "add a to-do to send the invoice by Friday", "jot down that the wifi password is on the fridge") or use the panels in the left rail.
+
+**Scheduler** (`clock` icon)
+- **Reminders:** a notification at a time you give. Times are parsed by code, not by the model: `in 20 minutes`, `tomorrow 9am`, `friday 5pm`, `2026-11-20 15:00`, `every weekday at 9`, `every 30 minutes`, `monthly on the 1st at 8am` or a 5-field cron like `0 9 * * 1-5`.
+- **Prompt jobs:** run an AI prompt on a schedule in their own chat (named `⏰ <job> · <time>`) and notify you with the result. They are **read-only**: the tools that change things aren't even offered. In the panel you can tick *Allow it to propose changes*; writes still need approval, and with nobody there they time out and are denied. Only the UI can grant this, never the agent.
+- **Script jobs:** run a shell command on a schedule (timeout, killed as a whole process group, minimal environment, output captured, notification on failure). **Off by default**: turn them on in Settings → Automation. If the agent proposes one you get an approval card with the exact command.
+- **Reliability:** everything is stored in SQLite. After downtime a missed one-off reminder fires once, marked as late; a missed recurring job fires once and then resumes on schedule; a job still running is skipped rather than doubled. Run history is kept per job.
+
+**To-dos:** title, due date, priority, optional reminder at the due time (completing or deleting the to-do cancels its reminder).
+
+**Notes:** plain markdown files in `~/Documents/Diatonic Notes` (change it in Settings → Apps → Notes, or point it at an existing folder). Searchable by the agent, editable in the wide Notes panel with autosave and preview. Deleting moves a note to `.trash/` inside that folder.
+
+**Notifications** go to an inbox (bell in the top bar, with Snooze and Done) and, per Settings → Automation, to macOS Notification Center (works with the browser closed; banners appear under "Script Editor" because they are sent with AppleScript), browser notifications while the page is open in the background, and spoken aloud when the spoken-summary toggle is on. Quiet hours silence banners and speech, not the inbox.
+
+### Keep it running in the background
+
+Reminders and jobs only fire while the server runs. To run it at login and restart it if it crashes (macOS):
+
+```bash
+.venv/bin/diatonic install-service        # add --print to just see the launchd plist
+.venv/bin/diatonic service-status
+.venv/bin/diatonic uninstall-service
+```
+
+Logs go to `~/.diatonic/logs/`. If you run `.venv/bin/diatonic` by hand as well, stop it first, since both use port 5005.
 
 ## Running several chats at once
 
