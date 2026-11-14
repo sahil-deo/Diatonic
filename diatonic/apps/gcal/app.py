@@ -24,8 +24,8 @@ def _s(desc: str) -> dict:
     return {"type": "string", "description": desc}
 
 
-TIME = "ISO 8601 date-time like 2026-11-20T15:00:00 (local time assumed if no offset), or a date like 2026-11-20"
-CAL = _s("Calendar id; defaults to 'primary'")
+TIME = "ISO 8601: 2026-11-20T15:00:00 or 2026-11-20"
+CAL = _s("Calendar id (default primary)")
 
 
 class GCalApp(App):
@@ -34,6 +34,9 @@ class GCalApp(App):
     icon = "calendar"
     description = "See your agenda, create, move and delete events, and find free time."
     panel = True
+    keywords = ["calendar", "event", "events", "meeting", "meetings", "schedule", "appointment", "agenda", "free",
+                "busy", "availability", "invite", "reschedule", "today", "tomorrow", "tonight", "week", "weekend",
+                "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "remind", "slot"]
     settings = [
         {"key": "client_id", "label": "OAuth client ID", "secret": True, "placeholder": "…apps.googleusercontent.com",
          "help": "Google Cloud Console → Credentials → OAuth client ID (Desktop app). See the README."},

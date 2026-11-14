@@ -52,8 +52,10 @@ def test_invalid_args_and_unknown_tool_are_reported_to_model(env, monkeypatch):
     p = ScriptedProvider([[call("fake_read")], [call("nope_tool")], [{"content": "ok"}]])
     _, ev = asyncio.run(collect(ctx, reg, db, p, monkeypatch))
     results = [e for e in ev if e["type"] == "tool_result"]
-    assert [r["ok"] for r in results] == [False, False]
-    assert "invalid arguments" in results[0]["preview"] and "no tool named" in results[1]["preview"]
+    assert [r["ok"] for r in results] == [False]
+    assert "invalid arguments" in results[0]["preview"]
+    assert [e["kind"] for e in ev if e["type"] == "guard"] == ["unknown_tool"]
+    assert any("no tool named" in m["content"] for m in p.seen[2] if m.get("role") == "tool")
     assert app.calls == []
 
 
@@ -141,7 +143,8 @@ def test_history_is_replayed_without_tool_traces(env, monkeypatch):
     asyncio.run(go("first"))
     asyncio.run(go("second"))
     roles = [(m["role"], m["content"]) for m in p.seen[1] if m["role"] != "system"]
-    assert roles == [("user", "first"), ("assistant", "one"), ("user", "second")]
+    assert [r[0] for r in roles] == ["user", "assistant", "user"]
+    assert roles[0][1].startswith("first") and roles[1][1] == "one" and roles[2][1].startswith("second")
 
 
 # ---------- concurrent background runs ----------
@@ -155,7 +158,7 @@ class GatedProvider(ScriptedProvider):
         super().__init__([])
         self.gate, self.text = gate, text
 
-    async def stream(self, messages, tools=None, model=None):
+    async def stream(self, messages, tools=None, model=None, options=None):
         await self.gate.wait()
         yield {"content": self.text}
 

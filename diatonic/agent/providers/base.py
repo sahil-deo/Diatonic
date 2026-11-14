@@ -8,19 +8,20 @@ class ProviderError(Exception):
 
 
 class Provider:
-    """chunk = {"content": str} and/or {"tool_calls": [{"name": str, "arguments": dict}]}"""
+    """chunk = {"content": str} and/or {"tool_calls": [{"name": str, "arguments": dict}]}
+    and, at the end, {"usage": {"prompt": int, "completion": int}, "truncated": bool}."""
 
     def __init__(self, http, cfg: dict):
         self.http = http
         self.cfg = cfg
 
     def stream(self, messages: list[dict], tools: list[dict] | None = None,
-               model: str | None = None) -> AsyncIterator[dict]:
+               model: str | None = None, options: dict | None = None) -> AsyncIterator[dict]:
         raise NotImplementedError
 
-    async def complete(self, messages: list[dict], model: str | None = None) -> str:
+    async def complete(self, messages: list[dict], model: str | None = None, options: dict | None = None) -> str:
         out = ""
-        async for chunk in self.stream(messages, None, model):
+        async for chunk in self.stream(messages, None, model, options):
             out += chunk.get("content", "")
         return out
 

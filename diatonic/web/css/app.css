@@ -54,6 +54,8 @@ svg.i { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-widt
 .conv .ind.wait { color: var(--warn); } .conv .ind.unread::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
 .rail-btn .badge.warn { background: var(--warn); } .rail-btn .badge.busy { background: var(--accent); animation: blink 1.2s steps(2) infinite; }
 .statusbar button.link { text-decoration: underline dotted; }
+.guard { display: flex; align-items: center; gap: 6px; color: var(--warn); font-size: 12px; margin: 6px 0; }
+.guard svg { flex: none; }
 .stopped { color: var(--faint); font-size: 12px; margin: 4px 0; }
 .empty-list { color: var(--faint); padding: 16px 10px; font-size: 13px; }
 

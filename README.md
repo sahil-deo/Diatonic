@@ -61,6 +61,27 @@ Each conversation is its own background run, so you can start a task, hit **New 
 - Runs are separate from the browser connection but live in the server process: restarting `diatonic` stops them.
 - Ollama decides how many requests it serves at once. If background chats seem to queue behind each other, start Ollama with more parallelism, e.g. `OLLAMA_NUM_PARALLEL=2 ollama serve` (costs extra memory for each slot).
 
+## Guardrails for small models
+
+Small local models loop, narrate instead of acting, and repeat tool calls. The agent loop assumes that and contains it (`diatonic/agent/guards.py`, `agent/loop.py`):
+
+- **Repetition is cut off mid-stream.** Repeated sentences and character-level loops are detected as tokens arrive; generation is aborted (so Ollama stops too), the runaway text is replaced, and the model is retried once with hotter sampling and a stronger repeat penalty. A second loop ends the run with a clean partial answer and a notice. History is de-duplicated too, so an old looped chat can't poison new turns.
+- **Identical tool calls never run twice.** A repeated read returns the earlier result; a repeated write is refused (and never re-prompts for approval). Two duplicates, three failures or the tool budget force a final answer from a tool-less turn.
+- **Hard budgets per run:** model calls (`max_steps`), tool executions (`max_tool_calls`), wall-clock (`run_timeout`), reply length (`max_tokens`), first-token and idle timeouts. A stuck model gives a message, never a hang.
+- **"Let me check…" with no action** gets one nudge to actually call the tool; so does a made-up answer to a request that clearly needed an app. Narration before a tool call is dropped from the UI, the stored chat and the context, so the model can't imitate it.
+- **Honest errors:** unknown tools, bad arguments and tool failures go back to the model as short messages; every notice is shown in the chat ("The model started repeating itself, so I cut it off and retried.").
+
+### Speed on weak hardware
+
+On CPU the cost is mostly prompt processing, so the harness keeps prompts small and stable:
+
+- **Tool routing:** only the apps your message names (plus those already used in the chat) expose tools: about 750 to 1,000 tokens instead of 2,000+. Add `keywords` to a new app to take part.
+- **Compact schemas and results:** self-explanatory parameter descriptions are dropped, tool results are compacted and clipped, history is capped by characters, and only the latest tool-using answer replays its tool trace.
+- **KV-cache friendly:** the system prompt and tool list stay byte-identical between turns (the clock rides on the user message), so Ollama reuses its cache. Chat within one app is much faster than alternating apps.
+- **Sampling tuned for Qwen3-instruct** (temperature 0.6, top-p 0.8, top-k 20, repeat penalty 1.05) instead of the near-greedy settings that make small models loop. Spoken summaries use a tiny capped call.
+
+All limits are in Settings → Agent and `~/.diatonic/config.json`.
+
 ## Approvals
 
 Approvals work in any chat, including background ones. Every tool declares a risk level: `read` runs immediately; `write` and `destructive` show an approval card (**⌘↵** approve, **Esc** deny) with exactly what will happen. Voice input never approves anything, so a mis-heard word can't merge a PR. Mark specific tools *always allow* under Settings → Apps.

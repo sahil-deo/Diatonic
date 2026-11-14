@@ -15,6 +15,7 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from .agent import approvals
+from .agent.guards import collapse_repeats
 from .agent.runs import RunBusy, RunManager
 from .agent.providers import ProviderError, make_provider
 from .apps.registry import Registry
@@ -153,7 +154,9 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
         if not c:
             raise HTTPException(404)
         run = runs.runs.get(c["id"])
-        return JSONResponse({**c, "messages": db.messages(c["id"]), "run": run.replay() if run else None})
+        msgs = [{**m, "content": collapse_repeats(m["content"]) if m["role"] == "assistant" else m["content"]}
+                for m in db.messages(c["id"])]
+        return JSONResponse({**c, "messages": msgs, "run": run.replay() if run else None})
 
     async def patch_conv(request):
         body = await request.json()

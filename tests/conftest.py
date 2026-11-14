@@ -48,12 +48,12 @@ class ScriptedProvider:
     def __init__(self, script, summary="NONE"):
         self.script, self.summary, self.seen = list(script), summary, []
 
-    async def stream(self, messages, tools=None, model=None):
+    async def stream(self, messages, tools=None, model=None, options=None):
         self.seen.append(messages)
         for chunk in self.script.pop(0):
             yield chunk
 
-    async def complete(self, messages, model=None):
+    async def complete(self, messages, model=None, options=None):
         return self.summary
 
     async def health(self):

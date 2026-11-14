@@ -42,6 +42,7 @@ async def summarize(provider, model: str | None, request: str, actions: list[str
     acts = "\n".join(f"- {a}" for a in actions) or "- (no actions)"
     user = f"User request: {request[:500]}\nActions:\n{acts}\nFinal reply: {reply[:1200]}"
     out = await provider.complete(
-        [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}], model=model or None
+        [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}], model=model or None,
+        options={"num_predict": 70, "temperature": 0.3, "repeat_penalty": 1.1},
     )
     return clean_for_speech(out)

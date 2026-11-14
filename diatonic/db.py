@@ -69,10 +69,18 @@ class Database:
         return [{**dict(r), "meta": json.loads(r["meta"])} for r in rows]
 
     def history(self, cid: str, limit: int = 20) -> list[dict]:
-        """Plain user/assistant turns for the model (tool traces are not replayed)."""
+        """Recent user/assistant turns (with their meta, so the loop can replay recent tool traces)."""
         rows = self.conn.execute(
-            "SELECT role, content FROM messages WHERE conversation_id=? AND content!='' "
+            "SELECT role, content, meta FROM messages WHERE conversation_id=? AND content!='' "
             "ORDER BY id DESC LIMIT ?",
             (cid, limit),
         ).fetchall()
-        return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
+        return [{"role": r["role"], "content": r["content"], "meta": json.loads(r["meta"])} for r in reversed(rows)]
+
+    def apps_used(self, cid: str) -> set[str]:
+        used: set[str] = set()
+        for r in self.conn.execute("SELECT meta FROM messages WHERE conversation_id=? AND role='assistant'", (cid,)):
+            for t in json.loads(r["meta"]).get("tools", []):
+                if t.get("app"):
+                    used.add(t["app"])
+        return used

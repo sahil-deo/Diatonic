@@ -44,6 +44,9 @@ class App:
     # [{"key","label","secret":bool,"help":str,"placeholder":str}]
     settings: list[dict] = []
     panel: bool = False  # True if web/apps/<id>.js exists
+    # Words that suggest a request is about this app. Only matching apps' tools are shown to the model
+    # (a small model chooses far better from a handful of tools). No match = all apps.
+    keywords: list[str] = []
 
     def __init__(self, ctx):
         self.ctx = ctx

@@ -103,6 +103,10 @@ function applyEvent(v, ev) {
     case "token":
       if (!v.seg) newSeg(v);
       v.segText += ev.text; if (!v.raf) v.raf = requestAnimationFrame(() => paint(v)); break;
+    case "rewrite": // the server cut a runaway reply: replace this step's text
+      if (!v.seg) newSeg(v);
+      cancelAnimationFrame(v.raf); v.segText = ev.text; v.seg.innerHTML = md(v.segText); break;
+    case "guard": v.wrap.append(h("div", { class: "guard", html: `${icon("shield", 13)} ` }, ev.message)); scroll(); break;
     case "tool_call": {
       if (v.seg) { v.seg.classList.remove("cursor"); if (!v.segText.trim()) v.seg.remove(); }
       v.seg = null;
@@ -242,6 +246,7 @@ export async function openConversation(id) {
       (m.meta.tools || []).forEach((t) => wrap.append(toolCard(t, false).el));
       if (m.content) wrap.append(h("div", { class: "md", html: md(m.content) }));
       if (m.meta.error) wrap.append(h("div", { class: "err" }, m.meta.error));
+      (m.meta.guards || []).forEach((g) => wrap.append(h("div", { class: "guard", html: `${icon("shield", 13)} ` }, g)));
       if (m.meta.stopped) wrap.append(h("div", { class: "stopped" }, "Stopped."));
       msgs.append(wrap);
     }

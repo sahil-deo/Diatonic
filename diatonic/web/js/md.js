@@ -34,7 +34,14 @@ export function render(src) {
       while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) rows.push(cells(lines[i++])); i--;
       out.push(`<table><thead><tr>${head.map((c) => `<th>${c}</th>`).join("")}</tr></thead><tbody>${rows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table>`);
     }
-    else if (!l.trim()) { flushPara(); flushList(); }
+    else if (!l.trim()) {
+      flushPara();
+      const next = lines.slice(i + 1).find((x) => x.trim());   // a blank line inside a list doesn't end it
+      if (!(list && next && (list === "ul" ? /^\s*[-*•]\s+/ : /^\s*\d+[.)]\s+/).test(next))) flushList();
+    }
+    else if (list && /^\s{2,}\S/.test(l) && out[out.length - 1]?.startsWith("<li>")) {   // wrapped/indented line of the last item
+      out[out.length - 1] = out[out.length - 1].replace(/<\/li>$/, `<br>${inline(l.trim())}</li>`);
+    }
     else { flushList(); para.push(l); }
   }
   flushPara(); flushList();

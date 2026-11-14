@@ -21,9 +21,19 @@ DEFAULTS: dict[str, Any] = {
         "provider": "ollama",
         "model": "qwen3:4b-instruct",
         "endpoint": "http://localhost:11434",
-        "temperature": 0.3,
+        "temperature": 0.6,        # very low temperatures make small models loop
+        "top_p": 0.8,
+        "top_k": 20,
+        "repeat_penalty": 1.05,
         "num_ctx": 8192,
-        "max_steps": 8,
+        "max_tokens": 1024,         # hard cap on one model reply
+        "max_steps": 8,             # model calls per run
+        "max_tool_calls": 10,       # tool executions per run
+        "run_timeout": 300,         # seconds per run
+        "first_token_timeout": 240, # cold model loads can be slow
+        "idle_timeout": 60,         # silence mid-reply = the model is stuck
+        "history_messages": 12,
+        "history_chars": 6000,      # prompt budget for earlier turns
         "system_prompt": "",
     },
     "voice": {
@@ -45,6 +55,7 @@ DEFAULTS: dict[str, Any] = {
     "apps": {},  # {app_id: {"enabled": bool, "settings": {}, "always_allow": []}}
     "appearance": {"theme": "system"},
     "timezone": "",  # empty = system timezone
+    "_v": 2,
 }
 
 
@@ -67,9 +78,16 @@ class Config:
     def load(self) -> None:
         if self.path.exists():
             try:
-                deep_merge(self.data, json.loads(self.path.read_text()))
+                stored = json.loads(self.path.read_text())
             except (OSError, json.JSONDecodeError):
-                pass  # fall back to defaults rather than refusing to start
+                return  # fall back to defaults rather than refusing to start
+            version = stored.get("_v", 1)
+            deep_merge(self.data, stored)
+            if version < 2:  # v1 shipped temperature 0.3, which makes small models repeat themselves
+                if stored.get("agent", {}).get("temperature") == 0.3:
+                    self.data["agent"]["temperature"] = DEFAULTS["agent"]["temperature"]
+                self.data["_v"] = 2
+                self.save()
 
     def save(self) -> None:
         with self._lock:
