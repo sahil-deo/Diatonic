@@ -6,6 +6,7 @@ import { api, streamEvents } from "./api.js";
 import { render as md } from "./md.js";
 import { state, emit } from "./store.js";
 import { speaker } from "./voice.js";
+import { highlight } from "./highlight.js";
 
 const msgs = $("#messages");
 let view = null;        // live rendering state for the visible conversation: {cid, wrap, seg, ...}
@@ -35,7 +36,19 @@ function renderEmpty() {
 const nearBottom = () => msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 140;
 const scroll = (force) => { if (force || nearBottom()) msgs.scrollTo({ top: msgs.scrollHeight }); };
 const appName = (id) => state.apps.find((a) => a.id === id)?.name || id || "Tool";
-const userBubble = (text) => h("div", { class: "msg user" }, h("div", { class: "bubble" }, text));
+const MENTION = /(?<![\w/@])@(?:"([^"]+)"|(\S+))/g;
+function userBubble(text) {
+  const parts = []; let last = 0, m;
+  MENTION.lastIndex = 0;
+  while ((m = MENTION.exec(text))) {
+    if (m.index > last) parts.push(text.slice(last, m.index));
+    const raw = m[1] || m[2], trail = raw.match(/[.,;:!?)]+$/)?.[0] || "", path = raw.slice(0, raw.length - trail.length).replace(/:\d+(?:-\d+)?$/, "");
+    parts.push(h("button", { class: "file-chip", type: "button", title: "Open in Files", onclick: () => { state.openFile = path; emit("open-file", path); } }, "@" + raw.slice(0, raw.length - trail.length)), trail);
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) parts.push(text.slice(last));
+  return h("div", { class: "msg user" }, h("div", { class: "bubble" }, ...parts));
+}
 
 function toolCard(t, live) {
   const stateEl = h("span", { class: "tool-state" }), meta = h("span", { class: "t-meta" });
@@ -67,6 +80,7 @@ function approvalBox(ev, v) {
   box.append(
     h("div", { class: "a-top", html: `${icon("shield", 15)} ${ev.risk === "destructive" ? "Needs approval · irreversible" : "Needs approval"}` }),
     h("div", { class: "a-what" }, ev.describe || ev.title),
+    ev.preview ? h("pre", { class: "diff", html: highlight(ev.preview, "diff") }) : null,
     h("div", { class: "a-btns" },
       h("button", { class: "btn primary", onclick: () => decide(true) }, "Approve", h("kbd", {}, "⌘↵")),
       h("button", { class: "btn", onclick: () => decide(false) }, "Deny", h("kbd", {}, "Esc"))));
@@ -165,6 +179,7 @@ export async function send(text) {
     state.convId = v.cid = r.conversation_id;
     $("#chat-title").textContent = r.title;
     state.runs[v.cid] = { status: r.run.status, title: r.title };
+    if (r.attached?.length) bubble.querySelector(".bubble").append(h("div", { class: "attach-note" }, "Attached: " + r.attached.map((a) => a.path + (a.chars ? ` (${(a.chars / 1000).toFixed(1)}k chars)` : "")).join(", ")));
     replay(v, r.run.events);
     early.forEach((ev) => ev.conversation_id === v.cid && ev.seq > v.lastSeq && applyEvent(v, ev));
   } catch (e) {

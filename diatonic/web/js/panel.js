@@ -17,8 +17,28 @@ async function load() {
     if (my !== seq) return;
     body.replaceChildren(); delete body.dataset.dirty;
     $("#shell").classList.toggle("panel-wide", !!mod.wide);
+    applyWidth(app.id, mod.width);
     await mod.render(body, { api, h, esc, toast, reload: load, prompt: (t) => emit("prefill", t) });
   } catch (e) { body.replaceChildren(h("div", { class: "p-empty" }, `Couldn't load ${app.name}: ${e.message}`)); }
+}
+
+const SHELL = () => $("#shell");
+function applyWidth(appId, def) {
+  let w = null; try { w = localStorage.getItem(`panelw:${appId}`); } catch {}
+  const px = Math.min(Number(w) || def || 0, Math.floor(innerWidth * 0.6)) || 0;   // never crush the chat on a small window
+  px ? SHELL().style.setProperty("--panel-w", `${px}px`) : SHELL().style.removeProperty("--panel-w");
+}
+function initResize() {
+  const grip = $("#panel-resize");
+  grip.addEventListener("mousedown", (e) => {
+    e.preventDefault(); document.body.classList.add("resizing");
+    const move = (ev) => { const w = Math.max(320, Math.min(innerWidth - 420, innerWidth - ev.clientX)); SHELL().style.setProperty("--panel-w", `${w}px`); };
+    const up = () => {
+      removeEventListener("mousemove", move); removeEventListener("mouseup", up); document.body.classList.remove("resizing");
+      const w = parseInt(getComputedStyle(SHELL()).getPropertyValue("--panel-w")); try { if (w && state.panelApp) localStorage.setItem(`panelw:${state.panelApp}`, String(w)); } catch {}
+    };
+    addEventListener("mousemove", move); addEventListener("mouseup", up);
+  });
 }
 
 export function openPanel(appId) {
@@ -28,9 +48,10 @@ export function openPanel(appId) {
 }
 export function closePanel() {
   state.panelApp = null; seq++;
-  $("#shell").classList.remove("panel-open", "panel-wide"); $("#panel").classList.add("hidden"); emit("panel");
+  $("#shell").classList.remove("panel-open", "panel-wide"); SHELL().style.removeProperty("--panel-w"); $("#panel").classList.add("hidden"); emit("panel");
 }
 export function initPanel() {
+  initResize();
   setIcon($("#panel-refresh"), "refresh", 16); setIcon($("#panel-close"), "x", 16);
   $("#panel-refresh").onclick = load; $("#panel-close").onclick = closePanel;
 }

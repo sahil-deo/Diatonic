@@ -38,6 +38,14 @@ Targets: first-message-in-chat under 6 s, follow-ups under 3 s, plain lookups un
 - [ ] **Reference resolution.** "Close the second one", "snooze that" resolved against the last results in code (numbered handles), not by the model.
 - [ ] **Rolling state instead of history replay.** A short structured "what we were just doing" (last entities and results) in place of replaying old turns; cheaper and more cache-stable than summarising with the model.
 
+## Files app follow-ups
+
+- [ ] **Edit reliability on a 4B model.** On the real model a line-range edit dropped a needed line (the approval diff caught it, which is what the preview is for). Ideas: prefer `replace_text` for single-line changes, re-read the file right before editing, apply and re-verify (re-parse Python/JSON after the change), or let the harness compute the line range from an "old text" the model supplies.
+- [ ] **Answer grounding for file claims.** The model once reported "File created: notes/todo.md" after calling the wrong tool; check that paths and counts claimed in the answer appear in the tool results (see the grounding item above).
+- [ ] Verify the embedded PDF viewer in Zen/Firefox (it rendered blank in the Chromium preview pane here; the Text tab is the fallback).
+- [ ] Optional: manual edit/save in the viewer, rename/move, new-folder, drag-and-drop a file onto the chat to reference it, CSV as a table, git status badges, `.gitignore`-aware listing and search.
+- [ ] Per-file token estimate in the `@` menu, and a setting for how much of a referenced file is inlined.
+
 ## Telemetry follow-ups
 
 - [ ] Count malformed/invalid tool calls and tool-selection misses separately (feeds the constrained-decoding decision).
@@ -56,6 +64,7 @@ Targets: first-message-in-chat under 6 s, follow-ups under 3 s, plain lookups un
 - [ ] Background service: `diatonic install-service` / `service-status` / `uninstall-service` (the launchd plist is generated and tested, never installed).
 - [ ] Quick-action bar drag-to-reorder, per-action keyboard shortcuts, and Import in Settings → Interface.
 - [ ] Notes folder pointed at an existing folder of markdown files.
+- [ ] Files: sharing a real folder, the `@` picker and chips in Zen, PDF viewing in Zen, restoring from History, Trash on a non-sandbox HOME.
 - [ ] Learned tool quirks ("Learned for next time") firing on a real rejection; so far covered only by tests.
 
 ## Parked / decided against (for now)

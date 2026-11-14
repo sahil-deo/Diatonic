@@ -35,6 +35,8 @@ class Tool:
     describe: Callable[[dict], str] | None = None  # human-readable summary for approval cards
     # Return an error message if the call can't possibly work; the user is then not asked to approve it.
     precheck: Callable[[dict], str | None] | None = None
+    # Return a unified-diff-style text shown on the approval card (computed before anything changes).
+    preview: Callable[[dict], str | None] | None = None
 
     def __post_init__(self):
         self.title = self.title or self.name.replace("_", " ").capitalize()
@@ -57,6 +59,7 @@ class App:
     # Words that suggest a request is about this app. Only matching apps' tools are shown to the model
     # (a small model chooses far better from a handful of tools). No match = all apps.
     keywords: list[str] = []
+    keyword_patterns: list[str] = []   # regexes that also route a request here (e.g. file names)
     # Tools that run without an approval card until the user chooses otherwise in Settings.
     default_allow: list[str] = []
 

@@ -109,7 +109,7 @@ class NotesApp(App):
     # ---- tools ---------------------------------------------------------
     def tools(self) -> list[Tool]:
         return [
-            Tool("create_note", "Create a new note.",
+            Tool("create_note", "Create a new personal note (not a file in a project folder).",
                  {"properties": {"title": {"type": "string"}, "body": {"type": "string", "description": "Markdown"},
                                  "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["title", "body"]},
                  self.create_note, WRITE, describe=lambda a: f"Create note “{a.get('title')}”"),

@@ -3,6 +3,7 @@ export const state = {
   convId: null, conversations: [], panelApp: null,
   runs: {},            // conversation id -> {status: "running" | "waiting", title}
   inbox: [], unreadCount: 0,   // notification inbox
+  openFile: null,              // path the Files panel should show next
   unread: new Set(),   // conversations that finished while you were elsewhere
 };
 const bus = new EventTarget();

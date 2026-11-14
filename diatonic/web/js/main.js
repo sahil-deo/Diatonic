@@ -10,6 +10,7 @@ import { initPanel, openPanel, closePanel, refreshPanel } from "./panel.js";
 import { initInbox, loadInbox } from "./inbox.js";
 import { applyAppearance, railApps } from "./appearance.js";
 import { initActions, invoke as invokeAction } from "./actions.js";
+import { initMentions } from "./mentions.js";
 import { requestEdit } from "./settings-actions.js";
 
 /* ---------- theme ---------- */
@@ -164,6 +165,7 @@ async function boot() {
   setIcon($("#new-chat"), "plus", 18); setIcon($("#toggle-sidebar"), "menu", 18); setIcon($("#palette-btn"), "command", 18);
   paintSpeakToggle(); paintSend();
   initSettings(); initPalette(); initPanel();
+  initMentions();
   initVoiceUI({ setInput, send: (t) => chat.send(t), openSettings });
   initActions({ newChat: () => chat.newChat(), openSettings, setTheme, setSpeak, openPanel, closePanel, toggleSidebar,
     editAction: (id) => { requestEdit(id); openSettings("actions"); } });
@@ -184,6 +186,7 @@ async function boot() {
   on("health", refreshHealth);
   on("config", () => { applyTheme(); applyAppearance(); updateHint(); paintSpeakToggle(); renderRail(); });
   on("rail-changed", renderRail);
+  on("open-file", () => (state.panelApp === "files" ? refreshPanel() : openPanel("files")));
   on("prefill", (t) => { setInput(t); });
 
   renderRail(); chat.renderEmpty(); updateHint(); loadConvs(); refreshHealth(); loadInbox(); chat.startEventStream();

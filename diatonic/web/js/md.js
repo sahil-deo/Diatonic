@@ -1,19 +1,28 @@
 // Tiny, safe markdown renderer: escapes everything first, then applies a small subset.
 import { esc } from "./dom.js";
+import { highlight } from "./highlight.js";
 
+let OPTS = {};
 const inline = (s) =>
   s.replace(/`([^`\n]+)`/g, "<code>$1</code>")
+   .replace(/!\[([^\]]*)\]\(([^\s)]+)\)/g, (m, alt, url) => { const u = OPTS.resolveImage ? OPTS.resolveImage(url) : (/^https?:/.test(url) ? url : null); return u ? `<img src="${u}" alt="${alt}" loading="lazy">` : m; })
+   .replace(/\[([^\]]+)\]\((?!https?:)([^\s)#]+)(#[^\s)]*)?\)/g, (m, t, url) => OPTS.fileLink ? `<a href="#" data-file="${OPTS.fileLink(url)}">${t}</a>` : m)
    .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
    .replace(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/g, "$1<em>$2</em>")
    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
    .replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, '$1<a href="$2" target="_blank" rel="noopener noreferrer">$2</a>');
 
-export function render(src) {
+/** opts: {resolveImage(url) -> src|null, fileLink(url) -> absolute path, frontMatter: bool} (used by the Files viewer). */
+export function render(src, opts = {}) {
+  OPTS = opts;
   const blocks = [];
-  let text = esc(src).replace(/```(\w*)\n([\s\S]*?)(```|$)/g, (_, lang, code) => {
-    blocks.push(`<pre><code>${code.replace(/\n$/, "")}</code></pre>`);
+  if (opts.frontMatter) src = src.replace(/^---\n[\s\S]*?\n---\n?/, "");
+  // Fenced code is cut out of the raw text first, so it can be syntax-coloured before anything is escaped.
+  const raw = src.replace(/```([\w+#.-]*)[^\n]*\n([\s\S]*?)(```|$)/g, (_, lang, code) => {
+    blocks.push(`<pre class="code"><code>${highlight(code.replace(/\n$/, ""), lang.toLowerCase())}</code></pre>`);
     return `\u0000${blocks.length - 1}\u0000`;
   });
+  let text = esc(raw);
   const lines = text.split("\n"), out = [];
   let list = null, para = [];
   const flushPara = () => { if (para.length) out.push(`<p>${inline(para.join("<br>"))}</p>`); para = []; };
@@ -24,7 +33,11 @@ export function render(src) {
     if (/^\u0000\d+\u0000$/.test(l.trim())) { flushPara(); flushList(); out.push(l.trim()); }
     else if ((m = l.match(/^(#{1,3})\s+(.*)/))) { flushPara(); flushList(); out.push(`<h${m[1].length}>${inline(m[2])}</h${m[1].length}>`); }
     else if (/^\s*(---|\*\*\*)\s*$/.test(l)) { flushPara(); flushList(); out.push("<hr>"); }
-    else if ((m = l.match(/^\s*[-*•]\s+(.*)/))) { flushPara(); if (list !== "ul") { flushList(); out.push("<ul>"); list = "ul"; } out.push(`<li>${inline(m[1])}</li>`); }
+    else if ((m = l.match(/^\s*[-*•]\s+(.*)/))) {
+      flushPara(); if (list !== "ul") { flushList(); out.push("<ul>"); list = "ul"; }
+      const t = m[1].match(/^\[( |x|X)\]\s+(.*)/);
+      out.push(t ? `<li class="task"><input type="checkbox" disabled ${t[1] === " " ? "" : "checked"}> ${inline(t[2])}</li>` : `<li>${inline(m[1])}</li>`);
+    }
     else if ((m = l.match(/^\s*\d+[.)]\s+(.*)/))) { flushPara(); if (list !== "ol") { flushList(); out.push("<ol>"); list = "ol"; } out.push(`<li>${inline(m[1])}</li>`); }
     else if ((m = l.match(/^&gt;\s?(.*)/))) { flushPara(); flushList(); out.push(`<blockquote>${inline(m[1])}</blockquote>`); }
     else if (/^\s*\|.*\|\s*$/.test(l) && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1] || "")) {

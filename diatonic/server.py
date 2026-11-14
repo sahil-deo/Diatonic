@@ -234,11 +234,16 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
             conv["title"] = (text[:48] + "…") if len(text) > 48 else text
             db.rename(conv["id"], conv["title"])
 
+        attach, refs = "", []
+        files_app = registry.apps.get("files")
+        if files_app and ctx.app_cfg("files")["enabled"] and "@" in text:
+            attach, refs = files_app.expand_mentions(text)   # @file / @file:10-25 become compact numbered attachments
         try:
-            run = runs.start(ctx, registry, conv, text, bool(body.get("speak")))
+            run = runs.start(ctx, registry, conv, text, bool(body.get("speak")), attachments=attach,
+                             force_apps=frozenset({"files"}) if attach else frozenset())
         except RunBusy:
             return JSONResponse({"error": "This chat is still working. Stop it first, or start a new chat."}, 409)
-        return JSONResponse({"conversation_id": conv["id"], "title": conv["title"], "run": run.replay()})
+        return JSONResponse({"conversation_id": conv["id"], "title": conv["title"], "run": run.replay(), "attached": refs})
 
     async def cancel_run(request):
         return JSONResponse({"ok": runs.cancel(request.path_params["cid"])})

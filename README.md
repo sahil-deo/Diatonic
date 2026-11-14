@@ -51,6 +51,22 @@ Settings → Apps → GitHub. Paste a personal access token with the `repo` scop
 
 Credentials and tokens are stored in the macOS Keychain (fallback: `~/.diatonic/secrets.json`, mode 0600).
 
+## Files: browse, read, reference, and have the agent change files
+
+Open **Files** (folder icon in the left rail) and share one or more folders (suggestions for Documents, Developer…, a folder picker, or type a path). Only shared folders are ever visible to the viewer or the agent.
+
+**Viewer.** Drill-down explorer with breadcrumbs, filename search and a "hidden" toggle; the panel is resizable (drag its left edge). Files open as:
+- **Code** with syntax colouring (Python, JS/TS, Go, Rust, Java/Kotlin/Swift, C/C++/C#, Ruby, PHP, shell, SQL, Lua, R, JSON, YAML, TOML, CSS, HTML/XML, diffs), line numbers, optional wrapping. The same colouring applies to code blocks in chat.
+- **Markdown** rendered (tables, task lists, images and relative links between `.md` files work), with a *Show source* toggle.
+- **PDF** in the browser's built-in viewer, plus a *Text* tab with the extracted text (the same text the agent reads) for browsers without an inline viewer.
+- **Images**; anything else shows type and size.
+
+**Referencing files in chat.** Type `@` in the message box and pick a file (`@src/app.py`), a line range by clicking line numbers in the viewer then **@ Reference line(s)** (`@src/app.py:10-25`), or press **@** on any row. Quote paths with spaces: `@"notes/My Notes.md"`. The referenced content is attached to your message as compact, line-numbered text (a few thousand characters at most, so replies stay fast) and shown as chips; you can also reference a folder. The viewer's **Change with agent** / **Delete with agent** buttons pre-fill the message.
+
+**Agent tools:** `list_files`, `read_file` (paged, with line numbers; PDFs by text), `search_files` (names and contents), `create_file`, `edit_file` (replace a line range using the numbers from `read_file`), `replace_text` (exact text, must be unique) and `delete_file`. Every change **asks first and shows the exact diff** on the approval card (with a warning if it would break a Python or JSON file); one that can't possibly work (bad path, text not found) doesn't ask. A copy of the previous version is saved before each change (**History** in the viewer restores it), writes are atomic and keep line endings, and deleted files go to the **Trash** (files only, never folders).
+
+**Safety model.** Every path is resolved through symlinks and must stay inside a shared folder; `..`, absolute paths elsewhere, and symlinks leading out are refused. Credentials and key material (`.env`, `*.pem`, `*.key`, `id_rsa*`, `secrets.json`, `.ssh/`, `.aws/`, …) are blocked even inside a shared folder unless you opt in. System folders, your whole home folder, `~/Library` and Diatonic's own data can't be shared. The viewer serves only PDFs and images inline (images under a no-script policy); everything else downloads, so a stray `.html` can never run against the app.
+
 ## Telemetry: see how fast and reliable it is
 
 The **Telemetry** app (pulse icon in the left rail) shows, for the last 6 hours to 30 days: runs, median and 90th-percentile time, time to first output, generation speed, prompt size, **estimated cache reuse**, tool error rate, guard events, where the time goes (reading prompts, writing, tools, model loading), the last 40 runs as stacked bars, per-tool stats, and the slowest/recent/problem runs. Click a run for its timeline (each model call with prompt tokens, cache estimate and output tokens, each tool with its duration). Every reply also carries a faint line such as `5.4 s · 1.6k in · cache ~94% · 60 out`, and you can ask the agent "how fast has it been today?".

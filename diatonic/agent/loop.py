@@ -46,7 +46,7 @@ def build_system_prompt(ctx, registry) -> str:
     return SYSTEM_PROMPT + f"\nTimezone: {ctx.tz_name}." + (f"\n\nUser preferences:\n{extra}" if extra else "")
 
 
-def select_tools(registry, text: str, prior_apps: set[str]) -> tuple[dict, bool]:
+def select_tools(registry, text: str, prior_apps: set[str], force: set[str] | frozenset = frozenset()) -> tuple[dict, bool]:
     """Show the model only the tools that plausibly matter (apps named, or already used in this chat).
 
     Returns (tool_map, matched) where `matched` means the request itself names an app, so a reply
@@ -54,7 +54,11 @@ def select_tools(registry, text: str, prior_apps: set[str]) -> tuple[dict, bool]
     """
     apps = registry.enabled()
     low = text.lower()
-    named = [a for a in apps if any(re.search(rf"\b{re.escape(k)}\b", low) for k in a.keywords)]
+    # Words inside paths and file names ("notes/todo.md") are not requests about the Notes app, so keyword matching
+    # ignores them; only an app's own patterns (like file names for Files) look at the raw text.
+    plain = re.sub(r"\S*[/\\]\S*|\S+\.\w{1,5}\b", " ", low)
+    named = [a for a in apps if a.id in force or any(re.search(rf"\b{re.escape(k)}\b", plain) for k in a.keywords)
+             or any(re.search(p, low) for p in a.keyword_patterns)]
     chosen = [a for a in apps if a in named or a.id in prior_apps]
     return {f"{a.id}_{t.name}": (a, t) for a in (chosen or apps) for t in a.tools()}, bool(named)
 
@@ -208,8 +212,21 @@ async def _execute(call: dict, tool_map: dict, registry, guard: RunGuard, out: d
 
     describe = tool.describe(args) if tool.describe else tool.title
     needs = tool.needs_approval and not registry.is_always_allowed(app, tool)
+    preview = None
+    if needs and tool.preview:
+        try:
+            preview = tool.preview(args)
+        except ToolError as e:   # the change can't happen (bad path, text not found...): don't ask the user to approve it
+            yield {"type": "tool_call", "id": cid, "name": name, "app": app.id, "title": tool.title, "args": args,
+                   "risk": tool.risk, "describe": "", "needs_approval": False}
+            out.update(ok=False, content=f"Error: {e}")
+            guard.errors += 1
+            yield {"type": "tool_result", "id": cid, "ok": False, "preview": out["content"], "ms": 0}
+            return
+        except Exception:
+            preview = None
     yield {"type": "tool_call", "id": cid, "name": name, "app": app.id, "title": tool.title, "args": args,
-           "risk": tool.risk, "describe": describe, "needs_approval": needs}
+           "risk": tool.risk, "describe": describe, "needs_approval": needs, "preview": preview}
     out["approval"] = False
     if needs:
         out["approval"] = True
@@ -272,7 +289,8 @@ def _fallback(cards: list[dict]) -> str:
 
 
 async def run_agent(ctx, registry, conv_id: str, text: str, *, speak: bool = False, readonly: bool = False,
-                    approval_timeout: float | None = None, extra_system: str = "") -> AsyncIterator[dict]:
+                    approval_timeout: float | None = None, extra_system: str = "", attachments: str = "",
+                    force_apps: frozenset = frozenset()) -> AsyncIterator[dict]:
     cfg = ctx.config.data
     acfg = cfg["agent"]
     t0 = time.monotonic()
@@ -284,7 +302,9 @@ async def run_agent(ctx, registry, conv_id: str, text: str, *, speak: bool = Fal
     history = build_history(ctx.db.history(conv_id, limit=int(acfg["history_messages"])), int(acfg["history_chars"]))
     prior_apps = ctx.db.apps_used(conv_id)
     ctx.db.add_message(conv_id, "user", text)
-    tool_map, expects_tool = select_tools(registry, text, prior_apps)
+    tool_map, expects_tool = select_tools(registry, text, prior_apps, force_apps)
+    if attachments:   # the user attached what the answer needs, so a no-tool reply is legitimate (no 'call a tool' nudge)
+        expects_tool = False
     if readonly:  # unattended runs may only read; nothing can be changed without a person present
         tool_map = {n: (a, t) for n, (a, t) in tool_map.items() if not t.needs_approval}
     mem = ctx.memory
@@ -295,7 +315,7 @@ async def run_agent(ctx, registry, conv_id: str, text: str, *, speak: bool = Fal
     learner = LessonTracker() if acfg and ctx.config.data["memory"]["auto_learn"] and ctx.config.data["memory"]["enabled"] else None
     now = ctx.now().strftime("%A %Y-%m-%d %H:%M")
     messages = [{"role": "system", "content": build_system_prompt(ctx, registry) + facts_block(facts) + extra_system}, *history,
-                {"role": "user", "content": f"{text}\n\n(Now: {now})"}]
+                {"role": "user", "content": f"{text}{attachments}\n\n(Now: {now})"}]
 
     cards: dict[str, dict] = {}
     texts: list[str] = []
