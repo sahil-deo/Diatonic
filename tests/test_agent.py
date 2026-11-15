@@ -237,3 +237,37 @@ def test_approval_waits_in_background_and_status_tracks(env, monkeypatch):
         assert app.calls == [("nuke", {"id": 3})]
 
     asyncio.run(go())
+
+
+# ---------- only one tab speaks ----------
+def test_spoken_output_is_tagged_for_exactly_one_ui(env, monkeypatch):
+    ctx, reg, app, db = env
+
+    async def go():
+        runs = RunManager()
+        a, b = runs.subscribe("tab-A"), runs.subscribe("tab-B")                 # two open copies of the app
+        assert runs.focus == "tab-A"
+        monkeypatch.setattr(loop, "make_provider", lambda c: ScriptedProvider([[call("fake_read", text="x")], [{"content": "done"}]], summary="All done."))
+        conv = db.create_conversation("S")
+        run = runs.start(ctx, reg, conv, "read it", True, client="tab-B")       # started from tab B while tab A has focus
+        await asyncio.wait([run.task])
+        evs = []
+        while not b.empty():
+            evs.append(b.get_nowait())
+        spoken = [e for e in evs if e["type"] == "summary"]
+        assert len(spoken) == 1 and spoken[0]["speak_for"] == "tab-B"            # the tab that asked hears it, tab A stays quiet
+        # a scheduled job (nobody asked) is read aloud by the focused tab only
+        runs.broadcast({"type": "notification", "id": 1, "speak_text": "Reminder: stretch"})
+        notes = [e for q in (a, b) for e in list(q._queue) if e["type"] == "notification"]
+        assert [n["speak_for"] for n in notes] == ["tab-A", "tab-A"]
+        runs.set_focus("tab-B")
+        runs.broadcast({"type": "notification", "id": 2})
+        assert [e["speak_for"] for e in list(a._queue) if e["type"] == "notification" and e["id"] == 2] == ["tab-B"]
+        runs.set_focus("nobody-connected")                                       # unknown clients can't steal focus
+        assert runs.focus == "tab-B"
+        runs.unsubscribe(b)                                                      # the focused tab closes: focus moves to the one left
+        assert runs.focus == "tab-A"
+        runs.unsubscribe(a)
+        assert runs.focus is None
+
+    asyncio.run(go())

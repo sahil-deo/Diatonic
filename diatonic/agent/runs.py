@@ -17,8 +17,8 @@ class RunBusy(Exception):
 
 
 class Run:
-    def __init__(self, conv_id: str, title: str):
-        self.conv_id, self.title = conv_id, title
+    def __init__(self, conv_id: str, title: str, client: str | None = None):
+        self.conv_id, self.title, self.client = conv_id, title, client
         self.events: list[dict] = []
         self.seq = 0
         self.status = "running"  # running | waiting (for approval)
@@ -37,21 +37,36 @@ class RunManager:
     def __init__(self):
         self.runs: dict[str, Run] = {}
         self._subs: set[asyncio.Queue] = set()
+        self._client_of: dict[asyncio.Queue, str] = {}
+        self.focus: str | None = None   # the one UI that should speak events nobody in particular started
 
     # ---- subscribers ---------------------------------------------------
-    def subscribe(self) -> asyncio.Queue:
+    def subscribe(self, client: str | None = None) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue()
         self._subs.add(q)
+        if client:
+            self._client_of[q] = client
+            if self.focus is None:
+                self.focus = client
         return q
 
     def unsubscribe(self, q: asyncio.Queue) -> None:
         self._subs.discard(q)
+        gone = self._client_of.pop(q, None)
+        if gone and self.focus == gone and gone not in self._client_of.values():
+            self.focus = next(reversed(list(self._client_of.values())), None)   # hand over to the newest remaining UI
+
+    def set_focus(self, client: str) -> None:
+        if client in self._client_of.values():
+            self.focus = client
 
     def snapshot(self) -> list[dict]:
         return [r.snapshot() for r in self.runs.values()]
 
     def broadcast(self, ev: dict) -> None:
         """Push a non-run event (notifications, data changes) to every connected UI."""
+        if ev.get("type") == "notification":
+            ev["speak_for"] = self.focus   # every open tab gets the event, but only this one may read it aloud
         for q in list(self._subs):
             q.put_nowait(ev)
 
@@ -59,7 +74,8 @@ class RunManager:
     def start(self, ctx, registry, conv: dict, text: str, speak: bool, **opts) -> Run:
         if conv["id"] in self.runs:
             raise RunBusy(conv["id"])
-        run = Run(conv["id"], conv["title"])
+        client = opts.pop("client", None)
+        run = Run(conv["id"], conv["title"], client)
         self.runs[run.conv_id] = run
         self._publish(run, {"type": "run_start", "title": run.title})
         run.task = asyncio.create_task(self._drive(run, ctx, registry, text, speak, opts))
@@ -101,6 +117,8 @@ class RunManager:
             run.status = "waiting"
         elif t in ("tool_status", "tool_result") and run.status == "waiting":
             run.status = "running"
+        if t in ("summary", "notify"):   # spoken output: only the UI that started the run (else the focused one) speaks it
+            ev = {**ev, "speak_for": run.client or self.focus}
         run.seq += 1
         ev = {**ev, "seq": run.seq, "conversation_id": run.conv_id, "status": run.status}
         run.events.append(ev)

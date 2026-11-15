@@ -241,17 +241,21 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
             attach, refs = files_app.expand_mentions(text)   # @file / @file:10-25 become compact numbered attachments
         try:
             run = runs.start(ctx, registry, conv, text, bool(body.get("speak")), attachments=attach,
-                             force_apps=frozenset({"files"}) if attach else frozenset())
+                             force_apps=frozenset({"files"}) if attach else frozenset(), client=str(body.get("client") or "")[:64] or None)
         except RunBusy:
             return JSONResponse({"error": "This chat is still working. Stop it first, or start a new chat."}, 409)
         return JSONResponse({"conversation_id": conv["id"], "title": conv["title"], "run": run.replay(), "attached": refs})
+
+    async def client_focus(request):
+        runs.set_focus(request.path_params["cid"])
+        return JSONResponse({"ok": True})
 
     async def cancel_run(request):
         return JSONResponse({"ok": runs.cancel(request.path_params["cid"])})
 
     async def events(request):
         """One long-lived stream carrying every run's events, tagged with conversation_id."""
-        q = runs.subscribe()
+        q = runs.subscribe(request.query_params.get("client", "")[:64] or None)
 
         async def gen():
             try:
@@ -406,6 +410,7 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
         Route("/api/chat", chat, methods=["POST"]),
         Route("/api/conversations/{cid}/cancel", cancel_run, methods=["POST"]),
         Route("/api/events", events),
+        Route("/api/clients/{cid}/focus", client_focus, methods=["POST"]),
         Route("/api/approvals/{aid}", approve, methods=["POST"]),
         Route("/api/voice/transcribe", transcribe, methods=["POST"]),
         Route("/api/voice/tts", speak, methods=["POST"]),

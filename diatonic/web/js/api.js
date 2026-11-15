@@ -1,3 +1,4 @@
+import { CLIENT_ID } from "./store.js";
 async function j(method, url, body) {
   const r = await fetch(url, { method, headers: body ? { "Content-Type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined });
   const data = await r.json().catch(() => ({}));
@@ -34,12 +35,13 @@ export const api = {
 };
 
 /** Start a run in the background; events arrive on the global stream. */
-api.chat = (body) => j("POST", "/api/chat", body);
+api.chat = (body) => j("POST", "/api/chat", { ...body, client: CLIENT_ID });
+api.focus = () => fetch(`/api/clients/${CLIENT_ID}/focus`, { method: "POST" }).catch(() => {});
 api.cancel = (cid) => j("POST", `/api/conversations/${cid}/cancel`);
 
 /** Long-lived stream of every run's events. Resolves when the connection drops. */
 export async function streamEvents(onEvent, signal) {
-  const r = await fetch("/api/events", { signal });
+  const r = await fetch(`/api/events?client=${CLIENT_ID}`, { signal });
   if (!r.ok) throw new Error(`Event stream failed (${r.status})`);
   const reader = r.body.getReader(), dec = new TextDecoder();
   let buf = "";

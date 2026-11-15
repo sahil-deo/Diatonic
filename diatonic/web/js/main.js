@@ -189,6 +189,8 @@ async function boot() {
   on("open-file", () => (state.panelApp === "files" ? refreshPanel() : openPanel("files")));
   on("prefill", (t) => { setInput(t); });
 
+  const reportFocus = () => { if (document.visibilityState === "visible" && document.hasFocus()) api.focus(); };
+  addEventListener("focus", reportFocus); document.addEventListener("visibilitychange", reportFocus); setTimeout(reportFocus, 1500);
   renderRail(); chat.renderEmpty(); updateHint(); loadConvs(); refreshHealth(); loadInbox(); chat.startEventStream();
   setInterval(refreshHealth, 20000);
 

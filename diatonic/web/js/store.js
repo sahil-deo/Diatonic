@@ -9,3 +9,6 @@ export const state = {
 const bus = new EventTarget();
 export const emit = (name, detail) => bus.dispatchEvent(new CustomEvent(name, { detail }));
 export const on = (name, fn) => bus.addEventListener(name, (e) => fn(e.detail));
+
+/** Identifies this browser tab to the server so spoken output is played by exactly one tab. */
+export const CLIENT_ID = (globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2) + Date.now().toString(36));

@@ -2,7 +2,7 @@
 import { $, h, toast, relTime } from "./dom.js";
 import { icon, setIcon } from "./icons.js";
 import { api } from "./api.js";
-import { state, emit } from "./store.js";
+import { state, emit, CLIENT_ID } from "./store.js";
 import { speaker } from "./voice.js";
 
 let openChat = () => {};
@@ -55,7 +55,7 @@ function onNotification(ev) {
   toast(ev.body ? `${ev.title}: ${ev.body}` : ev.title, "", ev.kind === "reminder"
     ? { label: "Snooze 10 min", run: () => api.post(`/api/notifications/${ev.id}/snooze`, { minutes: 10 }).then(loadInbox) } : null);
   if (ev.quiet) return;
-  if (ev.speak_text && cfg.speak && state.config.voice.speak_summary) speaker.speak(ev.speak_text);
+  if (ev.speak_text && cfg.speak && state.config.voice.speak_summary && (!ev.speak_for || ev.speak_for === CLIENT_ID)) speaker.speak(ev.speak_text);
   if (cfg.browser && "Notification" in window && Notification.permission === "granted" && document.hidden) {
     const n = new Notification(ev.title, { body: ev.body, tag: `diatonic-${ev.id}` });
     n.onclick = () => { window.focus(); n.close(); };

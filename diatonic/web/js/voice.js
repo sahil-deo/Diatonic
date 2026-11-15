@@ -92,6 +92,9 @@ export const speaker = {
     speechSynthesis?.cancel();
   },
   async speak(text) {
+    const now = Date.now();
+    if (text === this.lastText && now - this.lastAt < 4000) return;   // never say the same thing twice in a row
+    this.lastText = text; this.lastAt = now;
     this.stop();
     const my = this.token;
     let blob = null;

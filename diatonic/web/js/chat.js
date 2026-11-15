@@ -4,7 +4,7 @@ import { $, h, toast } from "./dom.js";
 import { icon } from "./icons.js";
 import { api, streamEvents } from "./api.js";
 import { render as md } from "./md.js";
-import { state, emit } from "./store.js";
+import { state, emit, CLIENT_ID } from "./store.js";
 import { speaker } from "./voice.js";
 import { highlight } from "./highlight.js";
 
@@ -224,8 +224,9 @@ function onEvent(ev) {
 
   // speech and notifications (live events only; replays never speak)
   const where = viewed ? "" : `In ${short(title)}: `;
-  if (ev.type === "notify" && shouldSpeak("notify")) speaker.speak(where + ev.text);
-  if (ev.type === "summary" && shouldSpeak("summary")) speaker.speak(where + ev.text);
+  const mine = !ev.speak_for || ev.speak_for === CLIENT_ID;   // several tabs may be open; only one speaks
+  if (ev.type === "notify" && mine && shouldSpeak("notify")) speaker.speak(where + ev.text);
+  if (ev.type === "summary" && mine && shouldSpeak("summary")) speaker.speak(where + ev.text);
   if (!viewed) {
     if (ev.type === "tool_call" && ev.needs_approval) toast(`“${short(title)}” needs your approval`, "", { label: "Open", run: () => openConversation(cid) });
     if (ev.type === "done") { state.unread.add(cid); emit("runs-changed"); toast(`“${short(title)}” finished`, "", { label: "Open", run: () => openConversation(cid) }); }
