@@ -152,3 +152,74 @@ def test_presentations_http_routes(env, tmp_path):
         r = client.delete(f"/api/apps/presentations/decks/{slug}")
         assert r.status_code == 200
         assert r.json()["ok"] is True
+
+
+# ---------- the editor must not add a title slide every time a deck is opened and saved ----------
+def front_blocks(text: str) -> int:
+    return text.count("---\ntitle:")
+
+
+def client_for(env, tmp_path, name="rt"):
+    ctx, reg, _, db = env
+    folder = tmp_path / name
+    ctx.config.data["apps"]["presentations"] = {"enabled": True, "settings": {"folder": str(folder)}}
+    reg.register(make_presentations(ctx))
+    return TestClient(create_app(ctx.config, db, registry=reg, allowed_hosts={"testserver"})), folder
+
+
+def test_open_and_save_round_trips_do_not_stack_front_matter(env, tmp_path):
+    client, folder = client_for(env, tmp_path)
+    with client:
+        client.post("/api/apps/presentations/decks", json={"title": "Pitch", "content": "# Hello\n\n---\n\n## Two"})
+        for _ in range(3):                                          # open the editor, save what it shows, again and again
+            deck = client.get("/api/apps/presentations/decks/pitch").json()
+            assert not deck["raw"].startswith("---")                # the editor is handed the slides, not the front matter block
+            r = client.put("/api/apps/presentations/decks/pitch", json={"title": deck["title"], "content": deck["raw"]})
+            assert r.status_code == 200
+        text = (folder / "pitch.md").read_text()
+        assert front_blocks(text) == 1
+        deck = client.get("/api/apps/presentations/decks/pitch").json()
+        assert deck["slides_count"] == 2 and [s["title"] for s in deck["slides"]] == ["Hello", "Two"]
+
+
+def test_an_older_editor_that_sends_the_front_matter_back_is_still_safe(env, tmp_path):
+    client, folder = client_for(env, tmp_path)
+    with client:
+        client.post("/api/apps/presentations/decks", json={"title": "Pitch", "content": "# Hello"})
+        whole_file = (folder / "pitch.md").read_text()
+        for _ in range(3):
+            client.put("/api/apps/presentations/decks/pitch", json={"title": "Pitch", "content": whole_file})
+        text = (folder / "pitch.md").read_text()
+        assert front_blocks(text) == 1 and client.get("/api/apps/presentations/decks/pitch").json()["slides_count"] == 1
+
+
+def test_decks_already_damaged_by_the_bug_load_cleanly(env, tmp_path):
+    client, folder = client_for(env, tmp_path)
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "old.md").write_text("---\ntitle: Old\n---\n---\ntitle: Old\n---\n---\ntitle: Old\n---\n# Welcome\n\n---\n\n## Two\n")
+    with client:
+        deck = client.get("/api/apps/presentations/decks/old").json()
+        assert deck["title"] == "Old" and deck["slides_count"] == 2 and deck["slides"][0]["title"] == "Welcome"
+        assert "title:" not in deck["raw"]
+        client.put("/api/apps/presentations/decks/old", json={"title": "Old", "content": deck["raw"]})
+        assert front_blocks((folder / "old.md").read_text()) == 1                       # saving cleans the file up
+
+
+def test_a_deck_that_opens_with_a_slide_break_is_not_mistaken_for_front_matter():
+    from diatonic.apps.presentations.app import parse_frontmatter, split_slides
+    meta, body = parse_frontmatter("---\n# Not a setting\n---\ntext")
+    assert meta == {} and body.startswith("---\n# Not")
+    assert parse_frontmatter("---\ntitle: A\ntheme: dark\n---\nbody") == ({"title": "A", "theme": "dark"}, "body")
+    assert len(split_slides("---\ntitle: A\n---\n# One\n\n---\n\n# Two")[1]) == 2
+
+
+def test_update_presentation_without_content_does_not_touch_the_slides(env, tmp_path):
+    import asyncio
+    ctx, reg, _, db = env
+    ctx.config.data["apps"]["presentations"] = {"enabled": True, "settings": {"folder": str(tmp_path / "upd")}}
+    app = make_presentations(ctx)
+    asyncio.run(app.create_presentation({"title": "Deck", "content": "# One\n\n---\n\n# Two"}))
+    for _ in range(3):
+        asyncio.run(app.update_presentation({"deck": "deck", "title": "Deck"}))
+    text = (tmp_path / "upd" / "deck.md").read_text()
+    assert front_blocks(text) == 1 and len(split_slides(text)[1]) == 2

@@ -219,7 +219,7 @@ def test_list_calendars_and_prefs(gx):
 
 
 def week(offset_days=0):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc).astimezone()          # local time, like the fake account's events: in UTC the week flips at the wrong hour
     mon = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=offset_days)
     return mon.isoformat(), (mon + timedelta(days=7)).isoformat()
 

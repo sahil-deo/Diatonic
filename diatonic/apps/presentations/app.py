@@ -22,16 +22,24 @@ def slugify(title: str) -> str:
     return (s or "untitled")[:80]
 
 
+_KEY_LINE = re.compile(r"^[A-Za-z_][\w-]*\s*:")
+
+
 def parse_frontmatter(text: str) -> tuple[dict, str]:
-    """Split optional front matter (title, theme, author, etc.) from body."""
+    """Split optional front matter (title, theme, author, etc.) from body.
+
+    A block only counts when every line is `key: value`, so a deck that opens with a `---` slide break is left alone. Decks saved by
+    older versions of the editor can have the same block several times in a row; they are folded into one (the first value wins).
+    """
     meta, body = {}, text
-    m = _FM.match(text)
-    if m:
-        body = text[m.end():]
-        for line in m.group(1).splitlines():
-            if ":" in line:
-                k, v = line.split(":", 1)
-                meta[k.strip()] = v.strip()
+    while (m := _FM.match(body)):
+        lines = [l for l in m.group(1).splitlines() if l.strip()]
+        if not lines or not all(_KEY_LINE.match(l) for l in lines):
+            break
+        body = body[m.end():]
+        for line in lines:
+            k, v = line.split(":", 1)
+            meta.setdefault(k.strip(), v.strip())
     return meta, body
 
 
@@ -157,6 +165,7 @@ class PresentationsApp(App):
                 "slides_count": len(slides),
                 "slides": slides,
                 "raw": raw,
+                "body": parse_frontmatter(raw)[1],      # what the editor shows: the slides, without the front matter block
                 "meta": meta,
                 "modified": p.stat().st_mtime,
                 "preview": slides[0]["content"][:140] if slides else "",
@@ -181,6 +190,10 @@ class PresentationsApp(App):
         raise ToolError(f"No presentation called “{ref}”.")
 
     def _write(self, slug: str, meta: dict, body: str) -> Path:
+        """Save a deck. `body` may still start with a front matter block (a caller that read the whole file): it is folded into `meta`
+        here instead of being written a second time, which used to add a title slide at the top on every save."""
+        extra, body = parse_frontmatter(body)
+        meta = {**extra, **meta}
         p = self._path(slug)
         p.write_text(dump_markdown(meta, body))
         self._changed()
@@ -260,7 +273,7 @@ class PresentationsApp(App):
     async def update_presentation(self, a: dict):
         deck = self._resolve(a["deck"])
         title = a.get("title", deck["title"]).strip() or deck["title"]
-        content = a.get("content", deck["raw"])
+        content = a.get("content", deck["body"])
         meta = {**deck["meta"], "title": title}
         self._write(deck["slug"], meta, content)
         return {"updated": title, "slug": deck["slug"]}
@@ -298,7 +311,7 @@ class PresentationsApp(App):
         return JSONResponse({
             "slug": deck["slug"],
             "title": deck["title"],
-            "raw": deck["raw"],
+            "raw": deck["body"],      # the editor's text: slides only. The title and other settings live in `meta`
             "slides_count": deck["slides_count"],
             "slides": deck["slides"],
             "meta": deck["meta"],
@@ -311,7 +324,7 @@ class PresentationsApp(App):
         if slug:
             deck = self._resolve(slug)
             title = body.get("title", deck["title"]).strip() or deck["title"]
-            content = body.get("content", deck["raw"])
+            content = body.get("content", deck["body"])
             meta = {**deck["meta"], "title": title}
             self._write(deck["slug"], meta, content)
             return JSONResponse({"slug": deck["slug"], "title": title})
