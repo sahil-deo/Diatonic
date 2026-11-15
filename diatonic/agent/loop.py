@@ -58,7 +58,7 @@ def select_tools(registry, text: str, prior_apps: set[str], force: set[str] | fr
     # Words inside paths and file names ("notes/todo.md") are not requests about the Notes app, so keyword matching
     # ignores them; only an app's own patterns (like file names for Files) look at the raw text.
     plain = re.sub(r"\S*[/\\]\S*|\S+\.\w{1,5}\b", " ", low)
-    named = [a for a in apps if a.id in force or any(re.search(rf"\b{re.escape(k)}\b", plain) for k in a.keywords)
+    named = [a for a in apps if a.id in force or any(re.search(rf"\b{re.escape(k)}(?:s|es)?\b", plain) for k in a.keywords)
              or any(re.search(p, low) for p in a.keyword_patterns)]
     chosen = [a for a in apps if a in named or a.id in prior_apps]
     return {f"{a.id}_{t.name}": (a, t) for a in (chosen or apps) for t in a.tools()}, bool(named)
@@ -381,6 +381,9 @@ async def run_agent(ctx, registry, conv_id: str, text: str, *, speak: bool = Fal
                                "action, call the right tool now. If no tool can do it, say so plainly.")
                     if why:
                         guard.nudged = True  # once per run
+                        if content.strip():   # the discarded draft must not appear twice (live view, stored chat)
+                            texts.pop()
+                            yield {"type": "rewrite", "text": ""}
                         messages += [{"role": "assistant", "content": content}, {"role": "user", "content": why}]
                         continue
                 finished = True

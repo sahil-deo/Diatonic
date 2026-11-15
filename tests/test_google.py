@@ -613,3 +613,25 @@ def test_either_redirect_uri_works_for_web_clients(web):
     state = dict(p.split("=", 1) for p in old.split("?", 1)[1].split("&"))["state"]
     r = c.get("/api/apps/gcal/auth/callback", params={"code": f"{WORK}|x", "state": state})                                    # the original path completes the sign-in
     assert r.status_code in (302, 307) and f"connected={WORK}" in r.headers["location"] and ctx.google.get(WORK)
+
+
+def test_natural_mail_phrasing_reaches_the_mail_tools(gx):
+    """'do I have any mails today?' matched only Calendar ('today'), so the model said it couldn't read email."""
+    ctx, ga, cal, mail = gx
+    from diatonic.apps.registry import Registry
+    reg = Registry(ctx)
+    reg.register(cal)
+    reg.register(mail)
+    names = lambda t: {n.split("_")[0] for n in loop.select_tools(reg, t, set())[0]}
+    for q in ("do I have any mails today?", "any new emails?", "check my mail", "latest messages in my inbox", "unread mails from Priya", "did Sam e-mail me"):
+        assert "gmail" in names(q), q
+    assert "gmail" not in names("what's on my calendar today?")
+
+
+def test_calendar_css_does_not_collide_with_chat_markdown():
+    """A .md rule with aspect-ratio/border-radius turned every chat reply into a giant circle (mini-month day buttons)."""
+    import re
+    css = (Path(__file__).parent.parent / "diatonic/web/css/app.css").read_text()
+    for rule in re.findall(r"(?<![\w-])\.md\s*\{([^}]*)\}", css):
+        assert "aspect-ratio" not in rule and "border-radius: 50%" not in rule and "background: none" not in rule, rule
+    assert ".mday" in css

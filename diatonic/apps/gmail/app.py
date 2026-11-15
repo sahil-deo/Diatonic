@@ -31,7 +31,8 @@ class GmailApp(App):
     description = "Gmail across all your connected Google accounts: read, search, organise, draft and send."
     panel = True
     keywords = ["email", "emails", "e-mail", "mail", "gmail", "inbox", "unread", "draft", "drafts", "attachment", "attachments", "mailbox"]
-    keyword_patterns = [r"\b(send|write|compose|reply|forward)\b.{0,40}\b(email|mail|message)\b", r"\b(email|mail)\b.{0,30}\b(from|to)\b"]
+    keyword_patterns = [r"\b(send|write|compose|reply|forward)\b.{0,40}\b(e-?mails?|mails?|messages?)\b", r"\b(e-?mails?|mails?)\b.{0,30}\b(from|to)\b",
+                        r"\b(any|new|unread|my|latest|recent|check)\b.{0,12}\b(e-?mails?|mails?|messages?)\b"]
     default_allow = ["draft_email"]   # a draft is only saved, never sent
     settings: list[dict] = []
 

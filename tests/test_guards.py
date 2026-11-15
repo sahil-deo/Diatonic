@@ -295,3 +295,15 @@ def test_recent_tool_trace_is_replayed_as_real_tool_calls():
     # only the most recent tool-using answer keeps its trace
     older = rows[:2] + [{"role": "user", "content": "x", "meta": {}}] + rows[1:]
     assert sum(1 for m in loop.build_history(older, 6000) if m["role"] == "tool") == 1
+
+
+def test_a_nudged_reply_is_not_shown_twice(env, monkeypatch):
+    """The model answers, gets nudged, answers the same again: the user must see it once (this showed it twice live)."""
+    ctx, reg, app, db = env
+    app.keywords = ["thing"]
+    same = "I cannot check that. Please let me know if you'd like help with something else."
+    p = ScriptedProvider([[{"content": same}], [{"content": same}]])
+    conv, ev = run(env, p, monkeypatch, text="show my things")
+    assert [e for e in ev if e["type"] == "message"][0]["text"] == same
+    assert {"type": "rewrite", "text": ""}.items() <= next(e for e in ev if e["type"] == "rewrite").items()    # the UI clears the first draft
+    assert env[3].messages(conv["id"])[-1]["content"] == same

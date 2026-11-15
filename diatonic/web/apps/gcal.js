@@ -154,7 +154,7 @@ function paintSide() {
     h("button", { class: "icon-btn sm", "aria-label": "Previous month", onclick: () => { S.mini = new Date(m.getFullYear(), m.getMonth() - 1, 1); paintSide(); }, html: icon("chevleft", 14) }),
     h("button", { class: "icon-btn sm", "aria-label": "Next month", onclick: () => { S.mini = new Date(m.getFullYear(), m.getMonth() + 1, 1); paintSide(); }, html: icon("chevright", 14) })),
     h("div", { class: "mini-grid" }, ...dow.map((d) => h("span", { class: "mdow" }, d)),
-      ...days.map((d) => h("button", { type: "button", class: `md ${d.getMonth() !== m.getMonth() ? "out" : ""} ${same(d, new Date()) ? "today" : ""} ${d >= ra && d < rb && S.view !== "agenda" ? "inrange" : ""}`,
+      ...days.map((d) => h("button", { type: "button", class: `mday ${d.getMonth() !== m.getMonth() ? "out" : ""} ${same(d, new Date()) ? "today" : ""} ${d >= ra && d < rb && S.view !== "agenda" ? "inrange" : ""}`,
         onclick: () => { S.cursor = d; S.mini = new Date(d.getFullYear(), d.getMonth(), 1); if (S.view === "agenda") S.view = "week"; setView(S.view); } }, String(d.getDate())))));
   const groups = S.accounts.map((a) => h("div", { class: "cal-group" },
     h("div", { class: "cal-ghead" }, h("i", { style: `background:${a.color}` }), h("span", {}, a.label)),
