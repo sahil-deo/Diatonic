@@ -7,6 +7,7 @@ time/step/tool budget, and when the model can't finish on its own the harness fo
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import re
 import time
@@ -216,6 +217,8 @@ async def _execute(call: dict, tool_map: dict, registry, guard: RunGuard, out: d
     if needs and tool.preview:
         try:
             preview = tool.preview(args)
+            if inspect.isawaitable(preview):   # previews that need the network (e.g. fetching the mail being replied to)
+                preview = await preview
         except ToolError as e:   # the change can't happen (bad path, text not found...): don't ask the user to approve it
             yield {"type": "tool_call", "id": cid, "name": name, "app": app.id, "title": tool.title, "args": args,
                    "risk": tool.risk, "describe": "", "needs_approval": False}

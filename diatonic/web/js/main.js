@@ -193,7 +193,7 @@ async function boot() {
   setInterval(refreshHealth, 20000);
 
   const q = new URLSearchParams(location.search);
-  if (q.get("settings")) { history.replaceState({}, "", "/"); openSettings(q.get("settings")); if (q.get("connected")) toast("Connected."); }
+  if (q.get("settings")) { history.replaceState({}, "", "/"); openSettings(q.get("settings")); if (q.get("connected")) toast(`Connected ${q.get("connected")}`); if (q.get("error")) toast(`Google sign-in: ${q.get("error")}`, "error"); }
   input.focus();
 }
 boot().catch((e) => { document.body.append(h("div", { class: "err", style: "margin:40px auto;max-width:520px" }, `Couldn't start the UI: ${e.message}`)); console.error(e); });

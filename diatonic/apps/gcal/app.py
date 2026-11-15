@@ -1,23 +1,18 @@
-"""Google Calendar over the REST API with an OAuth 2.0 (PKCE, loopback) flow."""
+"""Google Calendar for any number of Google accounts: agent tools and the REST API behind the calendar UI."""
 from __future__ import annotations
 
-import base64
-import hashlib
-import secrets as pysecrets
-import time
-from datetime import date, datetime, time as dtime, timedelta
-from urllib.parse import urlencode
+import asyncio
+from datetime import datetime, time as dtime, timedelta
+from urllib.parse import quote
 
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse
+from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from ...google import GoogleAuthError, has_calendar
+from ...google.endpoints import urls
 from ..base import DESTRUCTIVE, WRITE, App, Tool, ToolError
-
-API = "https://www.googleapis.com/calendar/v3"
-AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
-TOKEN_URL = "https://oauth2.googleapis.com/token"
-SCOPE = "https://www.googleapis.com/auth/calendar"
+from . import events as E
 
 
 def _s(desc: str) -> dict:
@@ -25,282 +20,391 @@ def _s(desc: str) -> dict:
 
 
 TIME = "ISO 8601: 2026-11-20T15:00:00 or 2026-11-20"
-CAL = _s("Calendar id (default primary)")
+ACCT = _s("Account label or email; omit to use all (reads) or the default (writes)")
+EVENT = _s("The event's `ref` from list_events")
 
 
 class GCalApp(App):
     id = "gcal"
-    name = "Google Calendar"
+    name = "Calendar"
     icon = "calendar"
-    description = "See your agenda, create, move and delete events, and find free time."
+    description = "Google Calendar across all your connected Google accounts: see, create, move and delete events, find free time."
     panel = True
-    keywords = ["calendar", "event", "events", "meeting", "meetings", "schedule", "appointment", "agenda", "free",
-                "busy", "availability", "invite", "reschedule", "today", "tomorrow", "tonight", "week", "weekend",
-                "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "remind", "slot"]
-    settings = [
-        {"key": "client_id", "label": "OAuth client ID", "secret": True, "placeholder": "…apps.googleusercontent.com",
-         "help": "Google Cloud Console → Credentials → OAuth client ID (Desktop app). See the README."},
-        {"key": "client_secret", "label": "OAuth client secret", "secret": True, "placeholder": "GOCSPX-…"},
-    ]
+    keywords = ["calendar", "calendars", "event", "events", "meeting", "meetings", "schedule", "appointment", "agenda", "free", "busy",
+                "availability", "invite", "invitation", "reschedule", "today", "tomorrow", "tonight", "week", "weekend", "monday",
+                "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "slot", "rsvp"]
+    settings: list[dict] = []   # accounts are managed in Settings → Accounts
 
-    def __init__(self, ctx):
-        super().__init__(ctx)
-        self._access: tuple[str, float] | None = None
-        self._pending: dict[str, str] = {}  # state -> pkce verifier
+    @property
+    def ga(self):
+        return self.ctx.google
 
-    # ---- time helpers --------------------------------------------------
-    def parse(self, v: str) -> date | datetime:
-        v = v.strip()
-        try:
-            if len(v) == 10:
-                return date.fromisoformat(v)
-            d = datetime.fromisoformat(v.replace("Z", "+00:00"))
-        except ValueError:
-            raise ToolError(f"Couldn't read '{v}' as a date/time. Use ISO 8601, e.g. 2026-11-20T15:00:00.")
-        return d if d.tzinfo else d.replace(tzinfo=self.ctx.tz)
+    @property
+    def tzname(self) -> str:
+        return self.ctx.tz_name
 
-    def _bound(self, v: str | None, default: datetime) -> str:
-        d = self.parse(v) if v else default
-        if not isinstance(d, datetime):
-            d = datetime.combine(d, dtime.min, tzinfo=self.ctx.tz)
-        return d.isoformat()
-
-    def _when(self, d: date | datetime) -> dict:
-        if isinstance(d, datetime):
-            return {"dateTime": d.isoformat(), "timeZone": self.ctx.tz_name}
-        return {"date": d.isoformat()}
-
-    # ---- auth ----------------------------------------------------------
-    def _redirect_uri(self, request: Request) -> str:
-        return f"{request.url.scheme}://{request.url.netloc}/api/apps/gcal/auth/callback"
-
-    async def _access_token(self) -> str:
-        if self._access and self._access[1] > time.time() + 60:
-            return self._access[0]
-        refresh, cid, csec = self.secret("refresh_token"), self.secret("client_id"), self.secret("client_secret")
-        if not refresh or not cid:
-            raise ToolError("Google Calendar isn't connected. Open Settings → Apps → Google Calendar and click Connect.")
-        r = await self.ctx.http.post(TOKEN_URL, data={
-            "client_id": cid, "client_secret": csec or "", "refresh_token": refresh, "grant_type": "refresh_token"})
-        if r.status_code != 200:
-            raise ToolError("Google rejected the saved login. Reconnect Google Calendar in Settings.")
-        d = r.json()
-        self._access = (d["access_token"], time.time() + d.get("expires_in", 3600))
-        return d["access_token"]
-
-    async def auth_start(self, request: Request):
-        cid = self.secret("client_id")
-        if not cid:
-            return HTMLResponse("Save your OAuth client ID and secret in Settings first.", status_code=400)
-        verifier = pysecrets.token_urlsafe(64)
-        state = pysecrets.token_urlsafe(16)
-        self._pending[state] = verifier
-        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
-        q = urlencode({"client_id": cid, "redirect_uri": self._redirect_uri(request), "response_type": "code",
-                       "scope": SCOPE, "access_type": "offline", "prompt": "consent", "state": state,
-                       "code_challenge": challenge, "code_challenge_method": "S256"})
-        return RedirectResponse(f"{AUTH_URL}?{q}")
-
-    async def auth_callback(self, request: Request):
-        state, code = request.query_params.get("state", ""), request.query_params.get("code")
-        verifier = self._pending.pop(state, None)
-        if not code or not verifier:
-            return HTMLResponse("Sign-in failed or expired. Close this tab and try again.", status_code=400)
-        r = await self.ctx.http.post(TOKEN_URL, data={
-            "client_id": self.secret("client_id"), "client_secret": self.secret("client_secret") or "",
-            "code": code, "code_verifier": verifier, "grant_type": "authorization_code",
-            "redirect_uri": self._redirect_uri(request)})
-        if r.status_code != 200:
-            return HTMLResponse(f"Google returned an error: {r.text[:300]}", status_code=400)
-        d = r.json()
-        if d.get("refresh_token"):
-            self.set_secret("refresh_token", d["refresh_token"])
-        self._access = (d["access_token"], time.time() + d.get("expires_in", 3600))
-        return RedirectResponse("/?settings=apps&connected=gcal")
-
-    async def disconnect(self, request: Request):
-        self.set_secret("refresh_token", "")
-        self._access = None
-        return JSONResponse({"ok": True})
-
+    # ---- accounts and calendars ------------------------------------------------------
     async def status(self) -> dict:
-        if not self.secret("client_id"):
-            return {"connected": False, "detail": "Add your OAuth client ID and secret, then connect."}
-        if not self.secret("refresh_token"):
-            return {"connected": False, "detail": "Not connected yet.",
-                    "action": {"label": "Connect Google", "href": "/api/apps/gcal/auth/start"}}
+        accts = self.ga.with_service("calendar")
+        if not accts:
+            return {"connected": False, "detail": "No Google account connected for Calendar yet.", "action": {"label": "Connect an account", "href": "/?settings=accounts"}}
+        bad = [a for a in accts if a.get("needs_reauth")]
+        if bad:
+            return {"connected": False, "detail": f"Reconnect {bad[0]['email']} in Settings → Accounts.", "action": {"label": "Fix", "href": "/?settings=accounts"}}
+        return {"connected": True, "detail": f"{len(accts)} account{'s' if len(accts) != 1 else ''}: {', '.join(self.ga.label(a) for a in accts)}"}
+
+    async def calendars(self, accounts: list[dict] | None = None) -> list[dict]:
+        accounts = accounts if accounts is not None else self.ga.with_service("calendar")
+        prefs = self.ga.cfg["calendar_prefs"]
+
+        async def one(a):
+            key = f"cal:list:{a['email']}"
+            items = self.ga.cached(key, 60)
+            if items is None:
+                d = await self.ga.json(a["email"], "GET", f"{urls()['cal']}/users/me/calendarList", params={"maxResults": 100})
+                items = self.ga.store(key, d.get("items", []), 60)
+            out = []
+            for c in items:
+                if c.get("hidden") or c.get("deleted"):
+                    continue
+                p = prefs.get(f"{a['email']}|{c['id']}", {})
+                out.append({"account": a["email"], "account_label": self.ga.label(a), "account_color": a["color"], "id": c["id"],
+                            "name": c.get("summaryOverride") or c.get("summary") or c["id"], "color": p.get("color") or (a["color"] if c.get("primary") else c.get("backgroundColor")) or a["color"],
+                            "primary": bool(c.get("primary")), "role": c.get("accessRole", "reader"), "tz": c.get("timeZone"),
+                            "visible": p.get("visible", c.get("selected", c.get("primary", False)) is not False)})
+            return out
+
+        res = await asyncio.gather(*(one(a) for a in accounts), return_exceptions=True)
+        errors = [str(r) for r in res if isinstance(r, Exception)]
+        cals = [c for r in res if not isinstance(r, Exception) for c in r]
+        self._last_errors = errors
+        return cals
+
+    def _cal(self, cals: list[dict], account: str, cal_id: str) -> dict:
+        c = next((c for c in cals if c["account"].lower() == account.lower() and c["id"] == cal_id), None)
+        if not c:
+            raise ToolError(f"Calendar {cal_id} wasn't found on {account}.")
+        return c
+
+    async def events_in(self, start: str, end: str, *, accounts: list[dict] | None = None, calendar: str | None = None, q: str | None = None,
+                        only_visible: bool = True) -> tuple[list[dict], list[str]]:
+        accounts = accounts if accounts is not None else self.ga.with_service("calendar")
+        cals = await self.calendars(accounts)
+        errors = list(getattr(self, "_last_errors", []))
+        todo = [c for c in cals if (c["visible"] or not only_visible) and (not calendar or calendar.lower() in (c["id"].lower(), c["name"].lower()))]
+        acct = {a["email"]: a for a in accounts}
+
+        async def one(c):
+            params = {"timeMin": start, "timeMax": end, "singleEvents": "true", "orderBy": "startTime", "maxResults": 250}
+            if q:
+                params["q"] = q
+            d = await self.ga.json(c["account"], "GET", f"{urls()['cal']}/calendars/{quote(c['id'], safe='')}/events", params=params)
+            return [E.norm_event(e, acct[c["account"]], c, c["account_label"]) for e in d.get("items", []) if e.get("status") != "cancelled"]
+
+        res = await asyncio.gather(*(one(c) for c in todo), return_exceptions=True)
+        out = []
+        for c, r in zip(todo, res):
+            if isinstance(r, Exception):
+                errors.append(f"{c['account_label']}: {r}")
+            else:
+                out += r
+        out.sort(key=lambda e: (e["start"] if not e["all_day"] else e["start"] + "T00:00", e["summary"]))
+        return out, errors
+
+    def _brief(self, e: dict) -> dict:
+        multi = len(self.ga.with_service("calendar")) > 1
+        d = {"ref": e["ref"], "title": e["summary"], "start": e["start"], "end": e["end"], "all_day": e["all_day"] or None, "where": e["location"] or None,
+             "account": e["account_label"] if multi else None, "calendar": e["calendar_name"] if e["calendar_name"] != e["account"] else None,
+             "meet": bool(e["meet_url"]) or None, "attendees": len(e["attendees"]) or None, "repeats": e["recurring"] or None,
+             "you": e["my_response"] if e["my_response"] not in (None, "accepted") else None}
+        return {k: v for k, v in d.items() if v is not None}
+
+    def _range(self, a: dict) -> tuple[str, str]:
+        now = self.ctx.now()
+        s = E.parse_when(a["start"], self.ctx.tz) if a.get("start") else now
+        e = E.parse_when(a["end"], self.ctx.tz) if a.get("end") else (s if isinstance(s, datetime) else now) + timedelta(days=7)
+        s = s if isinstance(s, datetime) else datetime.combine(s, dtime.min, tzinfo=self.ctx.tz)
+        e = e if isinstance(e, datetime) else datetime.combine(e, dtime.min, tzinfo=self.ctx.tz)
+        if a.get("end") and len(a["end"].strip()) == 10:
+            e += timedelta(days=1)   # a bare end date means "through that day"
+        return s.isoformat(), e.isoformat()
+
+    def _guard(self, fn):
         try:
-            cals = await self._req("GET", "/users/me/calendarList", params={"maxResults": 1})
-            return {"connected": True, "detail": f"Connected ({len(cals.get('items', []))}+ calendars)",
-                    "action": {"label": "Reconnect", "href": "/api/apps/gcal/auth/start"}}
-        except ToolError as e:
-            return {"connected": False, "detail": str(e),
-                    "action": {"label": "Reconnect", "href": "/api/apps/gcal/auth/start"}}
+            return fn()
+        except ValueError as e:
+            raise ToolError(str(e))
 
-    async def _req(self, method: str, path: str, **kw):
-        tok = await self._access_token()
-        r = await self.ctx.http.request(method, API + path, headers={"Authorization": f"Bearer {tok}"}, **kw)
-        if r.status_code >= 400:
-            try:
-                msg = r.json()["error"]["message"]
-            except Exception:
-                msg = r.text
-            raise ToolError(f"Google Calendar {r.status_code}: {msg[:300]}", bad_args=r.status_code in (400, 422))
-        return r.json() if r.content else {}
-
-    # ---- shaping -------------------------------------------------------
-    @staticmethod
-    def _event(e: dict) -> dict:
-        s, en = e.get("start", {}), e.get("end", {})
-        return {"id": e["id"], "summary": e.get("summary", "(no title)"),
-                "start": s.get("dateTime") or s.get("date"), "end": en.get("dateTime") or en.get("date"),
-                "all_day": "date" in s, "location": e.get("location"),
-                "attendees": [a["email"] for a in e.get("attendees", [])][:10] or None,
-                "link": e.get("htmlLink"), "status": e.get("status")}
-
-    # ---- tools ---------------------------------------------------------
+    # ---- tools ---------------------------------------------------------------------
     def tools(self) -> list[Tool]:
-        ev = {"summary": _s("Event title"), "start": _s(TIME), "end": _s("End, same format as start"),
-              "description": _s("Event description"), "location": _s("Location"),
-              "attendees": {"type": "array", "items": {"type": "string"}, "description": "Attendee emails"},
-              "calendar_id": CAL}
-        upd = {k: v for k, v in ev.items()} | {"event_id": _s("Event id from list_events/search_events")}
+        ev = {"summary": _s("Event title"), "start": _s(TIME), "end": _s("End, same format as start"), "description": _s("Description"),
+              "location": _s("Location"), "attendees": {"type": "array", "items": {"type": "string"}, "description": "Attendee emails"},
+              "calendar": _s("Calendar name (default: the account's main calendar)"), "account": ACCT,
+              "add_meet": {"type": "boolean", "description": "Add a Google Meet link"}, "repeat": {"type": "string", "enum": list(E.RRULES), "description": "Repeat"}}
         return [
-            Tool("list_calendars", "List the user's calendars.", {}, self.list_calendars),
-            Tool("list_events", "List events in a time range, soonest first. Defaults to the next 7 days.",
-                 {"properties": {"start": _s(TIME), "end": _s(TIME), "calendar_id": CAL,
-                                 "max_results": {"type": "integer", "minimum": 1, "maximum": 50}}},
+            Tool("list_calendars", "List calendars across the connected Google accounts.", {"properties": {"account": ACCT}}, self.list_calendars),
+            Tool("list_events", "List events in a time range, soonest first, across all accounts unless one is named. Defaults to the next 7 days.",
+                 {"properties": {"start": _s(TIME), "end": _s(TIME), "account": ACCT, "calendar": _s("Calendar name"), "max_results": {"type": "integer", "minimum": 1, "maximum": 50}}},
                  self.list_events),
-            Tool("search_events", "Search events by text (title, description, attendees).",
-                 {"properties": {"query": _s("Search text"), "start": _s(TIME), "end": _s(TIME), "calendar_id": CAL},
-                  "required": ["query"]}, self.search_events),
-            Tool("find_free_time", "Find free slots of a given length within working hours.",
-                 {"properties": {"start": _s("First day to check (date or date-time)"),
-                                 "end": _s("Last day to check"),
-                                 "duration_minutes": {"type": "integer", "minimum": 5, "maximum": 480},
-                                 "day_start": _s("Working day start HH:MM, default 09:00"),
-                                 "day_end": _s("Working day end HH:MM, default 18:00")},
+            Tool("search_events", "Search events by text (title, description, location).",
+                 {"properties": {"query": _s("Search text"), "start": _s(TIME), "end": _s(TIME), "account": ACCT}, "required": ["query"]}, self.search_events),
+            Tool("find_free_time", "Find free slots of a given length within working hours, counting busy time on ALL connected accounts.",
+                 {"properties": {"start": _s("First day"), "end": _s("Last day"), "duration_minutes": {"type": "integer", "minimum": 5, "maximum": 480},
+                                 "day_start": _s("Working day start HH:MM, default 09:00"), "day_end": _s("Working day end HH:MM, default 18:00"), "account": ACCT},
                   "required": ["start", "end"]}, self.find_free),
-            Tool("create_event", "Create a calendar event. Pass a date (no time) as start for an all-day event. "
-                 "If end is omitted the event lasts one hour.",
+            Tool("create_event", "Create a calendar event. A date (no time) as start makes it all-day; if end is omitted it lasts one hour. "
+                 "With several accounts, pass `account` or the default account is used.",
                  {"properties": ev, "required": ["summary", "start"]}, self.create_event, WRITE,
-                 describe=lambda a: f"Create “{a.get('summary')}” at {a.get('start')}"),
-            Tool("update_event", "Change an existing event. Only pass the fields to change. "
-                 "Changing start without end keeps the original duration.",
-                 {"properties": upd, "required": ["event_id"]}, self.update_event, WRITE,
-                 describe=lambda a: "Update event " + ", ".join(f"{k}={v}" for k, v in a.items()
-                                                                if k not in ("event_id", "calendar_id"))),
-            Tool("delete_event", "Delete an event.",
-                 {"properties": {"event_id": _s("Event id"), "calendar_id": CAL}, "required": ["event_id"]},
-                 self.delete_event, DESTRUCTIVE, describe=lambda a: f"Delete event {a.get('event_id')}"),
+                 describe=lambda a: f"Create “{a.get('summary')}” at {a.get('start')}" + (f" on {a['account']}" if a.get("account") else "")),
+            Tool("update_event", "Change an event. Only pass fields to change. Changing start without end keeps the duration.",
+                 {"properties": {"event": EVENT, **{k: ev[k] for k in ("summary", "start", "end", "description", "location", "attendees")}}, "required": ["event"]},
+                 self.update_event, WRITE, describe=lambda a: "Update event " + ", ".join(f"{k}={v}" for k, v in a.items() if k != "event")),
+            Tool("delete_event", "Delete an event.", {"properties": {"event": EVENT}, "required": ["event"]}, self.delete_event, DESTRUCTIVE,
+                 describe=lambda a: f"Delete event {a.get('event')}"),
+            Tool("respond_to_event", "Accept, decline or tentatively accept an invitation.",
+                 {"properties": {"event": EVENT, "response": {"type": "string", "enum": ["accepted", "declined", "tentative"]}}, "required": ["event", "response"]},
+                 self.respond, WRITE, describe=lambda a: f"{a.get('response', 'Respond').capitalize()} invitation {a.get('event')}"),
         ]
 
     async def list_calendars(self, a):
-        d = await self._req("GET", "/users/me/calendarList")
-        return [{"id": c["id"], "name": c.get("summaryOverride") or c["summary"], "primary": c.get("primary", False),
-                 "timezone": c.get("timeZone")} for c in d.get("items", [])]
-
-    async def _events(self, a, extra=None):
-        now = self.ctx.now()
-        p = {"timeMin": self._bound(a.get("start"), now), "timeMax": self._bound(a.get("end"), now + timedelta(days=7)),
-             "singleEvents": "true", "orderBy": "startTime", "maxResults": a.get("max_results", 25)} | (extra or {})
-        d = await self._req("GET", f"/calendars/{a.get('calendar_id', 'primary')}/events", params=p)
-        return [self._event(e) for e in d.get("items", [])]
+        accts = self.ga.pick(a.get("account"), "calendar", many=True)
+        cals = await self.calendars(accts)
+        if not cals and getattr(self, "_last_errors", None):
+            raise ToolError(self._last_errors[0])    # don't pretend there are no calendars when every account failed
+        return [{"account": c["account_label"], "name": c["name"], "primary": c["primary"] or None, "access": c["role"], "shown": c["visible"]}
+                for c in cals]
 
     async def list_events(self, a):
-        return await self._events(a)
+        accts = self.ga.pick(a.get("account"), "calendar", many=True)
+        s, e = self._guard(lambda: self._range(a))
+        evs, errors = await self.events_in(s, e, accounts=accts, calendar=a.get("calendar"))
+        evs = evs[: a.get("max_results", 25)]
+        return {"events": [self._brief(x) for x in evs] or "No events in that range.", "problems": errors or None}
 
     async def search_events(self, a):
+        accts = self.ga.pick(a.get("account"), "calendar", many=True)
         now = self.ctx.now()
-        a = {"start": (now - timedelta(days=30)).isoformat(), "end": (now + timedelta(days=180)).isoformat()} | a
-        return await self._events(a, {"q": a["query"]})
-
-    async def create_event(self, a):
-        s = self.parse(a["start"])
-        if a.get("end"):
-            e = self.parse(a["end"])
-        else:
-            e = s + (timedelta(days=1) if not isinstance(s, datetime) else timedelta(hours=1))
-        body = {"summary": a["summary"], "start": self._when(s), "end": self._when(e)}
-        for k in ("description", "location"):
-            if a.get(k):
-                body[k] = a[k]
-        if a.get("attendees"):
-            body["attendees"] = [{"email": x} for x in a["attendees"]]
-        r = await self._req("POST", f"/calendars/{a.get('calendar_id', 'primary')}/events", json=body,
-                            params={"sendUpdates": "all"} if a.get("attendees") else None)
-        return {"created": self._event(r)}
-
-    async def update_event(self, a):
-        cal, eid = a.get("calendar_id", "primary"), a["event_id"]
-        cur = await self._req("GET", f"/calendars/{cal}/events/{eid}")
-        body: dict = {}
-        for k in ("summary", "description", "location"):
-            if a.get(k) is not None:
-                body[k] = a[k]
-        if a.get("attendees") is not None:
-            body["attendees"] = [{"email": x} for x in a["attendees"]]
-        if a.get("start"):
-            s = self.parse(a["start"])
-            if a.get("end"):
-                e = self.parse(a["end"])
-            else:  # keep duration
-                old_s = cur["start"].get("dateTime") or cur["start"]["date"]
-                old_e = cur["end"].get("dateTime") or cur["end"]["date"]
-                dur = self.parse(old_e) - self.parse(old_s)
-                e = s + dur
-            body["start"], body["end"] = self._when(s), self._when(e)
-        elif a.get("end"):
-            body["end"] = self._when(self.parse(a["end"]))
-        r = await self._req("PATCH", f"/calendars/{cal}/events/{eid}", json=body)
-        return {"updated": self._event(r)}
-
-    async def delete_event(self, a):
-        await self._req("DELETE", f"/calendars/{a.get('calendar_id', 'primary')}/events/{a['event_id']}")
-        return {"deleted": a["event_id"]}
+        a = {"start": (now - timedelta(days=30)).isoformat(), "end": (now + timedelta(days=180)).isoformat(), **a}
+        s, e = self._guard(lambda: self._range(a))
+        evs, errors = await self.events_in(s, e, accounts=accts, q=a["query"], only_visible=False)
+        return {"events": [self._brief(x) for x in evs[:25]] or "No events match.", "problems": errors or None}
 
     async def find_free(self, a):
-        s = self.parse(a["start"])
-        e = self.parse(a["end"])
+        accts = self.ga.pick(a.get("account"), "calendar", many=True)
+        tz = self.ctx.tz
+        s, e = self._guard(lambda: E.parse_when(a["start"], tz)), self._guard(lambda: E.parse_when(a["end"], tz))
         s_day = s.date() if isinstance(s, datetime) else s
         e_day = e.date() if isinstance(e, datetime) else e
-        dur = timedelta(minutes=a.get("duration_minutes", 30))
-        h0, m0 = map(int, a.get("day_start", "09:00").split(":"))
-        h1, m1 = map(int, a.get("day_end", "18:00").split(":"))
-        tmin = datetime.combine(s_day, dtime.min, tzinfo=self.ctx.tz)
-        tmax = datetime.combine(e_day + timedelta(days=1), dtime.min, tzinfo=self.ctx.tz)
-        fb = await self._req("POST", "/freeBusy", json={"timeMin": tmin.isoformat(), "timeMax": tmax.isoformat(),
-                                                         "items": [{"id": "primary"}]})
-        busy = sorted((datetime.fromisoformat(b["start"].replace("Z", "+00:00")),
-                       datetime.fromisoformat(b["end"].replace("Z", "+00:00")))
-                      for b in fb["calendars"]["primary"]["busy"])
-        now, slots, day = self.ctx.now(), [], s_day
-        while day <= e_day and len(slots) < 10:
-            cur = max(datetime.combine(day, dtime(h0, m0), tzinfo=self.ctx.tz), now)
-            end = datetime.combine(day, dtime(h1, m1), tzinfo=self.ctx.tz)
-            for bs, be in busy:
-                if be <= cur or bs >= end:
-                    continue
-                if bs - cur >= dur:
-                    slots.append((cur, bs))
-                cur = max(cur, be)
-            if end - cur >= dur:
-                slots.append((cur, end))
-            day += timedelta(days=1)
-        return [{"from": f.isoformat(), "to": t.isoformat()} for f, t in slots[:10]]
+        t0 = lambda t: dtime(*map(int, t.split(":")))
+        tmin = datetime.combine(s_day, dtime.min, tzinfo=tz)
+        tmax = datetime.combine(e_day + timedelta(days=1), dtime.min, tzinfo=tz)
+        cals = await self.calendars(accts)
 
-    # ---- panel ---------------------------------------------------------
-    async def agenda(self, request: Request):
-        days = int(request.query_params.get("days", 7))
+        async def busy(acc):
+            ids = [{"id": c["id"]} for c in cals if c["account"] == acc["email"] and c["role"] in ("owner", "writer") and c["visible"]] or [{"id": "primary"}]
+            d = await self.ga.json(acc["email"], "POST", f"{urls()['cal']}/freeBusy", json={"timeMin": tmin.isoformat(), "timeMax": tmax.isoformat(), "items": ids})
+            return [(datetime.fromisoformat(b["start"].replace("Z", "+00:00")), datetime.fromisoformat(b["end"].replace("Z", "+00:00")))
+                    for c in d["calendars"].values() for b in c.get("busy", [])]
+
+        res = await asyncio.gather(*(busy(x) for x in accts), return_exceptions=True)
+        failed = [str(r) for r in res if isinstance(r, Exception)]
+        if failed and len(failed) == len(res):
+            raise ToolError(failed[0])
+        all_busy = [b for r in res if not isinstance(r, Exception) for b in r]
+        slots = E.free_slots(all_busy, s_day, e_day, timedelta(minutes=a.get("duration_minutes", 30)), t0(a.get("day_start", "09:00")),
+                             t0(a.get("day_end", "18:00")), self.ctx.now(), tz)
+        return {"free": [{"from": f.isoformat(), "to": t.isoformat()} for f, t in slots] or "No free slot found.",
+                "counted_accounts": [self.ga.label(x) for x in accts], "problems": failed or None}
+
+    async def _account_calendar(self, account: str | None, calendar: str | None):
+        acc = self.ga.pick(account, "calendar", many=False)[0]
+        cals = await self.calendars([acc])
+        want = (calendar or "").strip().lower()
+        if want in ("primary", "main", "default", "my calendar", "calendar", "personal", acc["email"].lower(), (acc.get("label") or "").lower(), (acc.get("name") or "").lower()):
+            want = ""    # "the Home calendar" usually means the Home *account's* main calendar
+        cal = next((c for c in cals if want and want in (c["id"].lower(), c["name"].lower()) and c["role"] in E.WRITE_ROLES), None) if want else \
+            next((c for c in cals if c["primary"]), None) or next((c for c in cals if c["role"] in E.WRITE_ROLES), None)
+        if not cal:
+            raise ToolError(f"No writable calendar{' called ' + calendar if calendar else ''} on {acc['email']}.")
+        return acc, cal
+
+    async def create_event(self, a):
+        acc, cal = await self._account_calendar(a.get("account"), a.get("calendar"))
+        tz = self.ctx.tz
+        s = self._guard(lambda: E.parse_when(a["start"], tz))
+        all_day = not isinstance(s, datetime)
+        if a.get("end"):
+            en = self._guard(lambda: E.parse_when(a["end"], tz))
+            if all_day and en == s:
+                en = en + timedelta(days=1)    # Google's all-day end date is exclusive
+        else:
+            en = s + (timedelta(days=1) if all_day else timedelta(hours=1))
+        f = {"summary": a["summary"], "all_day": all_day, "start": s.isoformat(), "end": en.isoformat(), "description": a.get("description"),
+             "location": a.get("location"), "attendees": a.get("attendees"), "repeat": a.get("repeat"), "meet": a.get("add_meet")}
+        body = self._guard(lambda: E.build_body(f, self.tzname))
+        params = {"sendUpdates": "all"} if a.get("attendees") else {}
+        if a.get("add_meet"):
+            params["conferenceDataVersion"] = 1
+        r = await self.ga.json(acc["email"], "POST", f"{urls()['cal']}/calendars/{quote(cal['id'], safe='')}/events", json=body, params=params)
+        return {"created": self._brief(E.norm_event(r, acc, cal, self.ga.label(acc)))}
+
+    async def _locate(self, ref: str):
         try:
-            now = self.ctx.now()
-            start = datetime.combine(now.date(), dtime.min, tzinfo=self.ctx.tz)
-            ev = await self._events({"start": start.isoformat(), "end": (start + timedelta(days=days)).isoformat(),
-                                     "max_results": 50})
-            return JSONResponse({"events": ev, "tz": self.ctx.tz_name})
-        except ToolError as e:
-            return JSONResponse({"error": str(e)})
+            email, cal_id, eid = E.parse_ref(ref)
+        except ValueError as e:
+            raise ToolError(str(e))
+        acc = self.ga.get(email)
+        if not acc or not has_calendar(acc):
+            raise ToolError(f"{email} isn't connected for Calendar.")
+        cals = await self.calendars([acc])
+        return acc, self._cal(cals, email, cal_id), eid
+
+    async def update_event(self, a):
+        acc, cal, eid = await self._locate(a["event"])
+        base = f"{urls()['cal']}/calendars/{quote(cal['id'], safe='')}/events/{quote(eid, safe='')}"
+        f = {k: a.get(k) for k in ("summary", "description", "location", "attendees")}
+        if a.get("start"):
+            cur = await self.ga.json(acc["email"], "GET", base)
+            tz = self.ctx.tz
+            s = self._guard(lambda: E.parse_when(a["start"], tz))
+            all_day = not isinstance(s, datetime)
+            if a.get("end"):
+                en = self._guard(lambda: E.parse_when(a["end"], tz))
+            else:
+                old_s = E.parse_when(cur["start"].get("dateTime") or cur["start"]["date"], tz)
+                old_e = E.parse_when(cur["end"].get("dateTime") or cur["end"]["date"], tz)
+                en = s + (old_e - old_s)
+            f.update(all_day=all_day, start=s.isoformat(), end=en.isoformat())
+        elif a.get("end"):
+            en = self._guard(lambda: E.parse_when(a["end"], self.ctx.tz))
+            f.update(all_day=not isinstance(en, datetime), end=en.isoformat())
+        body = self._guard(lambda: E.build_body({k: v for k, v in f.items() if v is not None}, self.tzname))
+        if not body:
+            raise ToolError("Nothing to change.")
+        r = await self.ga.json(acc["email"], "PATCH", base, json=body, params={"sendUpdates": "all"} if body.get("attendees") else {})
+        return {"updated": self._brief(E.norm_event(r, acc, cal, self.ga.label(acc)))}
+
+    async def delete_event(self, a):
+        acc, cal, eid = await self._locate(a["event"])
+        await self.ga.json(acc["email"], "DELETE", f"{urls()['cal']}/calendars/{quote(cal['id'], safe='')}/events/{quote(eid, safe='')}")
+        return {"deleted": a["event"]}
+
+    async def respond(self, a):
+        acc, cal, eid = await self._locate(a["event"])
+        base = f"{urls()['cal']}/calendars/{quote(cal['id'], safe='')}/events/{quote(eid, safe='')}"
+        cur = await self.ga.json(acc["email"], "GET", base)
+        atts = cur.get("attendees")
+        if not atts or not any(x.get("self") for x in atts):
+            raise ToolError("You aren't an invitee on that event.")
+        for x in atts:
+            if x.get("self"):
+                x["responseStatus"] = a["response"]
+        await self.ga.json(acc["email"], "PATCH", base, json={"attendees": atts})
+        return {"responded": a["response"]}
+
+    # ---- REST for the calendar UI ---------------------------------------------------------
+    @staticmethod
+    def _err(e: Exception, status: int = 400):
+        return JSONResponse({"error": str(e)}, status)
+
+    async def r_calendars(self, request: Request):
+        accts = self.ga.with_service("calendar")
+        cals = await self.calendars(accts)
+        return JSONResponse({"calendars": cals, "errors": getattr(self, "_last_errors", []), "default_account": self.ga.cfg["default_account"],
+                             "accounts": [{"email": a["email"], "label": self.ga.label(a), "color": a["color"]} for a in accts]})
+
+    async def r_prefs(self, request: Request):
+        b = await request.json()
+        key = f"{b['account']}|{b['id']}"
+        p = self.ga.cfg["calendar_prefs"].setdefault(key, {})
+        for k in ("visible", "color"):
+            if k in b:
+                p[k] = b[k]
+        self.ctx.config.save()
+        return JSONResponse({"ok": True})
+
+    async def r_events(self, request: Request):
+        q = request.query_params
+        try:
+            evs, errors = await self.events_in(q["start"], q["end"], q=q.get("q") or None, only_visible=q.get("all") != "1")
+        except (KeyError, ToolError) as e:
+            return self._err(e)
+        return JSONResponse({"events": evs, "errors": errors})
+
+    async def r_create(self, request: Request):
+        b = await request.json()
+        try:
+            acc, cal = await self._account_calendar(b.get("account"), b.get("calendar"))
+            all_day = bool(b.get("all_day"))
+            if not b.get("summary", "").strip():
+                b["summary"] = "(no title)"
+            body = E.build_body({**b, "all_day": all_day}, b.get("tz") or self.tzname)
+            params = {"sendUpdates": "all"} if b.get("attendees") else {}
+            if b.get("meet"):
+                params["conferenceDataVersion"] = 1
+            r = await self.ga.json(acc["email"], "POST", f"{urls()['cal']}/calendars/{quote(cal['id'], safe='')}/events", json=body, params=params)
+        except (ValueError, KeyError, ToolError) as e:
+            return self._err(e)
+        return JSONResponse(E.norm_event(r, acc, cal, self.ga.label(acc)))
+
+    async def r_patch(self, request: Request):
+        b = await request.json()
+        try:
+            acc, cal, eid = await self._locate(b["ref"])
+            tz = b.get("tz") or self.tzname
+            all_day = bool(b.get("all_day"))
+            base_url = f"{urls()['cal']}/calendars/{quote(cal['id'], safe='')}/events"
+            body = E.build_body({k: b.get(k) for k in ("summary", "description", "location", "attendees", "start", "end", "meet")} | {"all_day": all_day}, tz)
+            params = {"sendUpdates": "all"} if b.get("attendees") else {}
+            if b.get("meet"):
+                params["conferenceDataVersion"] = 1
+            target = eid
+            if b.get("scope") == "all":
+                cur = await self.ga.json(acc["email"], "GET", f"{base_url}/{quote(eid, safe='')}")
+                target = cur.get("recurringEventId") or eid
+                if cur.get("recurringEventId") and ("start" in body or "end" in body):   # shift the whole series by the same amount
+                    root = await self.ga.json(acc["email"], "GET", f"{base_url}/{quote(target, safe='')}")
+                    parse = lambda o: E.parse_when(o.get("dateTime") or o["date"], self.ctx.tz)
+                    if "start" in body:
+                        body["start"] = E.when_obj((parse(root["start"]) + (parse(body["start"]) - parse(cur["start"]))).isoformat(), all_day, tz)
+                    if "end" in body:
+                        body["end"] = E.when_obj((parse(root["end"]) + (parse(body["end"]) - parse(cur["end"]))).isoformat(), all_day, tz)
+            r = await self.ga.json(acc["email"], "PATCH", f"{base_url}/{quote(target, safe='')}", json=body, params=params)
+        except (ValueError, KeyError, ToolError) as e:
+            return self._err(e)
+        return JSONResponse(E.norm_event(r, acc, cal, self.ga.label(acc)))
+
+    async def r_delete(self, request: Request):
+        q = request.query_params
+        try:
+            acc, cal, eid = await self._locate(q["ref"])
+            url = f"{urls()['cal']}/calendars/{quote(cal['id'], safe='')}/events"
+            if q.get("scope") == "all":
+                cur = await self.ga.json(acc["email"], "GET", f"{url}/{quote(eid, safe='')}")
+                eid = cur.get("recurringEventId") or eid
+            await self.ga.json(acc["email"], "DELETE", f"{url}/{quote(eid, safe='')}")
+        except (KeyError, ToolError) as e:
+            return self._err(e)
+        return JSONResponse({"ok": True})
+
+    async def r_rsvp(self, request: Request):
+        b = await request.json()
+        try:
+            return JSONResponse(await self.respond({"event": b["ref"], "response": b["response"]}))
+        except (KeyError, ToolError) as e:
+            return self._err(e)
+
+    async def r_quickadd(self, request: Request):
+        b = await request.json()
+        try:
+            acc, cal = await self._account_calendar(b.get("account"), b.get("calendar"))
+            r = await self.ga.json(acc["email"], "POST", f"{urls()['cal']}/calendars/{quote(cal['id'], safe='')}/events/quickAdd", params={"text": b["text"]})
+        except (KeyError, ToolError) as e:
+            return self._err(e)
+        return JSONResponse(E.norm_event(r, acc, cal, self.ga.label(acc)))
 
     def routes(self):
-        return [Route("/agenda", self.agenda), Route("/auth/start", self.auth_start),
-                Route("/auth/callback", self.auth_callback), Route("/auth/disconnect", self.disconnect, methods=["POST"])]
+        return [Route("/calendars", self.r_calendars), Route("/calendar-prefs", self.r_prefs, methods=["PUT"]), Route("/events", self.r_events),
+                Route("/events", self.r_create, methods=["POST"]), Route("/event", self.r_patch, methods=["PATCH"]),
+                Route("/event", self.r_delete, methods=["DELETE"]), Route("/rsvp", self.r_rsvp, methods=["POST"]),
+                Route("/quickadd", self.r_quickadd, methods=["POST"])]

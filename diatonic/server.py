@@ -23,6 +23,7 @@ from .apps.registry import Registry
 from .config import Config, home
 from .context import Context
 from .db import Database
+from .google import auth as google_auth
 from .scheduler.engine import Scheduler
 from .scheduler.scripts import ScriptsDisabled
 from .scheduler.notify import Notifier
@@ -66,10 +67,10 @@ def sse(ev: dict) -> str:
 
 
 def create_app(config: Config | None = None, db: Database | None = None, *,
-               allowed_hosts: set[str] | None = None, registry: Registry | None = None) -> Starlette:
+               allowed_hosts: set[str] | None = None, registry: Registry | None = None, http=None) -> Starlette:
     config = config or Config()
     db = db or Database(home() / "diatonic.db")
-    ctx = Context(config, db)
+    ctx = Context(config, db, http)
     runs = RunManager()
     store = Store(db)
     ctx.broadcast = runs.broadcast
@@ -407,6 +408,7 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
         Route("/api/voice/transcribe", transcribe, methods=["POST"]),
         Route("/api/voice/tts", speak, methods=["POST"]),
         Route("/api/voice/setup", voice_setup, methods=["POST"]),
+        Mount("/api/google", routes=google_auth.routes(ctx, ctx.google)),
         *[Mount(f"/api/apps/{a.id}", routes=a.routes()) for a in registry.apps.values() if a.routes()],
         Mount("/", NoCacheStatic(directory=WEB, html=True)),
     ]
@@ -414,6 +416,7 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
     @asynccontextmanager
     async def lifespan(app):
         ctx.memory.prune()
+        await ctx.google.adopt_legacy()
         ctx.scheduler.start()
         yield
         await ctx.scheduler.stop()

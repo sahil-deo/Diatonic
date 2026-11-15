@@ -82,6 +82,11 @@ DEFAULTS: dict[str, Any] = {
         "retention_days": 30,
         "prefill_baseline": 250,  # tokens/s of an uncached prompt on this machine; used to estimate cache hits
     },
+    "google": {
+        "accounts": [],          # [{email, name, label, color, scopes, enabled, needs_reauth}]; tokens live in the keychain
+        "default_account": "",   # used for writes (create event, send mail) when you don't say which account
+        "calendar_prefs": {},    # {"<email>|<calendar id>": {"visible": bool, "color": "#rrggbb"}}
+    },
     "actions": [],  # saved prompts and script buttons; see diatonic/actions.py
     "notifications": {
         "native": True,        # macOS Notification Center, works with the browser closed

@@ -38,6 +38,14 @@ Targets: first-message-in-chat under 6 s, follow-ups under 3 s, plain lookups un
 - [ ] **Reference resolution.** "Close the second one", "snooze that" resolved against the last results in code (numbered handles), not by the model.
 - [ ] **Rolling state instead of history replay.** A short structured "what we were just doing" (last entities and results) in place of replaying old turns; cheaper and more cache-stable than summarising with the model.
 
+## Google (Calendar and Mail) follow-ups
+
+- [ ] **Verify against real Google.** Everything was built and tested against a local fake of the OAuth, Calendar and Gmail APIs (plus the real model); connect a real account and check the consent flow, token refresh, restricted Gmail scopes in Testing mode, shared calendars, conferenceData (Meet), HTML mail from real senders, and large mailboxes.
+- [ ] **Taint tracking for mail.** The model reads untrusted email; sending already always asks. Next step: warn on the approval card when a recipient or link came only from email content (not from the user's message or earlier mail with that person), and refuse auto-approval of sends in any run that read mail.
+- [ ] Mail: threading for drafts (edit/send a saved draft), signatures, labels management (create/rename/apply), snooze, mute, "unsubscribe" helper, attachments on compose, rich-text compose, offline cache and background sync, unread badge on the rail icon.
+- [ ] Calendar: working-hours and "free/busy" overlay across accounts in the grid, drag-copy, event colours, multiple reminders, availability suggestions in the create dialog ("find a time" using every account), time-zone display for other zones, printing, and push/incremental sync instead of refetching each view.
+- [ ] Per-account permissions in the agent: let one account be read-only for the agent even if connected with more access.
+
 ## Files app follow-ups
 
 - [ ] **Edit reliability on a 4B model.** On the real model a line-range edit dropped a needed line (the approval diff caught it, which is what the preview is for). Ideas: prefer `replace_text` for single-line changes, re-read the file right before editing, apply and re-verify (re-parse Python/JSON after the change), or let the harness compute the line range from an "old text" the model supplies.
