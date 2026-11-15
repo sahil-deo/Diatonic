@@ -86,6 +86,7 @@ DEFAULTS: dict[str, Any] = {
         "accounts": [],          # [{email, name, label, color, scopes, enabled, needs_reauth}]; tokens live in the keychain
         "default_account": "",   # used for writes (create event, send mail) when you don't say which account
         "calendar_prefs": {},    # {"<email>|<calendar id>": {"visible": bool, "color": "#rrggbb"}}
+        "redirect_path": "",     # which OAuth redirect URI to send Google: the default, or the original Calendar one
     },
     "actions": [],  # saved prompts and script buttons; see diatonic/actions.py
     "notifications": {

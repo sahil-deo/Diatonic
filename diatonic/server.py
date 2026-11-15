@@ -373,6 +373,8 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
                                 speak_text="This is a test notification.")
         return JSONResponse({"ok": True})
 
+    google_mounted, google_legacy = google_auth.build(ctx, ctx.google)
+
     routes = [
         Route("/api/memories", list_memories),
         Route("/api/memories", add_memory, methods=["POST"]),
@@ -408,7 +410,8 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
         Route("/api/voice/transcribe", transcribe, methods=["POST"]),
         Route("/api/voice/tts", speak, methods=["POST"]),
         Route("/api/voice/setup", voice_setup, methods=["POST"]),
-        Mount("/api/google", routes=google_auth.routes(ctx, ctx.google)),
+        google_legacy,
+        Mount("/api/google", routes=google_mounted),
         *[Mount(f"/api/apps/{a.id}", routes=a.routes()) for a in registry.apps.values() if a.routes()],
         Mount("/", NoCacheStatic(directory=WEB, html=True)),
     ]

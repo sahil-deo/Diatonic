@@ -595,3 +595,21 @@ def test_single_quoted_search_phrases_are_fixed(gx):
     assert mail.clean_query("subject:'Action required' in:inbox") == 'subject:"Action required" in:inbox'
     r = call(mail, "list_emails", query="subject:'Action required'")
     assert [e["subject"] for e in r["emails"]] == ["Action required"]
+
+
+def test_either_redirect_uri_works_for_web_clients(web):
+    """A Web-application OAuth client registered with the original Calendar URI must keep working."""
+    c, ctx = web
+    c.put("/api/google/client", json={"client_id": "cid", "client_secret": "csec"})
+    st = c.get("/api/google/state").json()
+    assert st["redirect_path"] == "/api/google/auth/callback" and [x["path"] for x in st["redirect_choices"]] == ["/api/google/auth/callback", "/api/apps/gcal/auth/callback"]
+    new = c.get("/api/google/auth/start").headers["location"]
+    assert "redirect_uri=http%3A%2F%2Ftestserver%2Fapi%2Fgoogle%2Fauth%2Fcallback" in new
+    assert c.put("/api/google/redirect", json={"path": "/api/apps/gcal/auth/callback"}).json()["redirect_path"] == "/api/apps/gcal/auth/callback"
+    old = c.get("/api/google/auth/start").headers["location"]
+    assert "redirect_uri=http%3A%2F%2Ftestserver%2Fapi%2Fapps%2Fgcal%2Fauth%2Fcallback" in old
+    assert c.put("/api/google/redirect", json={"path": "/evil"}).json()["redirect_path"] == "/api/apps/gcal/auth/callback"     # only the two known paths
+    asyncio.run(new_transport().get(old))
+    state = dict(p.split("=", 1) for p in old.split("?", 1)[1].split("&"))["state"]
+    r = c.get("/api/apps/gcal/auth/callback", params={"code": f"{WORK}|x", "state": state})                                    # the original path completes the sign-in
+    assert r.status_code in (302, 307) and f"connected={WORK}" in r.headers["location"] and ctx.google.get(WORK)
