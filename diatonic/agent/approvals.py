@@ -17,7 +17,7 @@ def resolve(approval_id: str, approved: bool | str) -> bool:
     fut = _pending.get(approval_id)
     if fut is None or fut.done():
         return False
-    fut.set_result(approved if approved == "chat" else bool(approved))
+    fut.set_result(approved if approved in ("chat", "job") else bool(approved))
     return True
 
 

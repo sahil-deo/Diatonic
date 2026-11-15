@@ -52,6 +52,10 @@ Targets: first-message-in-chat under 6 s, follow-ups under 3 s, plain lookups un
 - [ ] API apps: OAuth, pagination, import from an OpenAPI file (would make building almost fully code-driven), POST bodies beyond flat fields, eval over ~8 public APIs.
 - [x] **Saved models + cloud providers**: status-bar switcher, Settings → Models (Ollama, Gemini via AI Studio, Groq, any OpenAI-compatible), keys in keychain, private apps behind approval for cloud models. Cloud verified only with mocked APIs so far: needs a real Gemini and Groq key test.
 - [ ] Models: per-model sampling settings, token/cost totals per cloud model in Telemetry, automatic fallback to the local model when a cloud API is down.
+- [x] **Home screen tiles**: layouts (4 small, 2 stacked, 2 side by side, 1 big, suggestions), a snapshot per app (to-dos, calendar, mail, scheduler, GitHub, telemetry, notes, data and API apps), Customize, and `ui_set_home` for the agent.
+- [ ] Home: drag tiles to reorder, per-tile options (which mail account, which repo), more than 4 tiles.
+- [x] **Shell**: Terminal panel (PTY sessions over SSE + POST, xterm.js), agent `shell_run` with parsed read-only/approve/refuse classes, audit log, scheduled-job pre-approved commands. Verified with the real model (du, git status, versions, injection file).
+- [ ] Shell: spawn PTYs without fork in a threaded process (Python warns about `forkpty`), clickable links and search in the terminal, per-folder allow rules ("always allow `npm test` in Diatonic").
 - [ ] **Answer grounding check** is still the general fix for confident claims: compare what the final answer says happened with the tool results.
 - [ ] Mods: syntax-check scripts server-side (a broken script is only noticed after it runs), a diff when a mod is updated, and export/import of mods.
 - [x] Navigation, event/mail/note opening, dock approvals and layout modes verified in Chrome over the DevTools protocol (real model, real accounts). Still to check in Zen.

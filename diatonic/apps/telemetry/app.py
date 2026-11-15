@@ -22,6 +22,17 @@ class TelemetryApp(App):
         return [Tool("performance_summary", "Summarise recent agent speed and reliability.",
                      {"properties": {"days": {"type": "integer", "minimum": 1, "maximum": 30}}}, self.performance_summary)]
 
+    async def snapshot(self, n: int) -> dict:
+        s = self.ctx.telemetry.summary(1)
+        sec = lambda ms: f"{ms / 1000:.1f}s" if ms is not None else "—"
+        stats = [{"label": "runs today", "value": s["runs"]}, {"label": "median", "value": sec(s.get("p50_ms"))},
+                 {"label": "slowest 10%", "value": sec(s.get("p90_ms"))}, {"label": "errors", "value": s.get("errors", 0)}]
+        tools = sorted(s.get("tools") or [], key=lambda t: -t["calls"])[:n]
+        return {"stats": stats if n > 3 else stats[:3],
+                "items": [{"text": t["name"].replace("_", " "), "sub": f"{t['calls']} calls · {t['avg_ms']} ms", "tone": "warn" if t["errors"] else None}
+                          for t in tools] if n > 3 else [],
+                "empty": "No runs yet today."}
+
     async def performance_summary(self, a):
         s = self.ctx.telemetry.summary(a.get("days", 1))
         if not s["runs"]:

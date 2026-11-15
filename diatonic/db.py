@@ -60,6 +60,9 @@ class Database:
               prompt_tokens INTEGER, completion_tokens INTEGER, answer_chars INTEGER,
               guards TEXT NOT NULL DEFAULT '[]', steps TEXT NOT NULL DEFAULT '[]');
             CREATE INDEX IF NOT EXISTS idx_tel_started ON telemetry_runs(started_at);
+            CREATE TABLE IF NOT EXISTS shell_log (      -- every command the agent ran or tried (the Terminal panel's History)
+              id INTEGER PRIMARY KEY AUTOINCREMENT, at REAL NOT NULL, source TEXT NOT NULL, conv_id TEXT, cwd TEXT,
+              command TEXT NOT NULL, decision TEXT NOT NULL, exit_code INTEGER, seconds REAL, output TEXT NOT NULL DEFAULT '');
             CREATE TABLE IF NOT EXISTS app_items (     -- rows of the data apps the agent builds (one table for all of them)
               id INTEGER PRIMARY KEY AUTOINCREMENT, app TEXT NOT NULL, list TEXT NOT NULL, parent INTEGER,
               data TEXT NOT NULL DEFAULT '{}', pos REAL NOT NULL DEFAULT 0, created_at REAL NOT NULL, updated_at REAL NOT NULL);
@@ -67,6 +70,17 @@ class Database:
             PRAGMA foreign_keys = ON;
             """
         )
+
+    # ---- shell log -----------------------------------------------------------
+    def log_shell(self, **row) -> None:
+        cols = ("at", "source", "conv_id", "cwd", "command", "decision", "exit_code", "seconds", "output")
+        row = {"at": time.time(), "output": "", **row}
+        self.conn.execute(f"INSERT INTO shell_log ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})", tuple(row.get(c) for c in cols))
+        self.conn.execute("DELETE FROM shell_log WHERE id NOT IN (SELECT id FROM shell_log ORDER BY id DESC LIMIT 2000)")
+        self.conn.commit()
+
+    def shell_log(self, limit: int = 100) -> list[dict]:
+        return [dict(r) for r in self.conn.execute("SELECT * FROM shell_log ORDER BY id DESC LIMIT ?", (limit,))]
 
     # ---- data apps ---------------------------------------------------------
     def items(self, app: str, lst: str | None = None) -> list[dict]:

@@ -37,6 +37,7 @@ function ask(ev) {
     codeProblem(ev) ? h("div", { class: "err" }, codeProblem(ev)) : null,
     h("div", { class: "a-btns" }, h("button", { class: "btn primary", type: "button", onclick: () => decide(true) }, ev.share ? "Allow once" : "Approve", h("kbd", {}, "⌘↵")),
       ev.share && h("button", { class: "btn", type: "button", onclick: () => api.approve(ev.id, true, "chat").catch(() => {}) }, "Allow for this chat"),
+      ev.job && h("button", { class: "btn", type: "button", onclick: () => api.approve(ev.id, true, "job").catch(() => {}) }, "Always allow for this job"),
       h("button", { class: "btn", type: "button", onclick: () => decide(false) }, "Deny", h("kbd", {}, "Esc")))));
 }
 const clearAsk = (id) => (id ? asks.querySelector(`[data-id="${id}"]`)?.remove() : asks.replaceChildren());

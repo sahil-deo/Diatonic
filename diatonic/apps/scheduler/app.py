@@ -1,6 +1,7 @@
 """Reminders and scheduled jobs (notify / prompt / script)."""
 from __future__ import annotations
 
+import re
 from datetime import datetime
 
 from starlette.requests import Request
@@ -20,7 +21,7 @@ class SchedulerApp(App):
     icon = "clock"
     description = "Reminders, and jobs that run a prompt or a script on a schedule."
     panel = True
-    keywords = ["remind", "reminder", "reminders", "cron", "job", "jobs", "every", "daily", "weekly", "hourly",
+    keywords = ["remind", "reminder", "reminders", "cron", "job", "jobs", "every", "daily", "weekly", "hourly", "reschedule",
                 "monthly", "alarm", "timer", "snooze", "scheduled", "recurring"]
     default_allow = ["remind_me", "pause_job", "resume_job", "run_job_now"]
 
@@ -31,10 +32,24 @@ class SchedulerApp(App):
             raise ToolError("The scheduler isn't running.")
         return self.ctx.scheduler
 
+    async def snapshot(self, n: int) -> dict:
+        items = sorted((s for s in self.sched.store.list() if s["state"] == "active" and s["next_run"]), key=lambda s: s["next_run"])
+        return {"items": [{"text": s["name"], "sub": self.sched.describe_next(s), "badge": "reminder" if s["kind"] == "notify" else s["kind"]}
+                          for s in items[:n]], "empty": "Nothing scheduled."}
+
     def _fmt(self, s: dict) -> dict:
         return {"id": s["id"], "name": s["name"], "kind": s["kind"], "when": s["spec"].get("text"),
                 "next": self.sched.describe_next(s), "state": s["state"], "last": s["last_status"],
                 "writes_allowed": bool(s["allow_writes"]) or None}
+
+    @staticmethod
+    def _bare_hour(when: str | None, s: dict) -> str | None:
+        """'at 7' has no am/pm and is read by a fixed rule (1-7 = pm). Make the model say the real time so the user can catch it."""
+        m = re.search(r"\b(?:at|@)\s*(\d{1,2})(?::\d{2})?\b(?!\s*(?:am|pm|a\.m|p\.m|o'?clock in the))", (when or "").lower())
+        if not m or int(m.group(1)) > 12:
+            return None
+        return (f"'{when}' has no am/pm and was read as {s['when']} (next: {s['next']}). Tell the user the exact time "
+                f"you set, and that they can say am or pm if that's wrong.")
 
     def _get(self, sid: int, kinds: tuple[str, ...] | None = None) -> dict:
         s = self.sched.store.get(int(sid))
@@ -61,9 +76,13 @@ class SchedulerApp(App):
             Tool("schedule_prompt", "Run an AI prompt on a schedule (e.g. a daily briefing). It runs read-only "
                  "in its own chat and notifies the user with the result.",
                  {"properties": {"name": {"type": "string"}, "when": WHEN,
-                                 "prompt": {"type": "string", "description": "What the assistant should do each time"}},
+                                 "prompt": {"type": "string", "description": "What the assistant should do each time"},
+                                 "commands": {"type": "array", "items": {"type": "string"},
+                                              "description": "Exact shell commands (beyond read-only ones) the job may run unattended, e.g. git pull"}},
                   "required": ["name", "when", "prompt"]}, self.schedule_prompt, WRITE,
-                 describe=lambda a: f"Schedule “{a.get('name')}” ({a.get('when')}): {str(a.get('prompt'))[:120]}"),
+                 describe=lambda a: f"Schedule “{a.get('name')}” ({a.get('when')}): {str(a.get('prompt'))[:120]}"
+                                    + (f". It may run, unattended: {'; '.join(a['commands'])}" if a.get("commands") else ""),
+                 ask=lambda a: True),   # always a card: it can pre-approve commands for unattended runs
             Tool("schedule_script", "Run a shell command on a schedule. Notifies on failure.",
                  {"properties": {"name": {"type": "string"}, "when": WHEN,
                                  "command": {"type": "string", "description": "Shell command to run"}},
@@ -72,6 +91,14 @@ class SchedulerApp(App):
                  precheck=lambda a: None if self.ctx.config.data["scheduler"]["allow_scripts"] else
                  "Script jobs are turned off. The user can enable them in Settings → Automation."),
             Tool("list_jobs", "List scheduled jobs (prompt and script).", {}, self.list_jobs),
+            Tool("update_job", "Change a reminder or job (ids from list_reminders / list_jobs): its time ('when', in plain words), "
+                 "a reminder's text, a job's name, a prompt job's prompt, or a script job's command. Only pass what changes. "
+                 "When the user asks to move or change one, find its id with list_reminders/list_jobs and call this straight away: "
+                 "don't ask them to confirm (they'll see the result, and changing it back is one more request).",
+                 {"properties": {"id": SID, "when": WHEN, "text": {"type": "string"}, "name": {"type": "string"},
+                                 "prompt": {"type": "string"}, "command": {"type": "string"}}, "required": ["id"]},
+                 self.update_job, WRITE, title="Update", ask=self._update_needs_card,
+                 describe=lambda a: "Change item " + str(a.get("id")) + ": " + ", ".join(f"{k} → {str(v)[:120]}" for k, v in a.items() if k != "id" and v)),
             Tool("pause_job", "Pause a job or reminder.", {"properties": {"id": SID}, "required": ["id"]}, self.pause_job, WRITE),
             Tool("resume_job", "Resume a paused job.", {"properties": {"id": SID}, "required": ["id"]}, self.resume_job, WRITE),
             Tool("delete_job", "Delete a job.", {"properties": {"id": SID}, "required": ["id"]},
@@ -84,7 +111,8 @@ class SchedulerApp(App):
 
     async def remind_me(self, a):
         s = self._create(name=a["text"], kind="notify", when=a["when"], payload={"text": a["text"]})
-        return {"reminder": self._fmt(s), "note": "Confirm this time to the user."}
+        f = self._fmt(s)
+        return {"reminder": f, "note": self._bare_hour(a["when"], f) or "Confirm this time to the user."}
 
     async def list_reminders(self, a):
         return [self._fmt(s) for s in self.sched.store.list("notify")] or "No reminders."
@@ -96,14 +124,43 @@ class SchedulerApp(App):
         return {"cancelled": s["name"]}
 
     async def schedule_prompt(self, a):
-        s = self._create(name=a["name"], kind="prompt", when=a["when"], payload={"prompt": a["prompt"]})
-        return {"job": self._fmt(s), "note": "Runs read-only. Writes can be enabled for this job in the Scheduler panel."}
+        cmds = [c.strip() for c in (a.get("commands") or []) if str(c).strip()][:20]
+        s = self._create(name=a["name"], kind="prompt", when=a["when"], payload={"prompt": a["prompt"], "commands": cmds})
+        return {"job": self._fmt(s), "note": "Runs read-only" + (f", and may run these exact shell commands: {', '.join(cmds)}" if cmds else "")
+                + ". Writes can be enabled for this job in the Scheduler panel."}
 
     async def schedule_script(self, a):
         if not self.ctx.config.data["scheduler"]["allow_scripts"]:
             raise ToolError("Script jobs are turned off. The user can enable them in Settings → Automation.")
         s = self._create(name=a["name"], kind="script", when=a["when"], payload={"command": a["command"]})
         return {"job": self._fmt(s)}
+
+    async def update_job(self, a):
+        s = self._get(a["id"])
+        payload = {}
+        if a.get("text") and s["kind"] == "notify":
+            payload["text"] = a["text"]
+        if a.get("prompt") and s["kind"] == "prompt":
+            payload["prompt"] = a["prompt"]
+        if a.get("command") and s["kind"] == "script":
+            payload["command"] = a["command"]
+        name = a.get("name") or (a.get("text") if s["kind"] == "notify" else None)
+        if not (name or a.get("when") or payload):
+            raise ToolError("Say what to change: when, text (reminders), name, prompt (prompt jobs) or command (script jobs).", bad_args=True)
+        try:
+            s = self.sched.edit(s["id"], name=name, when=a.get("when"), payload=payload or None)
+        except timeparse.ParseError as e:
+            raise ToolError(str(e), bad_args=True)
+        f = self._fmt(s)
+        return {"updated": f, "note": self._bare_hour(a.get("when"), f)}
+
+    def _update_needs_card(self, a: dict) -> bool:
+        """Moving or renaming a reminder is like setting one (no card); changing what a job runs is not."""
+        try:
+            s = self._get(a.get("id"))
+        except (ToolError, TypeError, ValueError):
+            return False                     # the handler reports the bad id
+        return s["kind"] != "notify" and bool(a.get("prompt") or a.get("command") or s["kind"] == "script")
 
     async def list_jobs(self, a):
         return [self._fmt(s) for s in self.sched.store.list("job")] or "No jobs."
@@ -145,10 +202,10 @@ class SchedulerApp(App):
         jobs = []
         for s in st.list("job"):
             f = self._fmt(s)
-            f["payload"] = {"prompt": s["payload"].get("prompt"), "command": s["payload"].get("command")}
+            f["payload"] = {"prompt": s["payload"].get("prompt"), "command": s["payload"].get("command"), "commands": s["payload"].get("commands") or []}
             f["allow_writes"] = bool(s["allow_writes"])
             jobs.append(f)
-        return JSONResponse({"reminders": reminders, "jobs": jobs,
+        return JSONResponse({"reminders": reminders, "jobs": jobs, "shell_enabled": bool(self.ctx.config.data.get("shell", {}).get("agent")),
                              "scripts_enabled": self.ctx.config.data["scheduler"]["allow_scripts"]})
 
     async def create_item(self, request: Request):
@@ -158,6 +215,7 @@ class SchedulerApp(App):
             if kind == "notify":
                 s = self.sched.create(name=b["text"], kind="notify", when=b["when"], payload={"text": b["text"]})
             elif kind == "prompt":
+                b["name"] = (b.get("name") or "").strip() or " ".join(str(b["prompt"]).split())[:50]   # never a nameless job
                 s = self.sched.create(name=b["name"], kind="prompt", when=b["when"], payload={"prompt": b["prompt"]},
                                       allow_writes=bool(b.get("allow_writes")))
             elif kind == "script":
@@ -184,6 +242,22 @@ class SchedulerApp(App):
         elif action == "delete":
             self.sched.store.delete(sid)
             self.sched.changed()
+        elif action == "commands" and s["kind"] == "prompt":   # pre-approved shell commands: only the UI (or an approved card) sets them
+            cmds = [c.strip() for c in str(b.get("value") or "").splitlines() if c.strip()][:20]
+            self.sched.store.update(sid, payload={**s["payload"], "commands": cmds})
+            self.sched.changed()
+        elif action == "edit":
+            payload = {}
+            if s["kind"] == "notify" and b.get("text"):
+                payload["text"] = b["text"]
+            if s["kind"] == "prompt" and b.get("prompt"):
+                payload["prompt"] = b["prompt"]
+            if s["kind"] == "script" and b.get("command"):
+                payload["command"] = b["command"]
+            try:
+                self.sched.edit(sid, name=b.get("name") or (b.get("text") if s["kind"] == "notify" else None), when=b.get("when"), payload=payload or None)
+            except timeparse.ParseError as e:
+                return JSONResponse({"error": str(e)}, 400)
         elif action == "allow_writes" and s["kind"] == "prompt":  # only the UI can grant this, never the agent
             self.sched.store.update(sid, allow_writes=int(bool(b.get("value"))))
             self.sched.changed()

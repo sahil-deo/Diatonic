@@ -9,6 +9,7 @@ A local, modular agentic harness. One agent, many **apps**, voice in and a short
 - **Parallel chats:** every chat runs as a background task on the server. Start one, switch to another, even close the tab; runs keep going and you're alerted when one finishes or needs approval.
 - **Safe by default:** changes you can't simply undo (sending mail, editing files, deleting, running code the agent wrote) ask for approval first; a cloud model also asks before it may use private data. See [Approvals](#approvals).
 - **Voice:** push-to-talk dictation with local Whisper (`small.en`); an optional spoken *summary* (not the whole reply) with local Piper.
+- **Terminal and shell:** a real terminal in the app (your login shell, tabs, vim/htop work, sessions survive reloads), and, if you allow it, shell commands for the agent: read-only ones run at once, anything else asks.
 - **Lightweight:** Python backend on Starlette; vanilla HTML/CSS/JS frontend (no React, no build step, no frontend dependencies). Each app is a self-contained folder; adding one never touches core code.
 
 ## Quick start
@@ -171,6 +172,26 @@ Keys are kept in the keychain, one per API host, never in `config.json` or a pro
 
 **Cloud models and private data.** Mail, Calendar, Files, Notes, Memory, GitHub and the apps you build are *private* (change it per app in Settings → Apps). With a cloud model, any private tool asks first ("Allow once", "Allow for this chat", "Deny"), scheduled runs don't get private tools at all, remembered facts and `@file` contents aren't sent, earlier answers in the chat that used private data are replaced with a note, and on-screen titles (an email subject) are left out.
 
+## Terminal and shell access
+
+**Terminal** (⌘ icon in the rail) is a real terminal: your login shell on a pseudo-terminal, rendered with [xterm.js](https://xtermjs.org) (vendored in `web/vendor/xterm/`, MIT). Tabs, colours, resize, copy (⌘C with a selection) and paste, ⌘K to clear; vim, htop, ssh and REPLs work. Sessions run in the server, so closing the panel or reloading keeps them going and reopening replays their recent output. **Ask the agent** sends the selection (or the last screenful) to the chat; **Agent history** lists every command the agent ran, with output, and can put one in your terminal.
+
+**The agent's shell** is off until you turn it on in **Settings → Automation**. Then it has one tool, `shell_run(command, cwd, timeout)`, and every command is classified by parsing it, not by pattern-matching:
+
+| Kind | Examples | What happens |
+|---|---|---|
+| Read-only | `ls`, `cat`, `grep`, `du -sh * \| sort -hr`, `git status/log/diff`, `node -v && python3 --version`, `cd X && ls` | runs at once |
+| Anything else | `npm install`, `git commit`, `mkdir`, redirects into files, unknown programs | **approval card** with the exact command, the folder, and warnings (deletes, network, piping a download into a shell, permissions, "this run read content written by others") |
+| Refused | `sudo`, the `security` keychain tool, `~/.diatonic` (your keys and tokens), whole-disk or home-folder deletes | never runs |
+
+Commands run in any folder you name (default: your first shared Files folder), with no input, a clean environment (API keys in the server's environment are not passed on), a 60 s timeout (up to 600 s when asked for), and Stop kills the whole process tree. Output streams live into the chat card; the model gets the end of it. Shell output counts as untrusted (like email), "always allow" never skips the card, and with a cloud model the shell is private (it asks before sharing anything).
+
+**Scheduled jobs** may run read-only commands, plus the commands you list on the job ("Commands it may run unattended" in the Scheduler panel, or pre-approved on the card when the agent creates the job). A chain like `cd ~/proj && source .venv/bin/activate && python3 run.py` counts when every part is listed or read-only; a `cd` to an unlisted folder before a listed command, or a pipe or redirect that isn't listed, does not. The approval card of a scheduled run also has **Always allow for this job**, which runs it and adds that exact command to the job's list, so it only asks once. Anything else waits in your inbox for approval if the job may propose changes, and is refused otherwise. Every command, with who allowed it, is in the Terminal panel's Agent history.
+
+## Home screen
+
+An empty chat shows live tiles from your apps: to-dos, calendar, latest mail, upcoming reminders and jobs, GitHub issues assigned to you, a telemetry summary, recent notes, and the apps you built (progress for data apps, the latest values for API apps). Click an item to open it in its app. **Customize** (below the tiles) picks the layout, 4 small, 2 stacked, 2 side by side or 1 big (or the old suggestion chips), and the app in each tile; or ask the agent ("put my mail and GitHub issues side by side on the home screen"). Tiles refresh every two minutes and when their app's data changes; mail and GitHub are cached for a minute. Any app can offer a tile by implementing `snapshot(n)`.
+
 ## Make it yours: quick actions, `/` commands and interface
 
 **Saved prompts and script buttons** (Settings → Actions, or **+ Add** on the bar above the message box). Each one can be a chip on the bar, a `/command`, a keyboard shortcut, or all three.
@@ -187,9 +208,10 @@ Keys are kept in the keychain, one per API host, never in `config.json` or a pro
 Say what you want in plain words ("remind me to call mom tomorrow at 9", "every weekday at 8 give me my to-do briefing", "add a to-do to send the invoice by Friday", "jot down that the wifi password is on the fridge") or use the panels in the left rail.
 
 **Scheduler** (`clock` icon)
-- **Reminders:** a notification at a time you give. Times are parsed by code, not by the model: `in 20 minutes`, `tomorrow 9am`, `friday 5pm`, `2026-11-20 15:00`, `every weekday at 9`, `every 30 minutes`, `monthly on the 1st at 8am` or a 5-field cron like `0 9 * * 1-5`.
-- **Prompt jobs:** run an AI prompt on a schedule in their own chat (named `⏰ <job> · <time>`) and notify you with the result. They are **read-only**: the tools that change things aren't even offered. In the panel you can tick *Allow it to propose changes*; writes still need approval, and with nobody there they time out and are denied. Only the UI can grant this, never the agent.
+- **Reminders:** a notification at a time you give. Times are parsed by code, not by the model: `in 20 minutes`, `tomorrow 9am`, `friday 5pm`, `2026-11-20 15:00`, `every weekday at 9`, `every 30 minutes`, `monthly on the 1st at 8am` or a 5-field cron like `0 9 * * 1-5`. A bare hour without am/pm is read as pm from 1 to 7 ("at 5" means 5 pm) 8 to 11 as am, and 12 as noon; when that rule was used the agent tells you the exact time it set, so say "7am" if you meant the morning.
+- **Prompt jobs:** run an AI prompt on a schedule in their own chat (named `⏰ <job> · <time>`) and notify you with the result. They are **read-only**: the tools that change things aren't even offered. In the panel you can tick *Allow it to propose changes*; writes then still need approval, a notification ("A scheduled job needs your approval") points you to the waiting card, and with nobody there it times out and is denied. Only the UI can grant this, never the agent. With shell access on, a prompt job may run read-only commands plus the exact commands listed under *Commands it may run unattended* (see [Terminal and shell access](#terminal-and-shell-access)).
 - **Script jobs:** run a shell command on a schedule (timeout, killed as a whole process group, minimal environment, output captured, notification on failure). **Off by default**: turn them on in Settings → Automation. If the agent proposes one you get an approval card with the exact command.
+- **Editing:** click a reminder (or ✎) to change its text or time in place, or **Edit** on a job to change its name, time and prompt or command; the next run is recalculated, and a time that can't be understood changes nothing. Or ask: "move my stretch reminder to 7pm", "change the briefing to 7:30am". The agent moves reminders and job times without a card; changing what a job runs asks first.
 - **Reliability:** everything is stored in SQLite. After downtime a missed one-off reminder fires once, marked as late; a missed recurring job fires once and then resumes on schedule; a job still running is skipped rather than doubled. Run history is kept per job.
 
 **To-dos:** title, due date, priority, optional reminder at the due time (completing or deleting the to-do cancels its reminder).
@@ -262,6 +284,7 @@ With a cloud model, private apps get an extra card, "Share private data with a c
 | / | Focus the composer; typing it in the message box opens commands and saved prompts |
 | Hold ⌥⇧Space | Push-to-talk |
 | Enter / Shift+Enter | Send / new line |
+| In the Terminal | ⌘C copies a selection, ⌘V pastes, ⌘K clears the terminal (not the palette), Esc goes to the program (it never denies an approval card) |
 
 ## Adding an app
 
@@ -310,7 +333,8 @@ diatonic/
   dataapps.py          runtime for data apps (lists and fields, no code)
   apiapps.py           runtime for API apps (server-side calls with host and size limits)
   google/              multi-account OAuth, tokens, authenticated requests
-  apps/                base.py, registry.py, ui/ (interface tools), github/, gcal/, gmail/, files/, …
+  apps/                base.py, registry.py, ui/ (interface tools), shell/ (Terminal + agent shell), github/, gcal/, gmail/, files/, …
+  shell/               classify.py (read-only / approve / refuse), runner.py (agent commands), terminal.py (PTY sessions)
   voice/               stt.py (Whisper), tts.py (Piper), summarizer.py, models.py
   web/                 index.html, css/, js/ (ES modules), apps/ (panels; _data.js and _api.js serve built apps)
 tests/

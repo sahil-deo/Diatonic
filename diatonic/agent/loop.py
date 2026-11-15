@@ -50,7 +50,8 @@ def build_system_prompt(ctx, registry) -> str:
 # "show my calendar", "open my latest email", "hide the sidebar": the user wants the screen moved, not data read out.
 # Only the interface tools are offered then, so a small model can't wander off into a lookup (and the prompt is tiny).
 _NAV = re.compile(r"^\W*(?:(?:please|can you|could you|just)\s+)*(?:show|open|go to|bring up|pull up|take me to|switch to|display|hide|expand|collapse|maximi[sz]e|minimi[sz]e|exit|leave|restore|shrink)\b", re.I)
-_NAV_NOT = re.compile(r"\b(?:and then|then|summari[sz]e|tell me|what|how many|count|explain|read (?:it|me)|list)\b|\d", re.I)
+_NAV_NOT = re.compile(r"\b(?:and then|then|summari[sz]e|tell me|what|how many|count|explain|read (?:it|me)|list|status|versions?|"
+                      r"space|size|usage|running|installed|log|diff)\b|\d", re.I)   # "show me the git status" asks for data
 
 
 def is_navigation(text: str) -> bool:
@@ -303,7 +304,21 @@ async def _execute(call: dict, tool_map: dict, registry, guard: RunGuard, out: d
         return
 
     describe = tool.describe(args) if tool.describe else tool.title
-    needs = tool.needs_approval and not registry.is_always_allowed(app, tool)
+    needs = tool.ask(args) if tool.ask else tool.needs_approval and not registry.is_always_allowed(app, tool)
+    if needs and tool.ask and guard.approval_timeout is not None:   # unattended (scheduled): nobody to see a card right now
+        job = session.JOB.get() or {}
+        from ..shell.classify import covered
+        if covered(str(args.get("command", "")), job.get("commands", [])):
+            needs = False          # the user pre-approved this on the job (each part of a `&&` chain listed, or read-only)
+        elif guard.readonly:
+            msg = ("This scheduled job may not run that unattended. Commands it may run must be listed (pre-approved) on the job "
+                   "in the Scheduler panel, or the job must be allowed to propose changes.")
+            yield {"type": "tool_call", "id": cid, "name": name, "app": app.id, "title": tool.title, "args": args, "risk": tool.risk,
+                   "describe": describe, "needs_approval": False}
+            out.update(ok=False, content=f"Error: {msg}")
+            guard.errors += 1
+            yield {"type": "tool_result", "id": cid, "ok": False, "preview": out["content"], "ms": 0}
+            return
     share = bool(getattr(guard, "cloud", False) and registry.is_private(app) and app.id not in guard.grants)
     if share:   # the result would go to a model running elsewhere: the user decides, every time or for this chat
         needs = True
@@ -323,13 +338,20 @@ async def _execute(call: dict, tool_map: dict, registry, guard: RunGuard, out: d
             return
         except Exception:
             preview = None
+    job_id = (session.JOB.get() or {}).get("id") if needs and tool.ask and args.get("command") else None
     yield {"type": "tool_call", "id": cid, "name": name, "app": app.id, "title": tool.title, "args": args,
-           "risk": tool.risk, "describe": describe, "needs_approval": needs, "preview": preview, "share": share}
+           "risk": tool.risk, "describe": describe, "needs_approval": needs, "preview": preview, "share": share, "job": job_id}
     out["approval"] = False
     if needs:
         out["approval"] = True
         fut = approvals.request(cid)
         yield {"type": "notify", "text": f"I need your approval: {describe}"}
+        if guard.approval_timeout is not None and ctx is not None and getattr(ctx, "notifier", None):   # a scheduled run is waiting
+            try:
+                await ctx.notifier.send("A scheduled job needs your approval", describe[:300], kind="approval",
+                                        data={"conversation_id": guard.conv_id})
+            except Exception:
+                pass
         try:
             approved = await asyncio.wait_for(fut, guard.approval_timeout)
         except asyncio.TimeoutError:
@@ -338,6 +360,15 @@ async def _execute(call: dict, tool_map: dict, registry, guard: RunGuard, out: d
             approvals.discard(cid)
         if approved == "chat" and share:
             guard.grants.add(app.id)   # yes for the rest of this chat (with this model)
+        if approved == "job" and job_id and ctx is not None and getattr(ctx, "scheduler", None):
+            try:                       # yes, and from now on this job may run this exact command unattended
+                st = ctx.scheduler.store
+                s = st.get(job_id)
+                cmds = list(dict.fromkeys([*(s["payload"].get("commands") or []), str(args["command"]).strip()]))[:20]
+                st.update(job_id, payload={**s["payload"], "commands": cmds})
+                ctx.scheduler.changed()
+            except Exception:
+                pass
         yield {"type": "tool_status", "id": cid, "status": "approved" if approved else "denied"}
         if not approved:
             out.update(ok=False, denied=True, content="The user denied this action. Don't retry it; acknowledge and ask what they'd like instead.")
@@ -349,8 +380,9 @@ async def _execute(call: dict, tool_map: dict, registry, guard: RunGuard, out: d
     t0 = time.monotonic()
     if tool.name in app.untrusted_tools:
         session.mark_untrusted(app.id)   # from here on this run is not trusted to change the interface
+    token = session.CALL.set((guard.conv_id, cid))
     try:
-        result = await asyncio.wait_for(tool.handler(args), 60)
+        result = await asyncio.wait_for(tool.handler(args), getattr(tool, "timeout", None) or 60)
         text, ok = _dump(result), True
     except ToolError as e:
         text, ok = f"Error: {e}", False
@@ -360,6 +392,8 @@ async def _execute(call: dict, tool_map: dict, registry, guard: RunGuard, out: d
         text, ok = "Error: the app took too long to respond.", False
     except Exception as e:  # tool bugs shouldn't crash the run
         text, ok = f"Error: {type(e).__name__}: {e}", False
+    finally:
+        session.CALL.reset(token)
     ms = int((time.monotonic() - t0) * 1000)
     guard.remember(key, ok=ok, content=clip(text, MAX_RESULT_CHARS), risk=tool.risk)
     if not ok:
@@ -405,6 +439,7 @@ async def run_agent(ctx, registry, conv_id: str, text: str, *, speak: bool = Fal
     guard.cloud = ctx.cloud() if hasattr(ctx, "cloud") else False
     guard.grants = ctx.cloud_grants.setdefault((conv_id, acfg.get("active_model") or acfg["model"]), set()) if guard.cloud else set()
     guard.model_label = acfg["model"]
+    guard.conv_id = conv_id
     hidden = {a.id for a in registry.apps.values() if registry.is_private(a)} - guard.grants if guard.cloud else set()
 
     history = build_history(ctx.db.history(conv_id, limit=int(acfg["history_messages"])), int(acfg["history_chars"]), hidden)
@@ -424,7 +459,7 @@ async def run_agent(ctx, registry, conv_id: str, text: str, *, speak: bool = Fal
     if attachments:   # the user attached what the answer needs, so a no-tool reply is legitimate (no 'call a tool' nudge)
         expects_tool = False
     if readonly:  # unattended runs may only read; nothing can be changed without a person present
-        tool_map = {n: (a, t) for n, (a, t) in tool_map.items() if not t.needs_approval and a.id not in hidden}
+        tool_map = {n: (a, t) for n, (a, t) in tool_map.items() if (not t.needs_approval or t.ask) and a.id not in hidden}
     mem = ctx.memory
     # With no app named in the request every app's tools are offered as a fallback, but app-specific facts aren't.
     facts = mem.relevant({a.id for a, _ in tool_map.values()} if (expects_tool or prior_apps) else set())

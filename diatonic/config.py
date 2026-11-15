@@ -65,6 +65,7 @@ DEFAULTS: dict[str, Any] = {
         "width": "default",         # narrow | default | wide | full (chat column)
         "sidebar": "show",          # show | hide
         "sidebar_width": "default", # narrow | default | wide (the chat list)
+        "home": {"layout": "grid4", "slots": []},   # home-screen tiles; empty slots are filled with sensible apps
         "show_status_bar": True,
         "show_quick_actions": True,
         "show_suggestions": True,
@@ -105,6 +106,11 @@ DEFAULTS: dict[str, Any] = {
         "script_timeout": 60,     # seconds (hard max 900)
         "keep_prompt_chats": 5,   # chats kept per scheduled prompt
         "approval_timeout": 900,  # unattended runs deny writes nobody approves within this
+    },
+    "shell": {
+        "agent": False,           # the agent may run shell commands: off until you turn it on
+        "timeout": 60,            # seconds per agent command (the approval card can allow up to max_timeout)
+        "max_timeout": 600,
     },
     "timezone": "",  # empty = system timezone
     "_v": 2,

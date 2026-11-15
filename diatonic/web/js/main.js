@@ -196,7 +196,7 @@ async function setTheme(t) { state.config = await api.putConfig({ appearance: { 
 
 addEventListener("keydown", (e) => {
   const mod = e.metaKey || e.ctrlKey;
-  if (mod && e.key.toLowerCase() === "k") { e.preventDefault(); openPalette(commands); }
+  if (mod && e.key.toLowerCase() === "k" && !document.activeElement?.closest?.(".xterm")) { e.preventDefault(); openPalette(commands); }   // in the terminal ⌘K clears
   else if (mod && e.key === ",") { e.preventDefault(); openSettings(); }
   else if (mod && e.key.toLowerCase() === "b" && !e.shiftKey) { e.preventDefault(); toggleSidebar(); }
   else if (mod && e.shiftKey && e.key.toLowerCase() === "o") { e.preventDefault(); chat.newChat(); }
@@ -230,7 +230,7 @@ async function boot() {
   on("apps", () => { renderRail(); if (!document.querySelector("#messages .msg")) chat.renderEmpty?.(); });   // never wipe a chat in view
   on("panel", renderRail);
   on("health", refreshHealth);
-  on("config", () => { applyTheme(); applyAppearance(); updateHint(); paintSpeakToggle(); renderRail(); });
+  on("config", () => { applyTheme(); applyAppearance(); updateHint(); paintSpeakToggle(); renderRail(); if (!document.querySelector("#messages .msg")) chat.renderEmpty(); });
   on("rail-changed", renderRail);
   on("open-file", () => (state.panelApp === "files" ? refreshPanel() : openPanel("files")));
   on("prefill", (t) => { setInput(t); });

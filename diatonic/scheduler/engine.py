@@ -6,6 +6,7 @@ import logging
 import time
 from datetime import datetime
 
+from ..agent import session
 from ..agent.guards import clip, collapse_repeats
 from ..voice import summarizer
 from . import timeparse
@@ -56,6 +57,26 @@ class Scheduler:
                              next_run=nxt.timestamp() if nxt else None, allow_writes=allow_writes, created_by=created_by)
         self.changed()
         return row
+
+    def edit(self, sid: int, *, name: str | None = None, when: str | None = None, payload: dict | None = None) -> dict:
+        """Change a reminder or job. A new `when` is parsed like a new one and the next run is recalculated."""
+        s = self.store.get(sid)
+        if s is None:
+            raise KeyError(sid)
+        fields: dict = {}
+        if name is not None and name.strip():
+            fields["name"] = name.strip()[:120]
+        if when is not None and when.strip():
+            now = self.ctx.now()
+            spec = timeparse.parse_schedule(when, now)          # raises ParseError with a helpful message
+            nxt = timeparse.next_run(spec, now)
+            fields.update(spec=spec, next_run=nxt.timestamp() if nxt else None)
+        if payload:
+            fields["payload"] = {**s["payload"], **payload}
+        if fields:
+            self.store.update(sid, **fields)
+            self.changed()
+        return self.store.get(sid)
 
     def describe_next(self, s: dict) -> str:
         if s["next_run"] is None:
@@ -146,10 +167,12 @@ class Scheduler:
         stamp = self.ctx.now().strftime("%b %d %H:%M")
         async with self._prompt_lock:
             conv = self.ctx.db.create_conversation(f"⏰ {s['name']} · {stamp}")
+            token = session.JOB.set({"id": s["id"], "commands": list(s["payload"].get("commands") or [])})   # copied into the run's task
             run = self.runs.start(
                 self.ctx, self.registry, conv, s["payload"]["prompt"], False, readonly=not s["allow_writes"],
                 approval_timeout=float(self.ctx.config.data["scheduler"]["approval_timeout"]),
                 extra_system=SCHEDULED_NOTE)
+            session.JOB.reset(token)
             await run.task
         final = next((e["text"] for e in reversed(run.events) if e["type"] == "message"), "")
         err = next((e["message"] for e in reversed(run.events) if e["type"] == "error"), None)

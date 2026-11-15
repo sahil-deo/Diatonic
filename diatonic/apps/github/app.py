@@ -94,6 +94,14 @@ class GitHubApp(App):
         except ToolError as e:
             return {"connected": False, "detail": str(e)}
 
+    async def snapshot(self, n: int) -> dict:
+        data = await self._req("GET", "/search/issues", params={"q": "is:open assignee:@me archived:false", "per_page": n, "sort": "updated"})
+        items = [self._issue(i) for i in data["items"]]
+        return {"items": [{"text": i["title"], "sub": f"{(i['repo'] or '').split('/')[-1]}#{i['number']}", "badge": "PR" if i["is_pr"] else None,
+                           "url": i["url"]} for i in items],
+                "more": f"{data['total_count']} open assigned to you" if data["total_count"] > n else None,
+                "empty": "Nothing assigned to you."}
+
     # ---- shaping -----------------------------------------------------
     @staticmethod
     def _issue(i: dict) -> dict:

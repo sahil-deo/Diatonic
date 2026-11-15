@@ -66,6 +66,12 @@ class NotesApp(App):
             raise ToolError("That name isn't allowed.")
         return p
 
+    async def snapshot(self, n: int) -> dict:
+        notes = self._all()
+        return {"items": [{"text": x["title"], "sub": datetime.fromtimestamp(x["modified"]).strftime("%a %d %b"),
+                           "open": {"item": x["title"]}} for x in notes[:n]], "stats": [{"label": "notes", "value": len(notes)}],
+                "empty": "No notes yet."}
+
     def _all(self) -> list[dict]:
         out = []
         for p in self.root.glob("*.md"):

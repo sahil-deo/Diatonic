@@ -252,6 +252,18 @@ class ApiApp(App):
             self.ctx.mods.set_code(self.id, json.dumps(self.m))
         return shaped(a, r["data"])
 
+    async def snapshot(self, n: int) -> dict:
+        """The first action that can run without input, showing its chosen values."""
+        act = next((k for k, a in self.m["actions"].items() if a["method"] == "GET" and all(p["default"] or not p["required"] for p in a["params"])), None)
+        if act is None:
+            return {"items": [], "empty": "Open the app to run it (its actions need input)."}
+        r = await call(self.ctx.http, self.m, act, {}, self.key())
+        a = self.m["actions"][act]
+        vals = {f: pick(r["data"], f) for f in a["fields"]} if a["fields"] else {k: v for k, v in (r["data"] or {}).items() if not isinstance(v, (dict, list))} if isinstance(r["data"], dict) else {}
+        nice = lambda k: k.split(".")[-1].replace("_", " ")
+        return {"stats": [{"label": nice(k), "value": v} for k, v in list(vals.items())[:4]],
+                "items": [{"text": f"{nice(k)}: {v}"} for k, v in list(vals.items())[4:4 + n]], "empty": "No values to show."}
+
     async def status(self) -> dict:
         if self.settings and not self.key():
             return {"connected": False, "detail": "Add the API key in the app."}

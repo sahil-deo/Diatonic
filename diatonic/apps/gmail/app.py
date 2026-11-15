@@ -6,6 +6,7 @@ with the full message shown, and unattended (scheduled) runs can't send at all.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 from urllib.parse import quote
 
 from starlette.requests import Request
@@ -57,6 +58,17 @@ class GmailApp(App):
         return {"connected": True, "detail": ", ".join(f"{self.ga.label(a)} ({gmail_level(a)})" for a in accts)}
 
     # ---- Gmail calls -----------------------------------------------------------------------
+    async def snapshot(self, n: int) -> dict:
+        accts = self.ga.pick(None, "gmail", many=True)
+        msgs, problems = await self._search(accts, "", "INBOX", n)
+        unread = sum(1 for m in msgs if m["unread"])
+        when = lambda iso: datetime.fromisoformat(iso).astimezone(self.ctx.tz).strftime("%H:%M" if iso[:10] == self.ctx.now().date().isoformat() else "%d %b")
+        return {"items": [{"text": m["subject"], "sub": f"{m['from']['name'] or m['from']['email']} · {when(m['date'])}",
+                           "tone": "ok" if m["unread"] else None, "badge": "new" if m["unread"] else None,
+                           "open": {"item": "|".join(m["ref"].split("|")[:2])}} for m in msgs[:n]],
+                "stats": [{"label": "unread of latest", "value": unread}] if n > 3 else None,
+                "empty": "Inbox is empty." if not problems else problems[0]}
+
     async def list_messages(self, acc: dict, query: str = "", label: str | None = "INBOX", limit: int = 10) -> list[dict]:
         params: dict = {"maxResults": limit}
         if query:

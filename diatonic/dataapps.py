@@ -202,6 +202,34 @@ class DataApp(App):
         raise ToolError(f"No {l['item']} called '{name}'." + (f" Did you mean: {', '.join(close)}?" if close else
                         f" There are: {', '.join(list(labels.values())[:12]) or 'none yet'}."), bad_args=True)
 
+    async def snapshot(self, n: int) -> dict:
+        """Top-level items, with progress through what's inside them where there's a check field."""
+        top = next((k for k, l in self.m["lists"].items() if not l["parent"]), None)
+        if top is None:
+            return {"items": [], "empty": "No lists yet."}
+        rows = self.ctx.db.items(self.id)
+        kids = [k for k, l in self.m["lists"].items() if l["parent"] == top]
+        items, done_all, total_all = [], 0, 0
+        for r in [x for x in rows if x["list"] == top][:n]:
+            sub, tone = "", None
+            for k in kids:
+                ck = next((f["name"] for f in self.m["lists"][k]["fields"] if f["type"] == "check"), None)
+                inside = [x for x in rows if x["list"] == k and x["parent"] == r["id"]]
+                if ck and inside:
+                    d = sum(1 for x in inside if x["data"].get(ck))
+                    sub, tone = f"{d}/{len(inside)} {k.replace('_', ' ')} done", "ok" if d == len(inside) else None
+                elif inside:
+                    sub = f"{len(inside)} {k.replace('_', ' ')}"
+            ck = next((f["name"] for f in self.m["lists"][top]["fields"] if f["type"] == "check"), None)
+            items.append({"text": self._label(r), "sub": sub or None, "tone": tone, "done": bool(r["data"].get(ck)) if ck else None})
+        for k in kids:
+            ck = next((f["name"] for f in self.m["lists"][k]["fields"] if f["type"] == "check"), None)
+            if ck:
+                inside = [x for x in rows if x["list"] == k]
+                done_all += sum(1 for x in inside if x["data"].get(ck)); total_all += len(inside)
+        return {"items": items, "stats": [{"label": "done", "value": f"{done_all}/{total_all}"}] if total_all else None,
+                "empty": f"No {top.replace('_', ' ')} yet."}
+
     # ---- the generated tools -------------------------------------------
     def _values(self, l: dict, a: dict, partial: bool) -> dict:
         today = self.ctx.now().date()

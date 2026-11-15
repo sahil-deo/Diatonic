@@ -37,6 +37,9 @@ class Tool:
     precheck: Callable[[dict], str | None] | None = None
     # Return a unified-diff-style text shown on the approval card (computed before anything changes).
     preview: Callable[[dict], str | None] | None = None
+    # Decide per call whether to ask (e.g. a shell command that only reads doesn't). Overrides risk and "always allow".
+    ask: Callable[[dict], bool] | None = None
+    timeout: float | None = None   # seconds the harness waits for the handler (default 60)
 
     def __post_init__(self):
         self.title = self.title or self.name.replace("_", " ").capitalize()
@@ -76,6 +79,11 @@ class App:
     def tools_for(self, text: str, prior_tools: set[str] | frozenset = frozenset()) -> list[Tool]:
         """The tools worth offering for this request. Apps with many tools can narrow this to save prompt space."""
         return self.tools()
+
+    # A home-screen tile. Return {"items": [{"text", "sub"?, "badge"?, "tone"?: "warn"|"ok", "done"?: bool,
+    # "open"?: navigate params, "url"?: link}], "stats"?: [{"label", "value"}], "empty"?: str, "more"?: str},
+    # at most `n` items. Apps without one simply don't offer a tile. Raise ToolError("...") for "not connected" etc.
+    snapshot = None
 
     def routes(self) -> list:
         return []

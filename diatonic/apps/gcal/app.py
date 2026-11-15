@@ -167,6 +167,19 @@ class GCalApp(App):
                  self.respond, WRITE, describe=lambda a: f"{a.get('response', 'Respond').capitalize()} invitation {a.get('event')}"),
         ]
 
+    async def snapshot(self, n: int) -> dict:
+        now = self.ctx.now()
+        evs, errors = await self.events_in(now.isoformat(), (now + timedelta(days=7)).isoformat())
+        evs = sorted(evs, key=lambda e: e["start"])
+        def when(e):
+            d = datetime.fromisoformat(e["start"]) if not e["all_day"] else datetime.fromisoformat(e["start"] + "T00:00:00").replace(tzinfo=now.tzinfo)
+            d = d.astimezone(now.tzinfo)
+            day = "Today" if d.date() == now.date() else "Tomorrow" if d.date() == (now + timedelta(days=1)).date() else d.strftime("%a %d")
+            return f"{day}" + ("" if e["all_day"] else d.strftime(" %H:%M"))
+        return {"items": [{"text": e["summary"], "sub": when(e) + (f" · {e['location']}" if e["location"] else ""), "open": {"item": e["ref"]},
+                           "tone": "ok" if e["start"][:10] == now.date().isoformat() else None} for e in evs[:n]],
+                "empty": errors[0] if errors and not evs else "Nothing in the next 7 days."}
+
     async def list_calendars(self, a):
         accts = self.ga.pick(a.get("account"), "calendar", many=True)
         cals = await self.calendars(accts)

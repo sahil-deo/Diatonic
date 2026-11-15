@@ -87,6 +87,7 @@ FONTS = {"system", "sans", "serif", "mono", "rounded"}
 ENUMS = {"theme": {"system", "light", "dark"}, "density": {"comfortable", "compact"}, "font": FONTS,
          "radius": {"sharp", "default", "round"}, "width": {"narrow", "default", "wide", "full"},
          "sidebar": {"show", "hide"}, "sidebar_width": {"narrow", "default", "wide"}}
+HOME_LAYOUTS = {"grid4": 4, "two_rows": 2, "two_cols": 2, "one": 1, "suggestions": 0}   # layout -> number of tiles
 BOOLS = {"show_status_bar", "show_quick_actions", "show_suggestions", "show_speak_button"}
 
 
@@ -112,6 +113,13 @@ def clean_appearance(patch) -> dict:
             if len(str(v)) > 20000:
                 raise ValueError("Custom CSS is limited to 20,000 characters.")
             out[k] = str(v)
+        elif k == "home":   # the home screen: a layout and the app shown in each slot
+            if not isinstance(v, dict) or v.get("layout") not in HOME_LAYOUTS:
+                raise ValueError(f"home.layout must be one of: {', '.join(HOME_LAYOUTS)}.")
+            slots = v.get("slots") or []
+            if not isinstance(slots, list) or len(slots) > 4 or not all(isinstance(x, str) and len(x) < 40 for x in slots):
+                raise ValueError("home.slots must be a list of up to 4 app ids.")
+            out[k] = {"layout": v["layout"], "slots": slots}
         elif k in ("rail_order", "rail_hidden"):
             if not isinstance(v, list) or not all(isinstance(x, str) and len(x) < 40 for x in v) or len(v) > 50:
                 raise ValueError(f"{k} must be a list of app ids.")

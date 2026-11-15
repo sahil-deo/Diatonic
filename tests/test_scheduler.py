@@ -291,3 +291,37 @@ def test_old_scheduled_chats_are_pruned(sched, monkeypatch):
         ctx.db.create_conversation(f"⏰ Brief · day {i}")
     eng._prune_prompt_chats("Brief")
     assert len([c for c in ctx.db.list_conversations() if c["title"].startswith("⏰ Brief")]) == 2
+
+
+def test_reminders_and_jobs_can_be_edited(sched):
+    ctx, reg, scheduler, store, runs, events = sched
+    from diatonic.apps.scheduler import create as make_sched
+    from diatonic.apps.base import ToolError
+    import asyncio as _a
+    app = make_sched(ctx)
+    r = scheduler.create(name="stretch", kind="notify", when="tomorrow 9am", payload={"text": "stretch"})
+    before = r["next_run"]
+    tool = next(t for t in app.tools() if t.name == "update_job")
+    out = _a.run(tool.handler({"id": r["id"], "when": "tomorrow 10am", "text": "stretch and drink water"}))
+    s = store.get(r["id"])
+    assert s["next_run"] - before == 3600 and s["payload"]["text"] == "stretch and drink water" and s["name"] == "stretch and drink water"
+    assert tool.ask({"id": r["id"], "when": "in 5 minutes"}) is False                    # moving a reminder: no card
+    j = scheduler.create(name="briefing", kind="prompt", when="every weekday at 8", payload={"prompt": "brief me"})
+    assert tool.ask({"id": j["id"], "prompt": "brief me on mail only"}) is True           # changing what a job does: card
+    assert tool.ask({"id": j["id"], "when": "every weekday at 7:30"}) is False
+    spec = store.get(j["id"])["spec"]
+    with __import__("pytest").raises(ToolError):
+        _a.run(tool.handler({"id": j["id"], "when": "whenever you like"}))               # unparseable times are refused, nothing changes
+    assert store.get(j["id"])["spec"] == spec
+
+
+def test_a_bare_hour_is_spelled_out_so_the_user_can_catch_it(sched):
+    ctx, reg, scheduler, store, runs, events = sched
+    from diatonic.apps.scheduler import create as make_sched
+    import asyncio as _a
+    app = make_sched(ctx)
+    j = scheduler.create(name="briefing", kind="prompt", when="every weekday at 8am", payload={"prompt": "brief me"})
+    tool = next(t for t in app.tools() if t.name == "update_job")
+    out = _a.run(tool.handler({"id": j["id"], "when": "every weekday at 7"}))
+    assert "19:00" in out["note"] and "am or pm" in out["note"]
+    assert _a.run(tool.handler({"id": j["id"], "when": "every weekday at 7am"}))["note"] is None

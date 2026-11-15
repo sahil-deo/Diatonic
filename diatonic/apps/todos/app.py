@@ -41,6 +41,15 @@ class TodosApp(App):
             raise ToolError("A due date must be a single date/time, not a repeating schedule.")
         return datetime.fromisoformat(spec["at"]).timestamp()
 
+    async def snapshot(self, n: int) -> dict:
+        rows = list(self.c.execute("SELECT * FROM todos WHERE status='open' ORDER BY (due IS NULL), due, priority DESC, id"))
+        overdue = sum(1 for r in rows if r["due"] and r["due"] < time.time())
+        items = [self._fmt(r) for r in rows[:n]]
+        return {"items": [{"text": t["title"], "sub": t.get("due"), "tone": "warn" if t.get("overdue") else None,
+                           "badge": t["priority"] if t["priority"] not in ("normal", "none", None) else None} for t in items],
+                "stats": [{"label": "open", "value": len(rows)}] + ([{"label": "overdue", "value": overdue}] if overdue else []),
+                "empty": "Nothing to do. Nice."}
+
     def _fmt(self, r) -> dict:
         d = {"id": r["id"], "title": r["title"], "status": r["status"], "priority": PRIORITY_NAME[r["priority"]]}
         if r["due"]:

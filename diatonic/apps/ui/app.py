@@ -57,10 +57,12 @@ API_TOOLS = ("connect_api", "add_action", "set_fields", "remove_action", "test_a
 API_WORDS = re.compile(r"\b(?:api|apis|endpoint|endpoints|url|base url|integration|api key|json)\b|https?://")
 BUILDING = ("ui_create_app", "ui_add_list", "ui_add_field", "ui_remove_field", "ui_remove_list")
 API_BUILDING = ("ui_connect_api", "ui_add_action", "ui_set_fields")
-LOOK_TOOLS = ("set_theme", "add_style", "add_button", "list_mods", "remove_mod", "revert", "set_layout")
+HOME = re.compile(r"\b(?:home ?screen|home ?page|start ?screen|dashboard|widgets?|tiles?)\b")
+LOOK_TOOLS = ("set_home", "set_theme", "add_style", "add_button", "list_mods", "remove_mod", "revert", "set_layout")
 # Words that mean "change the interface itself" (vs. just showing something): only then are the customising tools offered.
 CUSTOM = re.compile(r"\b(?:theme|colou?r|accent|font|css|style|button|widget|panel|tab|rail|icon|side ?bar|top ?bar|bigger|smaller|wider|"
-                    r"narrower|compact|rounded|undo|revert|script|toggle|customi[sz]e|dark mode|light mode|text size|interface|app for|new app|mods?)\b"
+                    r"narrower|compact|rounded|undo|revert|script|toggle|customi[sz]e|dark mode|light mode|text size|interface|app for|new app|mods?|"
+                    r"home ?screen|home ?page|start ?screen|dashboard|widgets?|tiles?)\b"
                     r"|\b(?:create|make|build|add)\b.*\b(?:app|panel|tab)\b", re.I)
 MODES = {"split": "chat and panel side by side", "focus": "panel fills the window (the chat stays in the dock)",
          "chat": "no panel, chat only"}
@@ -72,7 +74,7 @@ class UiApp(App):
     icon = "sliders"
     description = "Lets the agent open apps, mails, notes, files and events on screen and change the layout."
     panel = False
-    keywords = ["panel", "rail", "icon", "sidebar", "side bar", "top bar", "topbar", "tab", "interface", "theme", "colour", "color", "accent", "font", "css", "style", "restyle", "button", "widget", "customize", "customise",
+    keywords = ["home screen", "homescreen", "home page", "start screen", "dashboard", "widget", "tile", "panel", "rail", "icon", "sidebar", "side bar", "top bar", "topbar", "tab", "interface", "theme", "colour", "color", "accent", "font", "css", "style", "restyle", "button", "widget", "customize", "customise",
                 "dark mode", "light mode", "bigger", "smaller", "wider", "narrower", "compact", "rounded", "undo that", "revert", "text size",
                 "show", "open", "go to", "switch to", "bring up", "pull up", "display", "layout", "full screen",
                 "fullscreen", "expand", "collapse", "hide", "close the panel", "side by side"]
@@ -227,7 +229,7 @@ class UiApp(App):
         return self._done("layout changed (" + ", ".join(f"{k} {v}" for k, v in ev.items() if k != "action") + ")")
 
     # ---- changing the interface itself ---------------------------------
-    default_allow = ["set_theme", "add_style", "add_button", "list_mods", "remove_mod", "revert", "add_action", "set_fields", "remove_action",
+    default_allow = ["set_home", "set_theme", "add_style", "add_button", "list_mods", "remove_mod", "revert", "add_action", "set_fields", "remove_action",
                      "create_app", "add_list", "add_field", "remove_field", "remove_list"]   # data apps need no network and run no code, so no card
     untrusted_note = ("This run has read email, whose text anyone can write, so it can't change the interface. "
                       "Ask again in a new chat.")
@@ -263,10 +265,34 @@ class UiApp(App):
         if not clean:
             raise ToolError("Say what to change: theme, accent, density, font, font_size, radius, width, sidebar_width, hide_apps or show_apps.", bad_args=True)
         cur = self.ctx.config.data["appearance"]
-        self.ctx.mods.log_theme({k: cur.get(k) for k in clean}, clean)
+        self.ctx.mods.log_theme(json.loads(json.dumps({k: cur.get(k) for k in clean})), clean)   # a copy: undo needs the old values
         self.ctx.config.update({"appearance": clean})
         self._changed("theme: " + ", ".join(f"{k} {v}" for k, v in clean.items()))
         return self._done("theme changed (" + ", ".join(f"{k} {v}" for k, v in clean.items()) + "). The user can say 'undo' to revert it")
+
+    async def set_home(self, a: dict):
+        """The home screen: a layout and which app fills each tile."""
+        self._guard_mod()
+        from ...actions import HOME_LAYOUTS
+        cur = json.loads(json.dumps(self.ctx.config.data["appearance"].get("home") or {"layout": "grid4", "slots": []}))   # a copy: undo needs the old value
+        layout = str(a.get("layout") or cur["layout"]).strip().lower()
+        alias = {"4": "grid4", "four": "grid4", "grid": "grid4", "stacked": "two_rows", "rows": "two_rows", "side by side": "two_cols",
+                 "columns": "two_cols", "1": "one", "big": "one", "single": "one"}
+        layout = alias.get(layout, layout)
+        if layout not in HOME_LAYOUTS:
+            raise ToolError(f"layout must be one of: {', '.join(HOME_LAYOUTS)}.", bad_args=True)
+        slots = self._app_list(a.get("apps")) if a.get("apps") else cur["slots"]
+        tiles = [x.id for x in self.ctx.registry.enabled() if callable(getattr(x, "snapshot", None))]
+        bad = [s for s in slots if s not in tiles]
+        if bad:
+            raise ToolError(f"{', '.join(bad)} can't be shown on the home screen. Apps with a tile: {', '.join(tiles)}.", bad_args=True)
+        home = clean_appearance({"home": {"layout": layout, "slots": slots[:HOME_LAYOUTS[layout] or 4]}})["home"]
+        self.ctx.mods.log_theme({"home": cur}, {"home": home})
+        self.ctx.config.update({"appearance": {"home": home}})
+        names = ", ".join(self.ctx.registry.apps[s].name for s in home["slots"] if s in self.ctx.registry.apps) or "suggestions"
+        shape = {"grid4": "4 small tiles", "two_rows": "2 stacked tiles", "two_cols": "2 tiles side by side", "one": "1 big tile", "suggestions": "suggestions"}[layout]
+        self._changed(f"home screen shows {names} ({shape})")
+        return self._done(f"the home screen now shows {names} as {shape}")
 
     def _app_list(self, v) -> list[str]:
         if not v:
@@ -661,6 +687,12 @@ class UiApp(App):
         name = {"type": "string", "description": "Short lowercase name with dashes, e.g. wide-sidebar. Reuse an existing name to replace it."}
         existing = self._existing()
         return [
+            Tool("set_home", "Choose what the home screen (an empty chat) shows: a layout and an app per tile, e.g. to-dos, mail, GitHub issues, "
+                 "telemetry, calendar, reminders, notes, or apps the user built. Layouts: grid4 (4 small), two_rows (2 stacked), "
+                 "two_cols (2 side by side), one (1 big), suggestions.",
+                 {"properties": {"layout": {"type": "string", "enum": ["grid4", "two_rows", "two_cols", "one", "suggestions"]},
+                                 "apps": {"type": "array", "items": {"type": "string"}, "description": "One app per tile, in order"}}},
+                 self.set_home, WRITE, title="Set home screen", precheck=self._blocked),
             Tool("set_theme", "Change the look: theme, accent colour, density, font, text size, corners, chat width, chat-list width, "
                  "and which app icons show in the left rail (the 'side bar'). Try this first for look-and-feel requests. Undoable.",
                  {"properties": {"theme": {"type": "string", "enum": ["system", "light", "dark"]}, "accent": {"type": "string", "description": "A colour name (green) or #rrggbb; empty to reset"},
@@ -718,6 +750,8 @@ class UiApp(App):
             want = set(BUILD_TOOLS)
             if self._api_apps() and re.search(r"\b(?:update|edit|change|modify|fix|improve|extend|add|ask for|show)\b", t):
                 want |= {"add_action", "set_fields"}   # "update the whther app": could be either kind, so both edit tools
+        if HOME.search(t):   # "put X on the home screen" is about tiles, even when X is an app being built
+            return [x for x in self.tools() if x.name in {"set_home", "revert", *NAV_TOOLS}]
         if CUSTOM.search(t):
             want |= set(LOOK_TOOLS) if not build else {"set_theme", "add_button"}
         return [x for x in self.tools() if x.name in want]

@@ -7,6 +7,7 @@ import { render as md } from "./md.js";
 import { state, emit, CLIENT_ID } from "./store.js";
 import { speaker } from "./voice.js";
 import { highlight } from "./highlight.js";
+import { renderHome } from "./home.js";
 
 const msgs = $("#messages");
 let view = null;        // live rendering state for the visible conversation: {cid, wrap, seg, ...}
@@ -26,10 +27,11 @@ function renderEmpty() {
   const apps = state.apps.filter((a) => a.enabled);
   const chips = apps.flatMap((a) => SUGGESTIONS[a.id] || []).slice(0, 4);
   view = null; pending = [];
-  msgs.replaceChildren(h("div", { class: "empty" },
-    h("h2", {}, greeting()),
-    h("p", {}, apps.length ? `Connected: ${apps.map((a) => a.name).join(", ")}. Ask in text or hold the mic. Chats keep working in the background.` : "Enable an app in Settings to get started."),
-    h("div", { class: "suggestions" }, chips.map(([k, t]) => h("button", { class: "suggestion", onclick: () => send(t) }, h("small", {}, k), t)))));
+  const suggestions = () => h("div", { class: "suggestions" }, chips.map(([k, t]) => h("button", { class: "suggestion", onclick: () => send(t) }, h("small", {}, k), t)));
+  const home = h("div", { class: "home-wrap" });
+  msgs.replaceChildren(h("div", { class: "empty" }, h("h2", {}, greeting()),
+    !apps.length && h("p", {}, "Enable an app in Settings to get started."), home));
+  renderHome(home, suggestions);   // tiles from your apps, or the suggestions, as chosen under Customize
 }
 
 /* ---------- rendering ---------- */
@@ -50,7 +52,42 @@ function userBubble(text) {
   return h("div", { class: "msg user" }, h("div", { class: "bubble" }, ...parts));
 }
 
+const ANSI = /\x1b\[[0-9;?]*[ -\/]*[@-~]|\x1b\][^\x07]*\x07|\r(?!\n)/g;
+/** A shell command's card: the command in the header, its output streaming in like a terminal. */
+function shellCard(t, live) {
+  const stateEl = h("span", { class: "tool-state" }), meta = h("span", { class: "t-meta" });
+  const out = h("pre", { class: "term-out" });
+  let streamed = "";
+  const fromResult = (preview) => { try { const r = JSON.parse(preview); return r.output ?? preview; } catch { return preview || ""; } };
+  const card = h("div", { class: `tool shellcmd ${live ? "open" : ""}`, "data-id": t.id },   // not "shell": that's the app's own grid
+    h("div", { class: "tool-head", onclick: () => card.classList.toggle("open") },
+      stateEl, h("span", { class: "t-app" }, "Terminal ·"), h("code", { class: "t-cmd" }, t.args?.command || ""), meta),
+    h("div", { class: "tool-body" }, t.args?.cwd ? h("div", { class: "lbl" }, t.args.cwd) : null, out));
+  if (!live && t.preview) out.textContent = fromResult(t.preview);
+  const c = {
+    el: card,
+    stream(text) { streamed = (streamed + text.replace(ANSI, "")).slice(-200000); out.textContent = streamed; out.scrollTop = out.scrollHeight; },
+    set(status, extra = {}) {
+      stateEl.innerHTML = status === "running" ? '<span class="spin"></span>'
+        : status === "ok" ? `<span class="ok-ic">${icon("check", 16)}</span>`
+        : status === "wait" ? `<span class="wait-ic">${icon("shield", 16)}</span>`
+        : `<span class="fail-ic">${icon("alert", 16)}</span>`;
+      if (extra.preview != null) {
+        let r = null; try { r = JSON.parse(extra.preview); } catch {}
+        if (!streamed) out.textContent = r ? (r.output ?? "") : extra.preview;
+        const bits = [r && r.exit_code != null ? `exit ${r.exit_code}` : null, extra.ms != null ? (extra.ms < 1000 ? `${extra.ms} ms` : `${(extra.ms / 1000).toFixed(1)} s`) : null];
+        meta.textContent = bits.filter(Boolean).join(" · ");
+        if (r && r.exit_code === 0 && status === "ok") card.classList.remove("open");   // keep failures open
+      }
+      if (status === "denied") meta.textContent = "denied";
+    },
+  };
+  if (!live) c.set(t.status === "denied" ? "denied" : t.ok === false ? "fail" : "ok", { ms: t.ms, preview: t.preview || "" });   // exit code too
+  return c;
+}
+
 function toolCard(t, live) {
+  if (t.name === "shell_run") return shellCard(t, live);
   const stateEl = h("span", { class: "tool-state" }), meta = h("span", { class: "t-meta" });
   const resPre = h("pre", {}, t.preview || "");
   const card = h("div", { class: "tool", "data-id": t.id },
@@ -93,6 +130,7 @@ function approvalBox(ev, v) {
     h("div", { class: "a-btns" },
       h("button", { class: "btn primary", onclick: () => decide(true) }, ev.share ? "Allow once" : "Approve", h("kbd", {}, "⌘↵")),
       ev.share && h("button", { class: "btn", onclick: () => decide(true, "chat") }, "Allow for this chat"),
+      ev.job && h("button", { class: "btn", title: "Run it now, and let this scheduled job run this exact command unattended from now on", onclick: () => decide(true, "job") }, "Always allow for this job"),
       h("button", { class: "btn", onclick: () => decide(false) }, "Deny", h("kbd", {}, "Esc"))));
   v.approvals.set(ev.id, box);
   pending.push({ id: ev.id, decide });
@@ -104,7 +142,7 @@ function dropApproval(v, id) {
 }
 
 addEventListener("keydown", (e) => {
-  if (!pending.length) return;
+  if (!pending.length || document.activeElement?.closest?.(".xterm")) return;   // Esc in vim must not deny an approval
   if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); pending[0].decide(true); }
   else if (e.key === "Escape" && !document.querySelector("dialog[open]")) { e.preventDefault(); pending[0].decide(false); }
 });
@@ -224,6 +262,10 @@ function shouldSpeak(kind) {
 
 function onEvent(ev) {
   if (ev.type === "hello") return resync(ev.runs);
+  if (ev.type === "tool_output") {   // a running shell command's output, live
+    if (view && view.cid === ev.conversation_id) view.cards.get(ev.id)?.stream?.(ev.text);
+    return;
+  }
   if (ev.type === "ui") return ev.target === CLIENT_ID ? emit("ui", ev) : undefined;   // screen control from a run this window started
   if (["notification", "app_changed", "mods_changed", "model_changed", "script_output", "script_done"].includes(ev.type)) return emit(ev.type, ev); // not tied to a chat
   const cid = ev.conversation_id;

@@ -150,7 +150,13 @@ function appsPane() {
 function automationPane() {
   const n = state.config.notifications, sc = state.config.scheduler;
   const quiet = (key) => h("input", { type: "time", value: n[key], onchange: (e) => save({ notifications: { [key]: e.target.value } }) });
+  const sh = state.config.shell || {};
   return [
+    h("div", { class: "p-section" }, "Shell"),
+    toggle("Let the agent run shell commands", "Read-only commands (ls, cat, git status, du…) run at once; anything else shows you the exact command to approve first. "
+      + "sudo, the keychain and Diatonic's own data are always refused, and every command is logged in the Terminal panel. Scheduled jobs may run read-only commands "
+      + "and commands you pre-approve on the job.", !!sh.agent, (x) => save({ shell: { agent: x } }).then(() => api.state().then((s) => { state.apps = s.apps; emit("apps"); }))),
+    h("div", { style: "height:14px" }),
     h("div", { class: "p-section" }, "Notifications"),
     toggle("macOS notifications", "Banners in Notification Center, even when the browser is closed. They appear under “Script Editor” because they're sent with AppleScript.", n.native, (x) => save({ notifications: { native: x } })),
     toggle("Browser notifications", "Shown while this page is open in a background tab.", n.browser, async (x) => {

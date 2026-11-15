@@ -1,6 +1,7 @@
 import { CLIENT_ID } from "./store.js";
 async function j(method, url, body) {
-  const r = await fetch(url, { method, headers: body ? { "Content-Type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined });
+  // X-Diatonic: proves the request comes from this page (a cross-site page can't send it); the terminal requires it.
+  const r = await fetch(url, { method, headers: { "X-Diatonic": "1", ...(body ? { "Content-Type": "application/json" } : {}) }, body: body ? JSON.stringify(body) : undefined });
   const data = await r.json().catch(() => ({}));
   if (!r.ok) throw Object.assign(new Error(data.error || data.detail || `${r.status} ${r.statusText}`), { status: r.status, data });
   return data;

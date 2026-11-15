@@ -305,6 +305,31 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
             return JSONResponse({"names": [], "error": str(e)})
         return JSONResponse({"names": names[:300]})
 
+    # ---- home screen tiles: a small live snapshot from any app that offers one ------------------------------
+    snap_cache: dict[tuple, tuple[float, dict]] = {}
+
+    async def home_catalog(request):
+        return JSONResponse([{"id": a.id, "name": a.name, "icon": a.icon} for a in registry.enabled() if callable(getattr(a, "snapshot", None))])
+
+    async def home_tile(request):
+        a = registry.apps.get(request.path_params["app_id"])
+        if not a or not callable(getattr(a, "snapshot", None)) or not ctx.app_cfg(a.id)["enabled"]:
+            return JSONResponse({"error": "This app has no home tile."}, 404)
+        n = max(1, min(12, int(request.query_params.get("n") or 4)))
+        key, now = (a.id, n), time.time()
+        if request.query_params.get("fresh") != "1" and key in snap_cache and now - snap_cache[key][0] < 60:   # mail and GitHub are network calls
+            return JSONResponse(snap_cache[key][1])
+        try:
+            data = await asyncio.wait_for(a.snapshot(n), 12)
+        except ToolError as e:
+            return JSONResponse({"error": str(e)})
+        except asyncio.TimeoutError:
+            return JSONResponse({"error": f"{a.name} took too long."})
+        except Exception as e:   # a broken tile must not break the home screen
+            return JSONResponse({"error": f"{a.name}: {type(e).__name__}"})
+        snap_cache[key] = (now, data)
+        return JSONResponse(data)
+
     # ---- quick actions -------------------------------------------------------
     async def put_actions(request):
         try:
@@ -456,7 +481,8 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
 
     async def approve(request):
         body = await request.json()
-        ok = approvals.resolve(request.path_params["aid"], "chat" if body.get("approve") and body.get("scope") == "chat" else bool(body.get("approve")))
+        scope = body.get("scope") if body.get("approve") and body.get("scope") in ("chat", "job") else None
+        ok = approvals.resolve(request.path_params["aid"], scope or bool(body.get("approve")))
         return JSONResponse({"ok": ok})
 
     # ---- voice -----------------------------------------------------------
@@ -586,6 +612,8 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
         Route("/api/dapps/{app_id}/{list}", dapp_add, methods=["POST"]),
         Route("/api/xapps/{app_id}", xapp_info),
         Route("/api/xapps/{app_id}/call/{action}", xapp_call, methods=["POST"]),
+        Route("/api/home", home_catalog),
+        Route("/api/home/{app_id}", home_tile),
         Route("/api/models", models_list),
         Route("/api/models", models_save, methods=["POST"]),
         Route("/api/models/active", models_activate, methods=["PUT"]),
@@ -627,6 +655,8 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
         await ctx.scheduler.stop()
         await action_runner.shutdown()
         await runs.shutdown()
+        if hasattr(registry.apps.get("shell"), "terms"):
+            registry.apps["shell"].terms.shutdown()   # don't leave login shells behind
         await ctx.http.aclose()
 
     app = Starlette(routes=routes, lifespan=lifespan,
