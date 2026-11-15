@@ -40,6 +40,9 @@ class Tool:
     # Decide per call whether to ask (e.g. a shell command that only reads doesn't). Overrides risk and "always allow".
     ask: Callable[[dict], bool] | None = None
     timeout: float | None = None   # seconds the harness waits for the handler (default 60)
+    # How this tool works inside an app the agent builds on it: {"inputs": [params the form asks for],
+    # "when": {regex on the request: {preset args}}, "swap": {param: better param for a form}, "title": button label}.
+    build: dict | None = None
 
     def __post_init__(self):
         self.title = self.title or self.name.replace("_", " ").capitalize()

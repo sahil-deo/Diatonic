@@ -32,16 +32,18 @@ class Registry:
         return self
 
     def sync_api_apps(self) -> None:
-        """Turn the agent-made app definitions (API apps and data apps) into apps: added, changed or removed."""
+        """Turn the agent-made app definitions (API, data and tool apps) into apps: added, changed or removed."""
         from ..apiapps import ApiApp, check_manifest
         from ..dataapps import DataApp, check_data_manifest
-        for k in [k for k, a in self.apps.items() if getattr(a, "api_app", False) or getattr(a, "data_app", False)]:
+        from ..toolapps import ToolApp, check_tool_manifest
+        made = {"app": lambda n, c: ApiApp(self.ctx, n, check_manifest(c)), "data": lambda n, c: DataApp(self.ctx, n, check_data_manifest(c)),
+                "tools": lambda n, c: ToolApp(self.ctx, n, check_tool_manifest(c))}
+        for k in [k for k, a in self.apps.items() if any(getattr(a, f, False) for f in ("api_app", "data_app", "tool_app"))]:
             del self.apps[k]
         for m in self.ctx.mods.list() if getattr(self.ctx, "mods", None) else []:
-            if m["kind"] in ("app", "data") and m["enabled"] and m["name"] not in self.apps:
+            if m["kind"] in made and m["enabled"] and m["name"] not in self.apps:
                 try:
-                    self.apps[m["name"]] = (ApiApp(self.ctx, m["name"], check_manifest(m["code"])) if m["kind"] == "app"
-                                            else DataApp(self.ctx, m["name"], check_data_manifest(m["code"])))
+                    self.apps[m["name"]] = made[m["kind"]](m["name"], m["code"])
                 except Exception as e:   # one bad manifest must not break the others
                     self.errors[m["name"]] = str(e)
 

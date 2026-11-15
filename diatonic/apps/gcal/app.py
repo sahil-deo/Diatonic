@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from datetime import datetime, time as dtime, timedelta
 from urllib.parse import quote
 
@@ -21,7 +22,16 @@ def _s(desc: str) -> dict:
 
 TIME = "ISO 8601: 2026-11-20T15:00:00 or 2026-11-20"
 ACCT = _s("Account label or email; omit to use all (reads) or the default (writes)")
-EVENT = _s("The event's `ref` from list_events")
+EVENT = _s("The event's `ref` from list_events, or its title (e.g. Budget review)")
+
+
+MEET_WORDS = r"\bmeets?\b|\bvideo\b|\bcalls?\b"   # an app about Meet: every meeting gets a link, the list shows those
+
+
+def _emails(v) -> list[str]:
+    """A list of emails from a list or a comma/space separated string (what a form or a small model sends)."""
+    items = v if isinstance(v, list) else re.split(r"[\s,;]+", str(v or ""))
+    return [x.strip() for x in items if x and "@" in str(x)]
 
 
 class GCalApp(App):
@@ -116,7 +126,7 @@ class GCalApp(App):
         multi = len(self.ga.with_service("calendar")) > 1
         d = {"ref": e["ref"], "title": e["summary"], "start": e["start"], "end": e["end"], "all_day": e["all_day"] or None, "where": e["location"] or None,
              "account": e["account_label"] if multi else None, "calendar": e["calendar_name"] if e["calendar_name"] != e["account"] else None,
-             "meet": bool(e["meet_url"]) or None, "attendees": len(e["attendees"]) or None, "repeats": e["recurring"] or None,
+             "meet": e["meet_url"] or None, "guests": [x["email"] for x in e["attendees"] if not x["self"]][:10] or None, "repeats": e["recurring"] or None,
              "you": e["my_response"] if e["my_response"] not in (None, "accepted") else None}
         return {k: v for k, v in d.items() if v is not None}
 
@@ -145,8 +155,9 @@ class GCalApp(App):
         return [
             Tool("list_calendars", "List calendars across the connected Google accounts.", {"properties": {"account": ACCT}}, self.list_calendars),
             Tool("list_events", "List events in a time range, soonest first, across all accounts unless one is named. Defaults to the next 7 days.",
-                 {"properties": {"start": _s(TIME), "end": _s(TIME), "account": ACCT, "calendar": _s("Calendar name"), "max_results": {"type": "integer", "minimum": 1, "maximum": 50}}},
-                 self.list_events),
+                 {"properties": {"start": _s(TIME), "end": _s(TIME), "account": ACCT, "calendar": _s("Calendar name"), "max_results": {"type": "integer", "minimum": 1, "maximum": 50},
+                                 "only_meet": {"type": "boolean", "description": "Only events with a Google Meet link"}}},
+                 self.list_events, build={"inputs": [], "title": "Upcoming", "when": {MEET_WORDS: {"only_meet": True}}}),
             Tool("search_events", "Search events by text (title, description, location).",
                  {"properties": {"query": _s("Search text"), "start": _s(TIME), "end": _s(TIME), "account": ACCT}, "required": ["query"]}, self.search_events),
             Tool("find_free_time", "Find free slots of a given length within working hours, counting busy time on ALL connected accounts.",
@@ -156,11 +167,18 @@ class GCalApp(App):
             Tool("create_event", "Create a calendar event. A date (no time) as start makes it all-day; if end is omitted it lasts one hour. "
                  "With several accounts, pass `account` or the default account is used.",
                  {"properties": ev, "required": ["summary", "start"]}, self.create_event, WRITE,
+                 build={"inputs": ["summary", "start", "end", "attendees", "description"], "title": "Schedule", "when": {MEET_WORDS: {"add_meet": True}}},
                  describe=lambda a: f"Create “{a.get('summary')}” at {a.get('start')}" + (f" on {a['account']}" if a.get("account") else "")),
-            Tool("update_event", "Change an event. Only pass fields to change. Changing start without end keeps the duration.",
-                 {"properties": {"event": EVENT, **{k: ev[k] for k in ("summary", "start", "end", "description", "location", "attendees")}}, "required": ["event"]},
-                 self.update_event, WRITE, describe=lambda a: "Update event " + ", ".join(f"{k}={v}" for k, v in a.items() if k != "event")),
-            Tool("delete_event", "Delete an event.", {"properties": {"event": EVENT}, "required": ["event"]}, self.delete_event, DESTRUCTIVE,
+            Tool("update_event", "Change an event. `event` can be its title: no need to list events first. Only pass fields to change. "
+                 "Changing start without end keeps the duration. "
+                 "To invite more people use add_guests (keeps the current guests); attendees replaces the whole list.",
+                 {"properties": {"event": EVENT, **{k: ev[k] for k in ("summary", "start", "end", "description", "location", "attendees")},
+                                 "add_guests": {"type": "array", "items": {"type": "string"}, "description": "Emails to invite, keeping current guests"},
+                                 "remove_guests": {"type": "array", "items": {"type": "string"}, "description": "Emails to uninvite"}}, "required": ["event"]},
+                 self.update_event, WRITE, build={"inputs": ["event", "summary", "start", "end", "add_guests", "remove_guests"], "title": "Edit",
+                                                  "swap": {"attendees": "add_guests"}},
+                 describe=lambda a: "Update event " + ", ".join(f"{k}={v}" for k, v in a.items() if k != "event")),
+            Tool("delete_event", "Delete (cancel) an event. `event` can be its title: no need to list events first.", {"properties": {"event": EVENT}, "required": ["event"]}, self.delete_event, DESTRUCTIVE, build={"title": "Delete"},
                  describe=lambda a: f"Delete event {a.get('event')}"),
             Tool("respond_to_event", "Accept, decline or tentatively accept an invitation.",
                  {"properties": {"event": EVENT, "response": {"type": "string", "enum": ["accepted", "declined", "tentative"]}}, "required": ["event", "response"]},
@@ -192,6 +210,8 @@ class GCalApp(App):
         accts = self.ga.pick(a.get("account"), "calendar", many=True)
         s, e = self._guard(lambda: self._range(a))
         evs, errors = await self.events_in(s, e, accounts=accts, calendar=a.get("calendar"))
+        if a.get("only_meet"):
+            evs = [x for x in evs if x["meet_url"]]
         evs = evs[: a.get("max_results", 25)]
         return {"events": [self._brief(x) for x in evs] or "No events in that range.", "problems": errors or None}
 
@@ -262,11 +282,26 @@ class GCalApp(App):
         r = await self.ga.json(acc["email"], "POST", f"{urls()['cal']}/calendars/{quote(cal['id'], safe='')}/events", json=body, params=params)
         return {"created": self._brief(E.norm_event(r, acc, cal, self.ga.label(acc)))}
 
+    async def _find_by_title(self, title: str) -> str:
+        """An event's ref from its title, among the past week and the next 60 days ('Budget review' -> its ref)."""
+        now = self.ctx.now()
+        evs, _ = await self.events_in((now - timedelta(days=7)).isoformat(), (now + timedelta(days=60)).isoformat())
+        want = re.sub(r"\s+", " ", str(title or "")).strip().lower().strip("'\"“”")
+        for test in (lambda t: t == want, lambda t: want in t):
+            hits = [e for e in evs if want and test((e["summary"] or "").lower())]
+            upcoming = [e for e in hits if (e["end"] or e["start"]) >= now.isoformat()[:10]] or hits
+            if len({e["summary"] for e in upcoming}) == 1 and (len(upcoming) == 1 or all(e["recurring"] for e in upcoming)):
+                return upcoming[0]["ref"]          # one event (or the next one of a repeating series)
+            if upcoming:
+                raise ToolError("More than one event matches '" + title + "': " + "; ".join(f"{e['summary']} at {e['start'][:16]} (ref {e['ref']})"
+                                for e in upcoming[:6]) + ". Use the ref of the one meant.", bad_args=True)
+        raise ToolError(f"No event called '{title}' in the past week or the next 60 days.", bad_args=True)
+
     async def _locate(self, ref: str):
         try:
             email, cal_id, eid = E.parse_ref(ref)
-        except ValueError as e:
-            raise ToolError(str(e))
+        except ValueError:
+            email, cal_id, eid = E.parse_ref(await self._find_by_title(ref))
         acc = self.ga.get(email)
         if not acc or not has_calendar(acc):
             raise ToolError(f"{email} isn't connected for Calendar.")
@@ -277,6 +312,13 @@ class GCalApp(App):
         acc, cal, eid = await self._locate(a["event"])
         base = f"{urls()['cal']}/calendars/{quote(cal['id'], safe='')}/events/{quote(eid, safe='')}"
         f = {k: a.get(k) for k in ("summary", "description", "location", "attendees")}
+        add, drop = _emails(a.get("add_guests")), {x.lower() for x in _emails(a.get("remove_guests"))}
+        if (add or drop) and f["attendees"] is None:   # merge with the guests already invited
+            cur_atts = (await self.ga.json(acc["email"], "GET", base)).get("attendees") or []
+            have = [x["email"] for x in cur_atts if x.get("email") and not x.get("self")]
+            f["attendees"] = [x for x in dict.fromkeys(have + add) if x.lower() not in drop]
+            if not f["attendees"] and not drop:
+                f["attendees"] = None
         if a.get("start"):
             cur = await self.ga.json(acc["email"], "GET", base)
             tz = self.ctx.tz

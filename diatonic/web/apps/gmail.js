@@ -25,6 +25,7 @@ const canManage = (a) => a && (a.level === "manage" || a.level === "send");
 export async function render(el, ctx) {
   const { api, h } = ctx;
   M.ctx = ctx; M.el = el;
+  ctx.list({ items: () => [...el.querySelectorAll(".mrow")] });   // ↑/↓ and Enter in the thread list
   M.accounts = await api.get(`${B}/accounts`);
   if (!M.accounts.length) {
     return el.replaceChildren(h("div", { class: "files-intro", style: "padding:24px" }, h("h3", {}, "Connect Gmail"),

@@ -11,6 +11,9 @@ JOB: ContextVar[dict | None] = ContextVar("run_job", default=None)
 # The tool call being executed, so a long-running tool (the shell) can stream output into its card.
 CALL: ContextVar[tuple | None] = ContextVar("run_call", default=None)
 
+# What the user asked in this run, for tools that check they're the right tool for it (an app for meetings isn't a local list).
+REQUEST: ContextVar[str] = ContextVar("run_request", default="")
+
 # Set when a run has read content written by someone else (an email). Such a run may not change the interface.
 UNTRUSTED: ContextVar[dict | None] = ContextVar("run_untrusted", default=None)
 

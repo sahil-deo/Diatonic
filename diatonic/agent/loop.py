@@ -141,6 +141,8 @@ def select_tools(registry, text: str, prior_apps: set[str], force: set[str] | fr
     named = [a for a in apps if a.id in force or any(re.search(rf"\b{re.escape(k)}(?:s|es)?\b", plain) for k in a.keywords)
              or any(re.search(p, low) for p in a.keyword_patterns)]
     chosen = [a for a in apps if a in named or a.id in prior_apps]
+    if ui and ui in chosen and not force and ui.builds_something(text):
+        chosen = [ui]          # building a panel about to-dos is not asking about to-dos: the lookup tools would just answer instead
     if not chosen:
         every = {f"{a.id}_{t.name}": (a, t) for a in apps for t in a.tools()}
         if len(json.dumps([tool_spec(a, t) for a, t in every.values()])) <= FALLBACK_ALL_CHARS:
@@ -430,6 +432,7 @@ async def run_agent(ctx, registry, conv_id: str, text: str, *, speak: bool = Fal
     cfg = ctx.config.data
     acfg = cfg["agent"]
     session.UNTRUSTED.set({})
+    session.REQUEST.set(text or "")
     t0 = time.monotonic()
     provider = make_provider(ctx)
     guard = RunGuard(acfg)

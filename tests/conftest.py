@@ -104,3 +104,9 @@ def sched(env):
     runs = RunManager()
     ctx.scheduler = Scheduler(ctx, reg, runs, ctx.notifier, store)
     return ctx, reg, ctx.scheduler, store, runs, events
+
+
+@pytest.fixture(autouse=True)
+def _no_verify_wait(monkeypatch):
+    """New panel code is test-run in the user's window first; tests have no window to answer, so don't wait for one."""
+    monkeypatch.setattr("diatonic.apps.ui.app.VERIFY_WAIT", 0.05)

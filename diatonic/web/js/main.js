@@ -6,14 +6,18 @@ import * as chat from "./chat.js";
 import { initVoiceUI, paintSpeakToggle, setSpeak, updateHint } from "./voiceui.js";
 import { initSettings, openSettings } from "./settings.js";
 import { initPalette, openPalette } from "./palette.js";
+import { registerCore } from "./commands-core.js";
+import { initKeymap } from "./keymap.js";
+import { initNav } from "./nav.js";
 import { initPanel, openPanel, closePanel, refreshPanel, setFull } from "./panel.js";
 import { initInbox, loadInbox } from "./inbox.js";
 import { applyAppearance, railApps } from "./appearance.js";
-import { initActions, invoke as invokeAction } from "./actions.js";
+import { initActions } from "./actions.js";
 import { initMentions } from "./mentions.js";
 import { requestEdit } from "./settings-actions.js";
 import { initDock, dockVisible, focusDock, setDockInput } from "./dock.js";
 import { initMods } from "./mods.js";
+import { verify } from "./verify.js";
 import { loadModels } from "./settings-models.js";
 
 /* ---------- theme ---------- */
@@ -168,23 +172,7 @@ async function refreshHealth() {
   renderStatus();
 }
 
-/* ---------- commands ---------- */
-const commands = () => [
-  { group: "Actions", label: "New chat", icon: "plus", hint: "⌘⇧O", run: chat.newChat },
-  { group: "Actions", label: state.config.voice.speak_summary ? "Turn off spoken summaries" : "Turn on spoken summaries", icon: "volume", run: () => setSpeak(!state.config.voice.speak_summary) },
-  { group: "Actions", label: "Settings", icon: "sliders", hint: "⌘,", run: () => openSettings() },
-  { group: "Actions", label: "Voice settings", icon: "mic", run: () => openSettings("voice") },
-  { group: "Actions", label: "Memory: what the agent remembers", icon: "brain", run: () => openSettings("memory") },
-  { group: "Actions", label: "Customize the interface", icon: "sliders", run: () => openSettings("interface") },
-  { group: "Actions", label: "Edit saved prompts and buttons", icon: "command", run: () => openSettings("actions") },
-  { group: "Actions", label: "Toggle sidebar", icon: "menu", hint: "⌘B", run: () => toggleSidebar() },
-  ...(state.config.actions || []).map((a) => ({ group: "Your actions", label: a.label, icon: a.kind === "script" ? "command" : "chat", hint: a.name ? "/" + a.name : "", run: () => invokeAction(a) })),
-  { group: "Actions", label: "Theme: dark", icon: "chevron", run: () => setTheme("dark") },
-  { group: "Actions", label: "Theme: light", icon: "chevron", run: () => setTheme("light") },
-  ...state.apps.filter((a) => a.enabled && a.panel).map((a) => ({ group: "Apps", label: `Open ${a.name}`, icon: a.icon, run: () => openPanel(a.id) })),
-  ...(state.panelApp ? [{ group: "Apps", label: "Close app panel", icon: "x", run: closePanel }] : []),
-  ...state.conversations.slice(0, 15).map((c) => ({ group: "Conversations", label: c.title, icon: "chat", run: () => chat.openConversation(c.id) })),
-];
+/* ---------- commands (the registry lives in commands.js; the built-ins in commands-core.js) ---------- */
 function toggleSidebar() { setSidebar(state.config.appearance.sidebar === "hide" ? "show" : "hide"); }
 function setSidebar(next) {
   if (matchMedia("(max-width: 820px)").matches) return $("#sidebar").classList.toggle("show", next === "show");
@@ -194,15 +182,6 @@ function setSidebar(next) {
 }
 async function setTheme(t) { state.config = await api.putConfig({ appearance: { theme: t } }); applyTheme(); }
 
-addEventListener("keydown", (e) => {
-  const mod = e.metaKey || e.ctrlKey;
-  if (mod && e.key.toLowerCase() === "k" && !document.activeElement?.closest?.(".xterm")) { e.preventDefault(); openPalette(commands); }   // in the terminal ⌘K clears
-  else if (mod && e.key === ",") { e.preventDefault(); openSettings(); }
-  else if (mod && e.key.toLowerCase() === "b" && !e.shiftKey) { e.preventDefault(); toggleSidebar(); }
-  else if (mod && e.shiftKey && e.key.toLowerCase() === "o") { e.preventDefault(); chat.newChat(); }
-  else if (e.key === "/" && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName) && !document.querySelector("dialog[open]")) { e.preventDefault(); dockVisible() ? focusDock() : input.focus(); }
-});
-
 /* ---------- boot ---------- */
 async function boot() {
   const s = await api.state();
@@ -210,15 +189,17 @@ async function boot() {
   applyTheme(); applyAppearance();
   setIcon($("#new-chat"), "plus", 18); setIcon($("#toggle-sidebar"), "menu", 18); setIcon($("#palette-btn"), "command", 18);
   paintSpeakToggle(); paintSend();
-  initSettings(); initPalette(); initPanel(); initDock();
+  initSettings(); initPalette(); initPanel(); initDock(); initNav();
   initMentions();
   initVoiceUI({ setInput, send: (t) => chat.send(t), openSettings });
   initActions({ newChat: () => chat.newChat(), openSettings, setTheme, setSpeak, openPanel, closePanel, toggleSidebar,
     editAction: (id) => { requestEdit(id); openSettings("actions"); } });
+  registerCore({ toggleSidebar, setTheme, setSpeak, openModelMenu, focusComposer: () => (dockVisible() ? focusDock() : input.focus()) });
+  initKeymap();
   $("#new-chat").onclick = () => chat.newChat();
   $("#rail-chat").onclick = () => { closePanel(); input.focus(); };
   $("#rail-settings").onclick = () => openSettings();
-  $("#palette-btn").onclick = () => openPalette(commands);
+  $("#palette-btn").onclick = () => openPalette();
   $("#toggle-sidebar").onclick = toggleSidebar;
   $("#speak-toggle").onclick = () => setSpeak(!state.config.voice.speak_summary);
 
@@ -243,6 +224,7 @@ async function boot() {
       if (ev.action === "open" && ev.reload && state.panelApp === ev.app) refreshPanel();
       else if (ev.action === "open") await openPanel(ev.app, Object.keys(ev.params || {}).length ? ev.params : null);
       else if (ev.action === "close") closePanel();
+      else if (ev.action === "verify") await verify(ev);
       else if (ev.action === "layout") {
         if (ev.mode === "chat") closePanel(); else if (ev.mode) setFull(ev.mode === "focus");
         if (ev.sidebar) setSidebar(ev.sidebar);

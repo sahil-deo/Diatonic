@@ -15,25 +15,25 @@
     <div class="rail-sep"></div>
     <div id="rail-apps" class="rail-apps"></div>
     <div class="grow"></div>
-    <button class="rail-btn" id="rail-settings" title="Settings (⌘,)" aria-label="Settings"></button>
+    <button class="rail-btn" id="rail-settings" title="Settings (⌘,)" data-cmd="settings.open" data-title="Settings" aria-label="Settings"></button>
   </nav>
 
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-head">
       <h1>Diatonic</h1>
-      <button class="icon-btn" id="new-chat" title="New chat (⌘⇧O)" aria-label="New chat"></button>
+      <button class="icon-btn" id="new-chat" title="New chat (⇧⌘O)" data-cmd="chat.new" data-title="New chat" aria-label="New chat"></button>
     </div>
     <div class="conv-list" id="conv-list" role="list"></div>
   </aside>
 
   <main class="main">
     <header class="topbar">
-      <button class="icon-btn" id="toggle-sidebar" aria-label="Toggle sidebar" title="Toggle sidebar (⌘B)"></button>
+      <button class="icon-btn" id="toggle-sidebar" aria-label="Toggle sidebar" title="Toggle sidebar (⌘B)" data-cmd="sidebar.toggle" data-title="Toggle sidebar"></button>
       <div class="title" id="chat-title">New chat</div>
       <div class="grow"></div>
       <button class="chip-btn" id="speak-toggle" aria-pressed="false" title="Spoken summaries"><span id="speak-icon"></span><span>Spoken summary</span></button>
       <button class="icon-btn bell" id="bell" aria-label="Notifications" aria-haspopup="true"><span id="bell-icon"></span><i class="bell-badge" id="bell-badge" hidden></i></button>
-      <button class="icon-btn" id="palette-btn" title="Commands (⌘K)" aria-label="Commands"></button>
+      <button class="icon-btn" id="palette-btn" title="Commands (⌘K)" data-cmd="palette.open" data-title="Commands" aria-label="Commands"></button>
     </header>
 
     <div class="inbox hidden" id="inbox" role="dialog" aria-label="Notifications"></div>
@@ -71,7 +71,7 @@
     <span class="status" id="st-voice"></span>
     <span class="status" id="st-runs"></span>
     <div class="grow"></div>
-    <span class="status muted">⌘K commands · ⌘, settings</span>
+    <span class="status muted" id="st-hint">⌘K commands · ⌘, settings</span>
   </footer>
 </div>
 

@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 
 NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
-KINDS = ("style", "script", "panel", "button", "app", "data")
+KINDS = ("style", "script", "panel", "button", "app", "data", "tools")
 MAX_CODE = 20_000
 MAX_CHANGES = 40
 # CSS may not fetch anything, and may not restyle the approval UI (a hidden Deny button is as good as a forged one).
@@ -94,6 +94,12 @@ class ModStore:
             try:
                 code = json.dumps(check_data_manifest(code))
             except DataSpecError as e:
+                raise ModError(str(e))
+        elif kind == "tools":
+            from .toolapps import ToolSpecError, check_tool_manifest
+            try:
+                code = json.dumps(check_tool_manifest(code))
+            except ToolSpecError as e:
                 raise ModError(str(e))
         elif kind == "app":
             from .apiapps import AppSpecError, check_manifest

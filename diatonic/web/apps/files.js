@@ -85,6 +85,7 @@ function manageRoots(el, ctx, info) {
 /* ---------------------------------------------------------------- browser */
 async function browser(el, ctx, info) {
   const { h, api, reload, prompt } = ctx;
+  ctx.list({ items: () => [...el.querySelectorAll(".frow")] });   // ↑/↓ and Enter in the file list
   const listing = await api.get(`${B}/ls?path=${enc(st.path)}${st.hidden ? "&hidden=1" : ""}`).catch(() => { st.path = ""; return api.get(`${B}/ls?path=`); });
   const body = h("div", { class: "files-list" });
   const rows = (entries) => entries.map((e) => h("div", { class: "frow", tabindex: 0, role: "button",
@@ -190,7 +191,12 @@ async function viewer(el, ctx, info) {
     content.append(h("div", { class: "p-empty" }, "This is a binary file, so there's nothing to show as text."), h("a", { class: "btn", href: rawUrl(f.path), style: "text-decoration:none" }, "Download"));
   } else {
     const isMd = f.kind === "markdown";
-    if (isMd) opts.append(h("button", { class: "btn sm", onclick: () => { st.source = !st.source; reload(); } }, st.source ? "Preview" : "Show source"));
+    if (isMd) {
+      opts.append(h("button", { class: "btn sm", onclick: () => { st.source = !st.source; reload(); } }, st.source ? "Preview" : "Show source"));
+      opts.append(h("button", { class: "btn sm", title: "Present this markdown file as slides", onclick: () => {
+        emit("ui", { action: "open", app: "presentations", params: { file: f.path } });
+      } }, "Present slides"));
+    }
     else opts.append(h("label", { class: "chk", style: "margin:0" }, h("input", { type: "checkbox", checked: st.wrap, onchange: (e) => { st.wrap = e.target.checked; code.classList.toggle("wrap", st.wrap); } }), "wrap lines"));
     const code = h("div", { class: `codeview ${st.wrap ? "wrap" : ""}` });
     if (isMd && !st.source) {

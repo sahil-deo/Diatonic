@@ -3,9 +3,33 @@ import { setIcon } from "./icons.js";
 import { api } from "./api.js";
 import { state, emit } from "./store.js";
 import { runPanel } from "./mods.js";
+import { register } from "./commands.js";
+import { registerList } from "./nav.js";
 
 let seq = 0;
 let current = null;   // {id, mod, ctx} of the panel on screen, so it can be navigated without a reload
+let cleanups = [];    // what the panel on screen registered (commands, lists, observers): undone when it is replaced or closed
+const unload = () => cleanups.splice(0).forEach((f) => { try { f(); } catch {} });
+const own = (off) => { cleanups.push(off); return off; };
+
+/** What a panel gets as `ctx` (the contract in docs/panels.md): keep per-panel data on `ctx`, not in module variables. */
+function panelContext(app, body, nav) {
+  const store = `panelstate:${app.id}`;
+  const read = () => { try { return JSON.parse(localStorage.getItem(store)) || {}; } catch { return {}; } };
+  return {
+    api, h, esc, toast, reload: () => load(), prompt: (t) => emit("prefill", t),
+    id: app.id, app: app.id, params: nav || {}, el: body,
+    state: { get: (k, d) => (k in read() ? read()[k] : d), set: (k, v) => { try { localStorage.setItem(store, JSON.stringify({ ...read(), [k]: v })); } catch {} } },
+    onResize: (fn) => { const ro = new ResizeObserver(() => fn(body.clientWidth, body.clientHeight)); ro.observe(body); return own(() => ro.disconnect()); },
+    command: (def) => own(register({ group: app.name, ...def, id: `${app.id}.${def.id}` })),
+    list: (spec) => own(registerList("panel", spec)),
+    // Read through an app's read-only tools: ctx.tool("gcal_list_events", {…}) -> the tool's result.
+    tool: (name, args = {}) => { const [a, ...t] = String(name).split("_"); return api.post(`/api/panel/tools/${a}/${t.join("_")}`, args).then((r) => r.result); },
+    // The user's own tracker apps: ctx.data("exam-tracker").get(), .add(list, {field: value}), .update(id, {field: value}).
+    data: (id) => ({ get: () => api.get(`/api/dapps/${id}`), add: (list, data) => api.post(`/api/dapps/${id}/${list}`, { data }),
+      update: (item, data) => api.patch(`/api/dapps/${id}/items/${item}`, { data }) }),
+  };
+}
 
 async function load(nav = null) {
   const app = [...state.apps, ...(state.modApps || [])].find((a) => a.id === state.panelApp);
@@ -14,6 +38,7 @@ async function load(nav = null) {
   $("#panel-title").textContent = app.name;
   body.replaceChildren(h("div", { class: "skeleton" }), h("div", { class: "skeleton" }), h("div", { class: "skeleton" }));
   const my = ++seq;
+  unload();
   try {
     const mod = app.mod ? { render: (el, c) => runPanel(app.code, el, c) } : await import(app.module || `/apps/${app.id}.js`);
     if (my !== seq) return;
@@ -21,7 +46,7 @@ async function load(nav = null) {
     $("#shell").classList.toggle("panel-wide", !!mod.wide || !!mod.full);
     applyWidth(app.id, mod.width);
     applyFull(app.id, mod.full);
-    const pctx = { api, h, esc, toast, reload: () => load(), prompt: (t) => emit("prefill", t) };
+    const pctx = panelContext(app, body, nav);
     await mod.render(body, pctx);
     current = { id: app.id, mod, ctx: pctx };
     if (nav && mod.navigate) await mod.navigate(nav, pctx);
@@ -36,7 +61,7 @@ function applyFull(appId, def) {
   setIcon($("#panel-full"), on ? "minimize" : "maximize", 16);
   $("#panel-full").title = on ? "Show the chat beside this" : "Expand over the chat";
 }
-function toggleFull() {
+export function toggleFull() {
   const on = !SHELL().classList.contains("panel-full");
   try { localStorage.setItem(`panelfull:${state.panelApp}`, on ? "1" : "0"); } catch {}
   applyFull(state.panelApp, on);
@@ -69,7 +94,7 @@ export async function openPanel(appId, nav = null) {
   emit("panel"); return load(nav);
 }
 export function closePanel() {
-  state.panelApp = null; current = null; seq++;
+  state.panelApp = null; current = null; seq++; unload();
   $("#shell").classList.remove("panel-open", "panel-wide", "panel-full"); SHELL().style.removeProperty("--panel-w"); $("#panel").classList.add("hidden"); emit("panel");
 }
 export function initPanel() {

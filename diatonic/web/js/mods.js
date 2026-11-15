@@ -6,6 +6,7 @@ import { icon } from "./icons.js";
 import { api } from "./api.js";
 import { state, on, emit, CLIENT_ID } from "./store.js";
 import * as chat from "./chat.js";
+import { register as registerCommand, run as runCommand } from "./commands.js";
 import { applyAppearance } from "./appearance.js";
 
 export const SAFE = new URLSearchParams(location.search).has("safe");
@@ -29,6 +30,8 @@ export function makeApi() {
     open: (app, params) => emit("ui", { action: "open", app, params }),
     close: () => emit("ui", { action: "close" }),
     toggle, isOpen: (app) => state.panelApp === app,
+    command: (def) => keep(registerCommand(def)),          // add a command (palette, keys); removed with the script
+    run: (id, args) => runCommand(id, args),
     every(ms, fn) { const t = setInterval(fn, Math.max(250, ms)); keep(() => clearInterval(t)); return t; },
     addButton({ label, title, onclick, icon: ic, app }) {
       // One copy in the top bar and one in the agent bar, so it can be reached while an app fills the window.

@@ -12,6 +12,7 @@ export async function navigate(p) { if (nav) return p.item ? nav.edit(p.item) : 
 export async function render(el, ctx) {
   const { api, h, toast, reload } = ctx;
   nav = { list, edit };
+  ctx.list({ items: () => [...el.querySelectorAll(".p-item")] });   // ↑/↓ and Enter in the note list
   await list("");
 
   async function list(q) {

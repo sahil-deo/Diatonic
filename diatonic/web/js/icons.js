@@ -44,6 +44,7 @@ const P = {
   play: '<path d="m6 4 14 8-14 8z"/>',
   pause: '<path d="M6 4h4v16H6zM14 4h4v16h-4z"/>',
   edit: '<path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+  presentation: '<path d="M2 3h20v14H2zM8 21h8M12 17v4"/>',
   shield: '<path d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5l-8-3z"/>',
 };
 export const icon = (name, size = 18) =>

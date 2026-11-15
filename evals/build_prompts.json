@@ -1,0 +1,40 @@
+{
+  "about": "Requests to build something, with checks the result must pass. The runner arrives with the verify step (todo.md, Phase 1): it sends each prompt to the real model, renders what was built in headless Chrome and applies `checks`. Run it with the 4B model; judge every change to the build tools by the pass rate.",
+  "checks_key": {
+    "renders": "the panel or app opens without a console error or a blank body",
+    "text": "every string appears somewhere a person can read it: the panel text, placeholders and labels",
+    "selectors": "every CSS selector matches at least one element",
+    "interact": "optional steps [{click|type: selector, value?}] followed by {expect_text}",
+    "seed": "a POST made before the prompt, so there is data to show",
+    "edit": "kind edit: `setup` names a prompt to build first; the model must then change that panel in place (same panel, version 2 or more)"
+  },
+  "prompts": [
+    { "id": "pomodoro", "kind": "panel", "prompt": "Make a pomodoro timer app with a 25 minute countdown and start, pause and reset buttons.",
+      "checks": { "renders": true, "text": ["25:00"], "selectors": ["button"], "interact": [{ "click": "button", "expect_text": "24:5" }] } },
+    { "id": "unit-converter", "kind": "panel", "prompt": "Build a unit converter panel that converts kilometres to miles as I type.",
+      "checks": { "renders": true, "selectors": ["input"], "interact": [{ "type": "input", "value": "10", "expect_text": "6.21" }] } },
+    { "id": "tip-calculator", "kind": "panel", "prompt": "Create a tip calculator: bill amount, tip percentage, and the total.",
+      "checks": { "renders": true, "selectors": ["input"], "text": ["tip"] } },
+    { "id": "counter", "kind": "panel", "prompt": "Make a counter app with plus and minus buttons and a reset.",
+      "checks": { "renders": true, "selectors": ["button"], "interact": [{ "click": "button", "expect_text": "1" }] } },
+    { "id": "stopwatch", "kind": "panel", "prompt": "Build a stopwatch with start, stop and lap buttons.",
+      "checks": { "renders": true, "selectors": ["button"], "text": ["00:00"] } },
+    { "id": "markdown-preview", "kind": "panel", "prompt": "A panel with a text box on top and a live preview of the Markdown below it.",
+      "checks": { "renders": true, "selectors": ["textarea, input"] } },
+    { "id": "habit-tracker", "kind": "data", "prompt": "Create an app to track my habits: name, days per week, notes, and whether it is done today.",
+      "checks": { "renders": true, "text": ["habit"] } },
+    { "id": "weather", "kind": "api", "prompt": "Create a weather app for a city using Open-Meteo.",
+      "checks": { "renders": true } },
+    { "id": "meet-scheduler", "kind": "tools", "prompt": "Create an app that schedules Google Meet meetings, lets me add guests and change the time, and cancels them.",
+      "checks": { "renders": true, "text": ["Meet"] } },
+    { "id": "edit-counter", "kind": "edit", "setup": "counter", "prompt": "Change the counter so the plus button adds 5 instead of 1.",
+      "checks": { "renders": true, "interact": [{ "click": "button", "expect_text": "5" }] } },
+    { "id": "edit-pomodoro", "kind": "edit", "setup": "pomodoro", "prompt": "Make the pomodoro timer 10 minutes instead of 25.",
+      "checks": { "renders": true, "text": ["10:00"] } },
+    { "id": "todo-viewer", "kind": "panel", "seed": { "post": "/api/apps/todos/create", "body": { "title": "buy oat milk" } },
+      "prompt": "Make a panel that lists my open to-dos.",
+      "checks": { "renders": true, "text": ["oat milk"] } },
+    { "id": "top-bar-button", "kind": "mod", "prompt": "Add a button to the top bar that opens my notes.",
+      "checks": { "renders": true, "selectors": [".mod-btn"] } }
+  ]
+}

@@ -267,7 +267,7 @@ function onEvent(ev) {
     return;
   }
   if (ev.type === "ui") return ev.target === CLIENT_ID ? emit("ui", ev) : undefined;   // screen control from a run this window started
-  if (["notification", "app_changed", "mods_changed", "model_changed", "script_output", "script_done"].includes(ev.type)) return emit(ev.type, ev); // not tied to a chat
+  if (["notification", "app_changed", "mods_changed", "keymap_changed", "model_changed", "script_output", "script_done"].includes(ev.type)) return emit(ev.type, ev); // not tied to a chat
   const cid = ev.conversation_id;
   const title = ev.type === "run_start" ? ev.title : titleOf(cid); // other events' `title` is a tool title
 

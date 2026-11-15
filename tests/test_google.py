@@ -271,8 +271,14 @@ def test_update_delete_respond(gx):
     assert call(cal, "update_event", event=ref, summary="Review v2")["updated"]["title"] == "Review v2"
     with pytest.raises(ToolError, match="Nothing to change"):
         call(cal, "update_event", event=ref)
-    with pytest.raises(ToolError, match="isn't an event reference"):
+    with pytest.raises(ToolError, match="No event called 'abc'"):
         call(cal, "update_event", event="abc", summary="x")
+    soon = (datetime.now() + timedelta(days=2)).replace(hour=11, minute=0, second=0, microsecond=0).isoformat()
+    call(cal, "create_event", summary="Budget review", start=soon, account="work")
+    assert call(cal, "update_event", event="budget review", location="Room 1")["updated"]["where"] == "Room 1"   # found by its title
+    call(cal, "create_event", summary="Budget review", start=soon.replace("T11", "T15"), account="work")
+    with pytest.raises(ToolError, match="More than one event matches 'Budget review'"):
+        call(cal, "delete_event", event="Budget review")
     assert tool(cal, "delete_event").risk == "destructive"
     call(cal, "delete_event", event=ref)
     assert ref.split("|")[2] not in inspect(HOME).events["primary"]

@@ -7,6 +7,7 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import jsonschema
 from starlette.applications import Starlette
 from starlette.exceptions import HTTPException
 from starlette.middleware import Middleware
@@ -19,6 +20,7 @@ from .agent import approvals
 from .actions import ActionRunner, clean_actions, clean_appearance, export_bundle, import_bundle
 from .agent.guards import collapse_repeats
 from .agent.runs import RunBusy, RunManager
+from . import keymap
 from .mods import ModError
 from . import models as M
 from . import secrets
@@ -175,6 +177,44 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
         mods_changed(what)
         return JSONResponse({"ok": True, "what": what})
 
+    async def panel_tool(request):
+        """A panel the user approved may read through an app's read-only tools (calendar events, notes, to-dos...). Anything that changes
+        data is the agent's job, with its approval card; the terminal and the interface tools are never available to panels."""
+        app = registry.apps.get(request.path_params["app_id"])
+        if app is None or app not in registry.enabled() or app.id in ("shell", "ui"):
+            return JSONResponse({"error": "No such app."}, 404)
+        tool = next((t for t in app.tools() if t.name == request.path_params["tool"]), None)
+        if tool is None:
+            return JSONResponse({"error": f"{app.name} has no tool '{request.path_params['tool']}'."}, 404)
+        if tool.risk != "read":
+            return JSONResponse({"error": f"{tool.title} changes things. A panel can only read; ask the agent to do it."}, 403)
+        args = await request.json()
+        try:
+            jsonschema.validate(args, tool.parameters)
+            result = await asyncio.wait_for(tool.handler(args), tool.timeout or 60)
+        except jsonschema.ValidationError as e:
+            return JSONResponse({"error": f"Invalid arguments: {e.message}"}, 400)
+        except ToolError as e:
+            return JSONResponse({"error": str(e)}, 400)
+        return Response(json.dumps({"result": result}, default=str), media_type="application/json")
+
+    async def mods_verified(request):
+        """The window's report on code it test-ran for the agent (see UiApp._verify)."""
+        ok = registry.apps["ui"].resolve_verify(request.path_params["rid"], await request.json())
+        return JSONResponse({"ok": ok})
+
+    # ---- keymap: the user's key bindings, kept in keymap.json in the Diatonic home folder ----------------------
+    async def keymap_get(request):
+        return JSONResponse({"path": str(keymap.path()), "keymap": keymap.load()})
+
+    async def keymap_put(request):
+        try:
+            saved = keymap.save(await request.json())
+        except keymap.KeymapError as e:
+            return JSONResponse({"error": str(e)}, 400)
+        ctx.broadcast({"type": "keymap_changed"})
+        return JSONResponse({"path": str(keymap.path()), "keymap": saved})
+
     # ---- API apps: the generic panel reads the definition and runs actions through the server -------------
     def api_app(request):
         a = registry.apps.get(request.path_params["app_id"])
@@ -237,6 +277,40 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
         act = a.m["actions"][action]
         fields = {f: api_pick(r["data"], f) for f in act["fields"]} if act["fields"] else None
         return JSONResponse({"status": r["status"], "data": r["data"], "fields": fields})
+
+    # ---- tool apps: built from Diatonic's own tools; the panel runs their actions here -----------------------
+    def tool_app(request):
+        a = registry.apps.get(request.path_params["app_id"])
+        if not getattr(a, "tool_app", False):
+            raise HTTPException(404, "No such app")
+        return a
+
+    async def tapp_info(request):
+        a = tool_app(request)
+        from .toolapps import REF_PARAMS
+        acts = {}
+        for n, act in a.m["actions"].items():
+            try:
+                sch, (_, _, t) = a.schema(n), a._under(n)
+            except ToolError as e:
+                acts[n] = {"title": act["title"], "error": str(e)}
+                continue
+            acts[n] = {"title": act["title"], "risk": t.risk, "schema": sch, "fixed": act["fixed"],
+                       "ref": next((p for p in sch["required"] if p in REF_PARAMS), None)}
+        return JSONResponse({"id": a.id, "title": a.m["title"], "description": a.m["description"], "actions": acts})
+
+    async def tapp_call(request):   # the user pressed a button in the app's panel: that's the approval
+        a, b = tool_app(request), await request.json()
+        action = request.path_params["action"]
+        try:
+            _, _, t = a._under(action)
+            if t.risk == "destructive" and not b.get("confirm"):
+                return JSONResponse({"error": "Confirm first."}, 400)
+            r = await a.run(action, b.get("args") or {})
+        except ToolError as e:
+            return JSONResponse({"error": str(e)}, 400)
+        ctx.broadcast({"type": "app_changed", "app": a.id}) if t.risk != "read" else None
+        return JSONResponse({"result": r})
 
     # ---- saved models: switch from the status bar, manage in Settings → Models ------------------------------
     async def models_list(request):
@@ -610,6 +684,8 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
         Route("/api/dapps/{app_id}/items/{iid:int}", dapp_patch, methods=["PATCH"]),
         Route("/api/dapps/{app_id}/items/{iid:int}", dapp_delete, methods=["DELETE"]),
         Route("/api/dapps/{app_id}/{list}", dapp_add, methods=["POST"]),
+        Route("/api/tapps/{app_id}", tapp_info),
+        Route("/api/tapps/{app_id}/call/{action}", tapp_call, methods=["POST"]),
         Route("/api/xapps/{app_id}", xapp_info),
         Route("/api/xapps/{app_id}/call/{action}", xapp_call, methods=["POST"]),
         Route("/api/home", home_catalog),
@@ -620,8 +696,12 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
         Route("/api/models/test", models_test, methods=["POST"]),
         Route("/api/models/available", models_available),
         Route("/api/models/{mid}", models_delete, methods=["DELETE"]),
+        Route("/api/keymap", keymap_get),
+        Route("/api/keymap", keymap_put, methods=["PUT"]),
         Route("/api/mods", mods_list),
         Route("/api/mods/revert", mods_revert, methods=["POST"]),
+        Route("/api/mods/verify/{rid}", mods_verified, methods=["POST"]),
+        Route("/api/panel/tools/{app_id}/{tool}", panel_tool, methods=["POST"]),
         Route("/api/mods/{name}", mods_set, methods=["PUT"]),
         Route("/api/mods/{name}", mods_delete, methods=["DELETE"]),
         Route("/api/apps", get_apps),
