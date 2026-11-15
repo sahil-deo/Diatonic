@@ -398,8 +398,10 @@ def test_read_email_marks_content_untrusted_and_trims_quotes(gx):
     assert att["attachments"] == ["notes.pdf (23 bytes)"]
     bad = call(mail, "read_email", email=ref_of(mail, "Action required"))
     assert "UNTRUSTED_EMAIL" in bad and "Ignore all previous instructions" in bad["body"]       # shown to the user, flagged to the model
-    with pytest.raises(ToolError, match="full `ref`"):
-        call(mail, "read_email", email="work@acme.test|t1")
+    whole = call(mail, "read_email", email="|".join(ref_of(mail, "Q3 numbers").split("|")[:2]))   # a conversation ref, as the Mail panel shows
+    assert whole["subject"] == r["subject"] and "UNTRUSTED_EMAIL" in whole
+    with pytest.raises(ToolError):
+        call(mail, "read_email", email="work@acme.test|no-such-thread")
     assert "UNTRUSTED" in tool(mail, "read_email").description.upper() or "untrusted" in tool(mail, "read_email").description
 
 
@@ -635,3 +637,12 @@ def test_calendar_css_does_not_collide_with_chat_markdown():
     for rule in re.findall(r"(?<![\w-])\.md\s*\{([^}]*)\}", css):
         assert "aspect-ratio" not in rule and "border-radius: 50%" not in rule and "background: none" not in rule, rule
     assert ".mday" in css
+
+
+def test_over_specified_mail_search_falls_back_to_a_looser_one(gx):
+    ctx, ga, cal, mail = gx
+    # what the model actually wrote: from:<the user's own account> plus an exact subject
+    r = call(mail, "list_emails", query=f"from:{WORK} subject:'Q3 numbers'")
+    assert [e["subject"] for e in r["emails"]][:1] == ["Q3 numbers"] and "looser search" in r["note"]
+    assert call(mail, "list_emails", query="from:nobody@nowhere.test")["emails"] == "No emails match."   # a real sender filter is kept
+    assert mail.relax_query(f'from:{WORK} subject:"Q3 numbers" in:inbox', [WORK]) == '"Q3 numbers"'

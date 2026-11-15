@@ -74,15 +74,25 @@ function toolCard(t, live) {
   return c;
 }
 
+const AsyncFn = Object.getPrototypeOf(async function () {}).constructor;
+/** For a card that installs interface code: say so if the code won't even parse, before anyone approves it. */
+export function codeProblem(ev) {
+  if (!["ui_add_script", "ui_add_panel"].includes(ev.name)) return null;
+  try { new AsyncFn("diatonic", "el", "ctx", ev.args?.code || ""); return null; } catch (e) { return `This code has a syntax error (${e.message}). Deny it and ask the agent to fix it.`; }
+}
 function approvalBox(ev, v) {
   const box = h("div", { class: `approval ${ev.risk === "destructive" ? "destructive" : ""}` });
-  const decide = (ok) => api.approve(ev.id, ok).catch(() => toast("Couldn't send your decision", "error"));
+  const bad = codeProblem(ev);
+  const decide = (ok, scope) => api.approve(ev.id, ok, scope).catch(() => toast("Couldn't send your decision", "error"));
+  if (ev.share) box.classList.add("share");
   box.append(
-    h("div", { class: "a-top", html: `${icon("shield", 15)} ${ev.risk === "destructive" ? "Needs approval · irreversible" : "Needs approval"}` }),
+    h("div", { class: "a-top", html: `${icon("shield", 15)} ${ev.share ? "Share private data with a cloud model?" : ev.risk === "destructive" ? "Needs approval · irreversible" : "Needs approval"}` }),
     h("div", { class: "a-what" }, ev.describe || ev.title),
     ev.preview ? h("pre", { class: "diff", html: highlight(ev.preview, "diff") }) : null,
+    bad ? h("div", { class: "err" }, bad) : null,
     h("div", { class: "a-btns" },
-      h("button", { class: "btn primary", onclick: () => decide(true) }, "Approve", h("kbd", {}, "⌘↵")),
+      h("button", { class: "btn primary", onclick: () => decide(true) }, ev.share ? "Allow once" : "Approve", h("kbd", {}, "⌘↵")),
+      ev.share && h("button", { class: "btn", onclick: () => decide(true, "chat") }, "Allow for this chat"),
       h("button", { class: "btn", onclick: () => decide(false) }, "Deny", h("kbd", {}, "Esc"))));
   v.approvals.set(ev.id, box);
   pending.push({ id: ev.id, decide });
@@ -122,6 +132,7 @@ function newView(cid) {
 /** Render one run event into the view. Pure rendering: no speech, no side effects outside the DOM. */
 function applyEvent(v, ev) {
   v.lastSeq = Math.max(v.lastSeq, ev.seq || 0);
+  queueMicrotask(() => emit("view-event", { ev, v }));   // the bottom dock mirrors what this conversation is saying
   switch (ev.type) {
     case "token":
       if (!v.seg) newSeg(v);
@@ -147,7 +158,11 @@ function applyEvent(v, ev) {
     case "message":
       if (v.seg) { cancelAnimationFrame(v.raf); v.seg.innerHTML = md(v.segText); v.seg.classList.remove("cursor"); }
       break;
-    case "cancelled": v.wrap.append(h("div", { class: "stopped" }, "Stopped.")); break;
+    case "cancelled": {   // a card still waiting for approval is void now: say so instead of leaving it looking open
+      const waiting = [...v.approvals.keys()];
+      waiting.forEach((id) => { v.cards.get(id)?.set("denied"); dropApproval(v, id); });
+      v.wrap.append(h("div", { class: "stopped" }, waiting.length ? "Stopped. Nothing was changed; the pending approval was cancelled." : "Stopped.")); break;
+    }
     case "done":
       cancelAnimationFrame(v.raf);
       if (v.seg) { v.seg.innerHTML = md(v.segText); v.seg.classList.remove("cursor"); if (!v.segText.trim()) v.seg.remove(); }
@@ -174,7 +189,8 @@ export async function send(text) {
   const v = newView(null);
   sending = true; early = []; emit("runs-changed"); scroll(true);
   try {
-    const r = await api.chat({ conversation_id: state.convId, message: text, speak: state.config.voice.speak_summary });
+    const sc = state.screenContext?.(), screen = sc && state.screenOff !== sc.ref ? sc : null;   // what "this" means
+    const r = await api.chat({ conversation_id: state.convId, message: text, speak: state.config.voice.speak_summary, screen });
     if (view !== v) return; // you moved to another chat while the request was in flight; the run continues in the background
     state.convId = v.cid = r.conversation_id;
     $("#chat-title").textContent = r.title;
@@ -208,7 +224,8 @@ function shouldSpeak(kind) {
 
 function onEvent(ev) {
   if (ev.type === "hello") return resync(ev.runs);
-  if (["notification", "app_changed", "script_output", "script_done"].includes(ev.type)) return emit(ev.type, ev); // not tied to a chat
+  if (ev.type === "ui") return ev.target === CLIENT_ID ? emit("ui", ev) : undefined;   // screen control from a run this window started
+  if (["notification", "app_changed", "mods_changed", "model_changed", "script_output", "script_done"].includes(ev.type)) return emit(ev.type, ev); // not tied to a chat
   const cid = ev.conversation_id;
   const title = ev.type === "run_start" ? ev.title : titleOf(cid); // other events' `title` is a tool title
 

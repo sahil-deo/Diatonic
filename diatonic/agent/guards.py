@@ -113,6 +113,8 @@ class RunGuard:
         self.calls = self.dups = self.errors = self.loops = 0
         self.nudged = False
         self.approval_timeout: float | None = None
+        self.readonly = False
+        self.cloud, self.grants, self.model_label = False, set(), ""   # set per run: cloud model and what the user allowed it   # unattended run: tools that change things are never offered or auto-added
         self.seen: dict[str, dict] = {}
 
     def expired(self) -> bool:

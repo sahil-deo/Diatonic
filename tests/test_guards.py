@@ -202,8 +202,33 @@ def test_only_relevant_apps_tools_are_offered(env):
     names = lambda t, prior=frozenset(): {n.split("_")[0] for n in loop.select_tools(r, t, set(prior))[0]}
     assert names("what's on my calendar tomorrow?") == {"gcal"}
     assert names("list my gh repos") == {"github"}
-    assert names("hello there") == {"github", "gcal"}            # unknown: offer everything
+    assert names("hello there") == set()                           # chit-chat with a big tool set: no tools at all
+    ranked = loop.rank_tools(r, "comment on the login problem")                   # no app named: only the best-matching tools
+    assert 0 < len(ranked) <= 8 and "github_comment_issue" in ranked
     assert names("and the second one?", {"github"}) == {"github"}  # sticky within a chat
+
+
+def test_the_prompt_never_exceeds_the_context_window():
+    tools = {f"t{i}": (None, None) for i in range(60)}
+    specs = [{"type": "function", "function": {"name": f"t{i}", "description": "x" * 400, "parameters": {}}} for i in range(60)]
+    kept, out = loop.fit_budget(tools, specs, fixed_chars=6000, num_ctx=8192, reply_tokens=1024)
+    assert 0 < len(out) < 60 and list(kept) == [s["function"]["name"] for s in out]          # the first-ranked tools are kept
+    assert 6000 + len(__import__("json").dumps(out)) <= (8192 - 1024 - 256) * 3.2
+    assert loop.fit_budget(tools, specs, fixed_chars=10**6, num_ctx=8192, reply_tokens=1024)[1] == []
+
+
+def test_a_real_tool_the_router_did_not_offer_still_runs(env, monkeypatch):
+    import asyncio
+    ctx, reg, app, db = env
+    from conftest import ScriptedProvider
+    monkeypatch.setattr(loop, "select_tools", lambda *a, **k: ({}, False))     # the router offered nothing
+    p = ScriptedProvider([[{"tool_calls": [{"name": "fake_read", "arguments": {"text": "x"}}]}], [{"content": "done"}]])
+    monkeypatch.setattr(loop, "make_provider", lambda c: p)
+
+    async def go():
+        return [ev async for ev in loop.run_agent(ctx, reg, db.create_conversation()["id"], "read x")]
+    evs = asyncio.run(go())
+    assert app.calls == [("read", {"text": "x"})] and [e for e in evs if e["type"] == "tool_result"][0]["ok"]
 
 
 def test_history_is_deduped_clipped_and_budgeted():

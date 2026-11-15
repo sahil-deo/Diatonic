@@ -1,5 +1,7 @@
 const BASE = "/api/apps/todos";
 let showDone = false;
+/** Called by the agent: show the open or the completed list. */
+export async function navigate(p, ctx) { if (p.view) { showDone = p.view === "done"; await ctx.reload(); } }
 
 export async function render(el, { api, h, reload }) {
   const d = await api.get(`${BASE}/panel${showDone ? "?done=1" : ""}`);

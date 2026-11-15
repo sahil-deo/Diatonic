@@ -60,9 +60,46 @@ class Database:
               prompt_tokens INTEGER, completion_tokens INTEGER, answer_chars INTEGER,
               guards TEXT NOT NULL DEFAULT '[]', steps TEXT NOT NULL DEFAULT '[]');
             CREATE INDEX IF NOT EXISTS idx_tel_started ON telemetry_runs(started_at);
+            CREATE TABLE IF NOT EXISTS app_items (     -- rows of the data apps the agent builds (one table for all of them)
+              id INTEGER PRIMARY KEY AUTOINCREMENT, app TEXT NOT NULL, list TEXT NOT NULL, parent INTEGER,
+              data TEXT NOT NULL DEFAULT '{}', pos REAL NOT NULL DEFAULT 0, created_at REAL NOT NULL, updated_at REAL NOT NULL);
+            CREATE INDEX IF NOT EXISTS idx_items_app ON app_items(app, list);
             PRAGMA foreign_keys = ON;
             """
         )
+
+    # ---- data apps ---------------------------------------------------------
+    def items(self, app: str, lst: str | None = None) -> list[dict]:
+        q, args = "SELECT * FROM app_items WHERE app=?", [app]
+        if lst:
+            q += " AND list=?"; args.append(lst)
+        return [{**dict(r), "data": json.loads(r["data"])} for r in self.conn.execute(q + " ORDER BY pos, id", args)]
+
+    def item(self, app: str, iid: int) -> dict | None:
+        r = self.conn.execute("SELECT * FROM app_items WHERE app=? AND id=?", (app, iid)).fetchone()
+        return {**dict(r), "data": json.loads(r["data"])} if r else None
+
+    def add_item(self, app: str, lst: str, data: dict, parent: int | None = None) -> dict:
+        now = time.time()
+        cur = self.conn.execute("INSERT INTO app_items (app, list, parent, data, pos, created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
+                                (app, lst, parent, json.dumps(data), now, now, now))
+        self.conn.commit()
+        return self.item(app, cur.lastrowid)
+
+    def update_item(self, app: str, iid: int, data: dict) -> dict | None:
+        self.conn.execute("UPDATE app_items SET data=?, updated_at=? WHERE app=? AND id=?", (json.dumps(data), time.time(), app, iid))
+        self.conn.commit()
+        return self.item(app, iid)
+
+    def delete_item(self, app: str, iid: int) -> int:
+        """Delete an item and everything under it. Returns how many rows went."""
+        ids, todo = [], [iid]
+        while todo:
+            ids += todo
+            todo = [r["id"] for r in self.conn.execute(f"SELECT id FROM app_items WHERE app=? AND parent IN ({','.join('?' * len(todo))})", (app, *todo))]
+        self.conn.execute(f"DELETE FROM app_items WHERE app=? AND id IN ({','.join('?' * len(ids))})", (app, *ids))
+        self.conn.commit()
+        return len(ids)
 
     def create_conversation(self, title: str = "New chat") -> dict:
         cid, now = uuid.uuid4().hex[:12], time.time()
@@ -113,6 +150,12 @@ class Database:
             (cid, limit),
         ).fetchall()
         return [{"role": r["role"], "content": r["content"], "meta": json.loads(r["meta"])} for r in reversed(rows)]
+
+    def tools_used(self, cid: str) -> set[str]:
+        used: set[str] = set()
+        for r in self.conn.execute("SELECT meta FROM messages WHERE conversation_id=? AND role='assistant'", (cid,)):
+            used.update(t["name"] for t in json.loads(r["meta"]).get("tools", []) if t.get("name"))
+        return used
 
     def apps_used(self, cid: str) -> set[str]:
         used: set[str] = set()

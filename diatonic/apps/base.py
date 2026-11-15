@@ -62,12 +62,20 @@ class App:
     keyword_patterns: list[str] = []   # regexes that also route a request here (e.g. file names)
     # Tools that run without an approval card until the user chooses otherwise in Settings.
     default_allow: list[str] = []
+    # Holds the user's private data (mail, files, notes...). A cloud model must ask before any of its tools run.
+    private: bool = False
+    # Tools whose results are written by someone else (emails). A run that used one is 'untrusted' and can't change the interface.
+    untrusted_tools: list[str] = []
 
     def __init__(self, ctx):
         self.ctx = ctx
 
     def tools(self) -> list[Tool]:
         return []
+
+    def tools_for(self, text: str, prior_tools: set[str] | frozenset = frozenset()) -> list[Tool]:
+        """The tools worth offering for this request. Apps with many tools can narrow this to save prompt space."""
+        return self.tools()
 
     def routes(self) -> list:
         return []

@@ -2,24 +2,29 @@ import { $, h, esc, toast } from "./dom.js";
 import { setIcon } from "./icons.js";
 import { api } from "./api.js";
 import { state, emit } from "./store.js";
+import { runPanel } from "./mods.js";
 
 let seq = 0;
+let current = null;   // {id, mod, ctx} of the panel on screen, so it can be navigated without a reload
 
-async function load() {
-  const app = state.apps.find((a) => a.id === state.panelApp);
+async function load(nav = null) {
+  const app = [...state.apps, ...(state.modApps || [])].find((a) => a.id === state.panelApp);
   if (!app) return;
   const body = $("#panel-body");
   $("#panel-title").textContent = app.name;
   body.replaceChildren(h("div", { class: "skeleton" }), h("div", { class: "skeleton" }), h("div", { class: "skeleton" }));
   const my = ++seq;
   try {
-    const mod = await import(`/apps/${app.id}.js`);
+    const mod = app.mod ? { render: (el, c) => runPanel(app.code, el, c) } : await import(app.module || `/apps/${app.id}.js`);
     if (my !== seq) return;
     body.replaceChildren(); delete body.dataset.dirty; body.classList.toggle("flush", !!mod.flush);
     $("#shell").classList.toggle("panel-wide", !!mod.wide || !!mod.full);
     applyWidth(app.id, mod.width);
     applyFull(app.id, mod.full);
-    await mod.render(body, { api, h, esc, toast, reload: load, prompt: (t) => emit("prefill", t) });
+    const pctx = { api, h, esc, toast, reload: () => load(), prompt: (t) => emit("prefill", t) };
+    await mod.render(body, pctx);
+    current = { id: app.id, mod, ctx: pctx };
+    if (nav && mod.navigate) await mod.navigate(nav, pctx);
   } catch (e) { body.replaceChildren(h("div", { class: "p-empty" }, `Couldn't load ${app.name}: ${e.message}`)); }
 }
 
@@ -54,19 +59,37 @@ function initResize() {
   });
 }
 
-export function openPanel(appId) {
+export async function openPanel(appId, nav = null) {
+  if (nav && state.panelApp === appId && current?.id === appId && current.mod.navigate) {   // already open: just move within it
+    try { await current.mod.navigate(nav, current.ctx); } catch (e) { toast(`Couldn't show that: ${e.message}`, "error"); }
+    return;
+  }
   state.panelApp = appId;
   $("#shell").classList.add("panel-open"); $("#panel").classList.remove("hidden");
-  emit("panel"); load();
+  emit("panel"); return load(nav);
 }
 export function closePanel() {
-  state.panelApp = null; seq++;
+  state.panelApp = null; current = null; seq++;
   $("#shell").classList.remove("panel-open", "panel-wide", "panel-full"); SHELL().style.removeProperty("--panel-w"); $("#panel").classList.add("hidden"); emit("panel");
 }
 export function initPanel() {
+  state.screenContext = screenContext;
   initResize();
   $("#panel-full").onclick = toggleFull; setIcon($("#panel-full"), "maximize", 16);
   setIcon($("#panel-refresh"), "refresh", 16); setIcon($("#panel-close"), "x", 16);
-  $("#panel-refresh").onclick = load; $("#panel-close").onclick = closePanel;
+  $("#panel-refresh").onclick = () => load(); $("#panel-close").onclick = closePanel;
 }
-export const refreshPanel = load;
+export const refreshPanel = () => load();
+/** What the user is looking at, so "summarize this" can mean the open email. */
+export function screenContext() {
+  if (!current || current.id !== state.panelApp) return null;
+  const item = current.mod.current?.();
+  const app = [...state.apps, ...(state.modApps || [])].find((a) => a.id === current.id);
+  return { app: current.id, kind: "app", title: app?.name || current.id, ...(item || {}) };   // the app itself counts, even with nothing selected
+}
+/** Panel beside the chat (false) or filling the window (true); remembered per app like the expand button. */
+export function setFull(on) {
+  if (!state.panelApp) return;
+  try { localStorage.setItem(`panelfull:${state.panelApp}`, on ? "1" : "0"); } catch {}
+  applyFull(state.panelApp, on);
+}

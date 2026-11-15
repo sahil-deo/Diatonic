@@ -7,6 +7,7 @@ import { askBrowserPermission } from "./inbox.js";
 import { RESERVED, save, saveSoon, field, text, select, toggle } from "./form.js";
 import { actionsPane } from "./settings-actions.js";
 import { interfacePane } from "./settings-interface.js";
+import { modelsPane } from "./settings-models.js";
 import { memoryPane } from "./settings-memory.js";
 import { accountsPane } from "./settings-accounts.js";
 
@@ -20,13 +21,10 @@ function agentPane() {
   const models = state.health?.agent?.models || [];
   const result = h("div", { class: "notice", style: "display:none" });
   return [
-    h("datalist", { id: "models" }, models.map((m) => h("option", { value: m }))),
-    field("Provider", select(a.provider, [["ollama", "Ollama (local)"]], (v) => save({ agent: { provider: v } })), "More providers can be added without touching the core."),
-    field("Endpoint", text(a.endpoint, (v) => saveSoon({ agent: { endpoint: v } }), { placeholder: "http://localhost:11434" })),
-    field("Model", text(a.model, (v) => saveSoon({ agent: { model: v } }), { list: "models" }), "Default: qwen3:4b-instruct. Run `ollama pull <model>` for others."),
+    field("Model", h("div", { class: "row", style: "align-items:center" }, h("strong", {}, state.health?.agent?.label || a.model),
+      h("button", { class: "btn sm", onclick: () => openSettings("models") }, "Models…")), "Switch from the status bar, or add local and cloud models in Models."),
     h("div", { class: "row" },
       field("Temperature", text(a.temperature, (v) => saveSoon({ agent: { temperature: v } }), { type: "number", step: "0.1", min: 0, max: 2 })),
-      field("Context (tokens)", text(a.num_ctx, (v) => saveSoon({ agent: { num_ctx: v } }), { type: "number", step: "1024", min: 2048 })),
       field("Max steps", text(a.max_steps, (v) => saveSoon({ agent: { max_steps: v } }), { type: "number", min: 1, max: 20 }))),
     h("div", { class: "row" },
       field("Max reply tokens", text(a.max_tokens, (v) => saveSoon({ agent: { max_tokens: v } }), { type: "number", step: "128", min: 128 }), "Hard cap per model reply."),
@@ -135,6 +133,8 @@ function appsPane() {
         st.action && h("a", { class: "btn sm", style: "margin-left:10px;text-decoration:none", href: st.action.href }, st.action.label)),
       ...fields,
       fields.length ? h("button", { class: "btn", onclick: saveApp }, "Save") : null,
+      a.enabled && toggle("Private", "A cloud model must ask before it reads or changes anything here.", a.private,
+        async (v) => { await api.putApp(a.id, { private: v }); await refreshApps(); }),
       a.enabled && h("div", { class: "p-section" }, "Tools"),
       ...(a.enabled ? a.tools.map((t) => h("div", { class: "tool-row", title: t.description },
         h("span", { class: "n" }, t.title), h("span", { class: `pill ${t.risk}` }, t.risk),
@@ -176,7 +176,7 @@ function automationPane() {
   ];
 }
 
-const TABS = [["agent", "Agent", agentPane], ["voice", "Voice", voicePane], ["accounts", "Accounts", accountsPane], ["apps", "Apps", appsPane], ["automation", "Automation", automationPane], ["actions", "Actions", actionsPane], ["memory", "Memory", memoryPane], ["interface", "Interface", interfacePane]];
+const TABS = [["agent", "Agent", agentPane], ["models", "Models", modelsPane], ["voice", "Voice", voicePane], ["accounts", "Accounts", accountsPane], ["apps", "Apps", appsPane], ["automation", "Automation", automationPane], ["actions", "Actions", actionsPane], ["memory", "Memory", memoryPane], ["interface", "Interface", interfacePane]];
 
 export async function refreshApps() {
   state.apps = await api.get("/api/apps"); emit("apps"); if (dlg().open) renderPane();

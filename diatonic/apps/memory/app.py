@@ -6,6 +6,7 @@ from ..base import WRITE, App, Tool, ToolError
 
 
 class MemoryApp(App):
+    private = True   # a cloud model must ask before reading or changing it
     id = "memory"
     name = "Memory"
     icon = "brain"

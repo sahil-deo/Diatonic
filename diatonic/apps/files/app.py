@@ -30,6 +30,7 @@ BACKUPS = 200
 
 
 class FilesApp(App):
+    private = True   # a cloud model must ask before reading or changing it
     id = "files"
     name = "Files"
     icon = "folder"
@@ -47,10 +48,61 @@ class FilesApp(App):
     def sandbox(self) -> Sandbox:
         return Sandbox(list(self.cfg.get("roots") or []), bool(self.cfg.get("allow_sensitive")))
 
-    def _p(self, path: str, *, must_exist: bool = True) -> Path:
+    def locate(self, text: str) -> tuple[Path, str]:
+        """Find a file or folder from what a person (or a small model) wrote: an exact path, or a near miss like
+        'Developers/Agentic' for ~/Developer/Agentic, or just a name somewhere in the shared folders."""
+        sb = self.sandbox()
+
+        def ok(p: Path) -> Path | None:   # every candidate passes the same checks as an exact path (shared, not blocked)
+            try:
+                return sb.resolve(str(p), must_exist=True)
+            except PathError:
+                return None
+        raw = str(text or "").strip().strip("`\"'").lstrip("@")
+        try:
+            real = sb.resolve(raw, must_exist=True)
+            return real, sb.display(real)
+        except PathError:
+            pass
+        norm = lambda s: re.sub(r"[\s_\-]+", "", s.lower()).rstrip("s")
+        parts = [p for p in re.split(r"[\\/]+", re.sub(r"^~[\\/]?", "", raw)) if p and p != "."]
+        if not parts:
+            raise ToolError("Say which file or folder.")
+        for root in sb.roots:
+            segs = parts[1:] if norm(parts[0]) == norm(root.name) and len(parts) > 1 else parts   # 'Developer/x' inside the Developer root
+            cur = root
+            for seg in segs:
+                try:
+                    cur = next(c for c in sorted(cur.iterdir()) if norm(c.name) == norm(seg))
+                except (StopIteration, OSError):
+                    cur = None
+                    break
+            if cur is not None and (real := ok(cur)):
+                return real, sb.display(real)
+        want, seen = norm(parts[-1]), 0          # last resort: that name anywhere (folders too), shallowest first
+        for root in sb.roots:
+            for dirpath, dirs, files in os.walk(root):
+                dirs[:] = sorted(d for d in dirs if not sb.skipped(d, True) and not d.startswith("."))
+                for n in dirs + files:
+                    seen += 1
+                    if norm(n) == want or (len(want) > 3 and want in norm(n)):
+                        if (real := ok(Path(dirpath) / n)):
+                            return real, sb.display(real)
+                if seen > 5000:
+                    break
+        raise ToolError(f"Nothing called '{text}' in the shared folders ({', '.join(r.name for r in sb.roots)}).")
+
+    def _p(self, path: str, *, must_exist: bool = True, forgive: bool = False) -> Path:
+        """Resolve a path in the shared folders. `forgive` (reading only, never for changes) accepts near misses
+        like 'Developers/Agentic' for 'Developer/Agentic'."""
         try:
             return self.sandbox().resolve(path, must_exist=must_exist)
         except PathError as e:
+            if forgive and must_exist and "doesn't exist" in str(e):   # never a way around "blocked" or "outside"
+                try:
+                    return self.locate(path)[0]
+                except ToolError:
+                    pass
             raise ToolError(str(e))
 
     def _changed(self, real: Path) -> None:
@@ -121,7 +173,7 @@ class FilesApp(App):
 
     async def list_files(self, a):
         sb = self.sandbox()
-        real = self._p(a.get("path") or ".")
+        real = self._p(a.get("path") or ".", forgive=True)
         if not real.is_dir():
             raise ToolError(f"{a.get('path')} is a file, not a folder.")
         depth, out = int(a.get("depth") or 1), []
@@ -151,7 +203,7 @@ class FilesApp(App):
         return {"folder": sb.display(real) or ".", "entries": out, "note": "Truncated at 120 entries." if len(out) >= 120 else None}
 
     async def read_file(self, a):
-        real = self._p(a["path"])
+        real = self._p(a["path"], forgive=True)
         if real.is_dir():
             raise ToolError(f"{a['path']} is a folder. Use list_files.")
         kind = C.kind_of(real)
@@ -175,7 +227,7 @@ class FilesApp(App):
 
     async def search_files(self, a):
         sb = self.sandbox()
-        base = self._p(a.get("path") or ".")
+        base = self._p(a.get("path") or ".", forgive=True)
         q = a["query"].strip().lower()
         if not q:
             raise ToolError("Give something to search for.")

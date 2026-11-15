@@ -353,7 +353,7 @@ def mmatch(a: Acct, m, q: str, label_ids):
     if "TRASH" in labels and "in:trash" not in q and "TRASH" not in (label_ids or []): return False
     if "SPAM" in labels and "in:spam" not in q and "SPAM" not in (label_ids or []): return False
     text = " ".join([hdr(m, "From"), hdr(m, "To"), hdr(m, "Subject"), m["snippet"]]).lower()
-    for tok in re.findall(r'(?:\w+:"[^"]*"|\S+)', q):
+    for tok in re.findall(r'(?:\w+:"[^"]*"|"[^"]*"|\S+)', q):   # like Gmail: "a phrase" matches anywhere
         t = tok.lower()
         if t == "is:unread" and "UNREAD" not in labels: return False
         if t == "is:read" and "UNREAD" in labels: return False
@@ -376,7 +376,7 @@ def mmatch(a: Acct, m, q: str, label_ids):
         elif t.startswith("newer_than:"):
             days = int(re.sub(r"\D", "", t) or 1)
             if int(m["internalDate"]) / 1000 < time.time() - days * 86400: return False
-        elif ":" not in t and t not in text: return False
+        elif ":" not in t and t.strip('"') not in text: return False
     return True
 
 

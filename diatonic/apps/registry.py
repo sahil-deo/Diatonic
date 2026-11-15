@@ -31,6 +31,20 @@ class Registry:
                 self.errors[m.name] = str(e)
         return self
 
+    def sync_api_apps(self) -> None:
+        """Turn the agent-made app definitions (API apps and data apps) into apps: added, changed or removed."""
+        from ..apiapps import ApiApp, check_manifest
+        from ..dataapps import DataApp, check_data_manifest
+        for k in [k for k, a in self.apps.items() if getattr(a, "api_app", False) or getattr(a, "data_app", False)]:
+            del self.apps[k]
+        for m in self.ctx.mods.list() if getattr(self.ctx, "mods", None) else []:
+            if m["kind"] in ("app", "data") and m["enabled"] and m["name"] not in self.apps:
+                try:
+                    self.apps[m["name"]] = (ApiApp(self.ctx, m["name"], check_manifest(m["code"])) if m["kind"] == "app"
+                                            else DataApp(self.ctx, m["name"], check_data_manifest(m["code"])))
+                except Exception as e:   # one bad manifest must not break the others
+                    self.errors[m["name"]] = str(e)
+
     def register(self, app: App) -> None:
         self.apps[app.id] = app
 
@@ -40,6 +54,11 @@ class Registry:
     def tool_map(self) -> dict[str, tuple[App, Tool]]:
         """Full tool name (`<app>_<tool>`) -> (app, tool), enabled apps only."""
         return {f"{a.id}_{t.name}": (a, t) for a in self.enabled() for t in a.tools()}
+
+    def is_private(self, app: App) -> bool:
+        """Private apps (mail, files, notes...) can't be read by a cloud model without asking. The user can change it per app."""
+        v = self.ctx.app_cfg(app.id).get("private")
+        return bool(app.private if v is None else v)
 
     def is_always_allowed(self, app: App, tool: Tool) -> bool:
         allowed = self.ctx.app_cfg(app.id).get("always_allow")
