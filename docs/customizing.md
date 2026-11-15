@@ -22,10 +22,15 @@ Only the window that started the run is moved.
 | `ui_add_button` | a top-bar button that opens/closes an app, or asks the agent a prompt (data, not code) | no (undoable) |
 | `ui_add_style` | custom CSS for one part of the page | no (undoable); CSS can't load anything from the network or touch the approval cards |
 | `ui_add_script` | new behaviour, e.g. a button | **yes, the card shows the code** |
-| `ui_add_panel` | a whole new panel with a rail icon | **yes, the card shows the code** |
+| `ui_add_panel` | a whole new panel with a rail icon | **yes, the card shows the code** (or a diff, when it replaces an existing panel) |
+| `ui_edit_panel` | change one piece of a panel or script it already made ("make the button green") | **yes, the card shows a diff** |
 | `ui_revert`, `ui_remove_mod`, `ui_list_mods` | undo, delete, list | no |
 
 Changes are stored in `~/.diatonic/ui/mods.json` with an undo history, shown under Settings → Interface → "Changes the agent made" (turn each off, remove it, or undo the last one), and offered as an Undo button when they happen. Scripts get a small `diatonic` object (`h`, `api`, `toast`, `addButton`, `toggle`, `open`, `close`, `isOpen`, `every`, `agent.send`, `on`); whatever a script adds is removed when it is changed or removed, so edits apply without a reload. Added buttons appear in the top bar and in the agent bar, so they work while an app fills the window. Approval cards for code say so if the code doesn't parse. Open the page with `?safe=1` to start with every mod off.
+
+**Code is tried before you are asked.** When the agent writes a panel or script, the code is first run in a sandboxed frame inside your open window (no network, no access to the rest of the page). If it has a syntax error, uses a name that doesn't exist, fails inside a timer, or shows nothing, the agent is told and fixes it, and you are only asked about code that at least runs. Calls to the server just wait in that test, so only what happens before the first one is checked; if no window answers within a few seconds you get the approval card as usual. The test is not a security check: the approval card is.
+
+**What a panel can use.** Besides `diatonic` (see above) a panel gets `el` (its empty container) and `ctx`: `ctx.state.get/set` keeps data between visits, `ctx.tool("gcal_list_events", {...})` runs any app's **read-only** tool and returns its data (changing things is the agent's job, with an approval card), and `ctx.data("app-id")` reads and adds to your own tracker apps (`.get()`, `.add(list, {field: value})`, `.update(id, {field: value})`). The full list is in [panels.md](panels.md).
 
 ### Your own apps, no API and no code
 
