@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "diatonic"
 version = "0.1.0"
-description = "A local, modular agentic harness: one agent, many apps, voice in and out."
+description = "A local agent harness: turns a small on-device model into a personal agent for your everyday apps."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

@@ -1,10 +1,10 @@
 # Diatonic
 
-**A local agent for your day-to-day apps.** Mail, calendar, files, notes, to-dos, GitHub and a terminal in one window, with an assistant that can use all of them, built to run well on a small model on your own machine.
+**A local agent harness for your day-to-day apps.** Diatonic is everything around the model that turns it into a useful agent: the apps and tools, the agent loop, approvals, guardrails, memory and the interface. Plug in a small local model (or Gemini, or Groq) and it becomes an assistant for your mail, calendar, files, notes, to-dos, GitHub and terminal.
 
 ![Diatonic's home screen: live tiles for mail, calendar, telemetry and GitHub, with the chat below](docs/images/Home.png)
 
-Everything runs locally at **http://localhost:5005**. Ask in text or by voice; the agent reads and acts through your apps, asks before anything that matters, and can even change its own interface or build you new apps.
+Everything runs locally at **http://localhost:5005**. The model is interchangeable; the harness is what makes even a 4B model reliable: it picks the few tools each request needs, checks and repairs tool arguments, cuts off loops, asks before anything that matters, and keeps private data away from cloud models. On top of that, the agent can change its own interface and build you new apps.
 
 ## What's inside
 
