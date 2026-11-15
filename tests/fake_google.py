@@ -373,6 +373,8 @@ def mmatch(a: Acct, m, q: str, label_ids):
             if t[8:].strip('"') not in hdr(m, "Subject").lower(): return False
         elif t == "has:attachment":
             if not any(p.get("filename") for p in m["payload"].get("parts", [])): return False
+        elif t.startswith("after:") and t[6:].isdigit():   # Gmail: after:<unix seconds>
+            if int(m["internalDate"]) / 1000 < int(t[6:]): return False
         elif t.startswith("newer_than:"):
             days = int(re.sub(r"\D", "", t) or 1)
             if int(m["internalDate"]) / 1000 < time.time() - days * 86400: return False

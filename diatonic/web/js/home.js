@@ -79,7 +79,7 @@ function body(id, d) {
     ...(d.items || []).map((it) => h("button", { type: "button", class: `tile-row ${it.tone || ""} ${it.done ? "done" : ""}`, onclick: () => open(it) },
       h("i", { class: "tile-dot" }), h("span", { class: "tile-t" }, it.text), it.badge ? h("span", { class: "tile-badge" }, it.badge) : null,
       it.sub ? h("span", { class: "tile-sub" }, it.sub) : null)),
-    !(d.items || []).length ? h("div", { class: "p-s tile-empty" }, d.empty || "Nothing here.") : null,
+    !(d.items || []).length && (d.empty ?? "Nothing here.") ? h("div", { class: "p-s tile-empty" }, d.empty ?? "Nothing here.") : null,
     d.more ? h("div", { class: "p-s tile-more" }, d.more) : null,
   ];
 }

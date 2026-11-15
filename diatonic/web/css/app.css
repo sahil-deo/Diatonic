@@ -581,3 +581,11 @@ dialog.mail-compose-dlg { width: min(620px, 94vw); } .mail-compose-dlg textarea 
 .th-row .term-out { background: #0b0c10; color: #d7dae0; font: 12px/1.45 var(--mono); padding: 10px; border-radius: 8px; max-height: 300px; overflow: auto; white-space: pre-wrap; margin: 8px 0; }
 .pill.d-read-only { color: var(--ok); } .pill.d-refused { color: var(--danger); } .pill.d-approved, .pill.d-pre-approved { color: var(--warn); }
 .job-cmds { margin: 6px 0; } .job-cmds textarea { width: 100%; font: 12px var(--mono); margin: 6px 0; }
+
+/* Files: "Open in" menu */
+.openin { position: relative; flex: none; }
+.openin-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 30; min-width: 170px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; box-shadow: var(--shadow); padding: 4px; display: flex; flex-direction: column; }
+.openin-menu[hidden] { display: none; }
+.openin-menu button { display: flex; align-items: center; gap: 8px; border: 0; background: none; color: var(--text); text-align: left; padding: 7px 9px; border-radius: 7px; white-space: nowrap; }
+.openin-menu button:hover { background: var(--surface-2); }

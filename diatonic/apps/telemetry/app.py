@@ -31,7 +31,7 @@ class TelemetryApp(App):
         return {"stats": stats if n > 3 else stats[:3],
                 "items": [{"text": t["name"].replace("_", " "), "sub": f"{t['calls']} calls · {t['avg_ms']} ms", "tone": "warn" if t["errors"] else None}
                           for t in tools] if n > 3 else [],
-                "empty": "No runs yet today."}
+                "empty": "" if s["runs"] else "No runs yet today."}   # the small tile shows only the numbers
 
     async def performance_summary(self, a):
         s = self.ctx.telemetry.summary(a.get("days", 1))

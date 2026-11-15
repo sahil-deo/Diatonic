@@ -56,9 +56,33 @@ def detect_loop(text: str) -> int | None:
             continue
         starts = seen.setdefault(key, [])
         starts.append(m.start())
-        if len(starts) >= 3 or (len(key) >= LONG_SENTENCE and len(starts) >= 2):
-            return starts[1] if len(starts) >= 2 else starts[0]
+        # A loop cycles through the same block again. A list in a fixed format ("account: x" for every email) repeats
+        # a line with different content in between, which is not a loop.
+        if len(starts) >= 3 and _same_block(text, starts[-3], starts[-2], starts[-1]):
+            return starts[-2]
+        if len(key) >= LONG_SENTENCE and len(starts) >= 2:
+            a_, b_ = starts[-2], starts[-1]
+            gap = text[a_:b_]
+            if len(_norm(gap)) <= len(key) + 40 or _same_block(text, a_, b_, b_ + (b_ - a_)):
+                return b_
     return None
+
+
+def _same_block(text: str, a: int, b: int, c: int) -> bool:
+    """Are text[a:b] and text[b:c] (nearly) the same? c may run past what's been written so far."""
+    from difflib import SequenceMatcher
+    one, two = _norm(text[a:b]), _norm(text[b:c])
+    if len(two) < 0.8 * len(one):     # the second copy isn't complete yet: compare what's there
+        one = one[:len(two)]
+        if len(two) < 40:
+            return False
+    if one == two:
+        return True
+    sm = SequenceMatcher(None, one, two, autojunk=False)
+    if sm.ratio() < 0.97:                 # loops are near-exact copies
+        return False
+    changed = "".join(one[i1:i2] + two[j1:j2] for op, i1, i2, j1, j2 in sm.get_opcodes() if op != "equal")
+    return not any(ch.isdigit() for ch in changed)   # differing numbers (times, dates, counts): items of a list
 
 
 def collapse_repeats(text: str) -> str:

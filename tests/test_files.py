@@ -588,3 +588,30 @@ def test_reading_forgives_near_miss_paths_but_changing_does_not(fx):
     with pytest.raises(ToolError):
         run(files, "delete_file", path="Project/src/app.py")          # a near miss is never good enough to change a file
     assert (root / "src" / "app.py").exists()
+
+
+def test_open_in_finder_or_vscode_only_for_shared_paths(client, monkeypatch):
+    c, root, outside = client
+    from diatonic.apps.files import app as files_app
+    calls = []
+
+    class P:
+        returncode = 0
+        async def communicate(self):
+            return b"", b""
+
+    async def fake_exec(*argv, **kw):
+        calls.append(argv)
+        return P()
+    monkeypatch.setattr(files_app.asyncio, "create_subprocess_exec", fake_exec)
+    H = {"X-Diatonic": "1"}
+    assert c.post("/api/apps/files/open", json={"path": str(root / "src"), "app": "finder"}).status_code == 403   # page-only
+    assert c.post("/api/apps/files/open", json={"path": str(root / "src"), "app": "finder"}, headers=H).json() == {"ok": True}
+    assert calls[-1] == ("open", str((root / "src").resolve()))
+    c.post("/api/apps/files/open", json={"path": str(root / "README.md"), "app": "finder"}, headers=H)
+    assert calls[-1] == ("open", "-R", str((root / "README.md").resolve()))                                # a file is revealed
+    c.post("/api/apps/files/open", json={"path": str(root / "src"), "app": "code"}, headers=H)
+    assert calls[-1][-1] == str((root / "src").resolve()) and ("code" in calls[-1][0] or "Visual Studio Code" in calls[-1])
+    assert c.post("/api/apps/files/open", json={"path": str(outside), "app": "finder"}, headers=H).status_code == 400   # not shared
+    assert c.post("/api/apps/files/open", json={"path": str(root / "src"), "app": "rm"}, headers=H).status_code == 400
+    assert len(calls) == 3

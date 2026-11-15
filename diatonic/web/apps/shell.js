@@ -9,6 +9,8 @@ export const flush = true;
 const B = "/api/apps/shell";
 const T = new Map();          // session id -> {term, fit, host, es, title, exited}
 let active = null, tab = "term", ui = null;
+let autoId = null;            // the tab opened automatically on first open (dropped if a specific folder was asked for)
+const typed = new Set();      // tabs someone has typed into
 
 function loadXterm() {
   if (window.Terminal && window.FitAddon) return Promise.resolve();
@@ -48,6 +50,7 @@ function attach(info) {
   const send = sender(info.id);
   term.onData((d) => {
     if (t.exited) { closeSession(t.id); return; }
+    typed.add(info.id);
     send(d);
   });
   term.onTitleChange((s) => { t.title = s.replace(/^.*?:\s*/, "").slice(0, 40) || t.title; paintTabs(); });
@@ -97,7 +100,7 @@ export async function render(el, ctx) {
   const list = await ctx.api.get(`${B}/term`).catch(() => []);
   for (const s of list) if (!T.has(s.id)) attach(s);
   for (const id of [...T.keys()]) if (!list.some((s) => s.id === id)) { T.get(id).es?.close(); T.get(id).term.dispose(); T.delete(id); }   // server restarted
-  if (!T.size) return newSession().catch((e) => ui.body.replaceChildren(h("div", { class: "err", style: "margin:16px" }, e.message)));
+  if (!T.size) return newSession().then(() => { autoId = active; }).catch((e) => ui.body.replaceChildren(h("div", { class: "err", style: "margin:16px" }, e.message)));
   if (!T.has(active)) active = [...T.keys()].pop();
   show();
 }
@@ -161,5 +164,9 @@ async function history() {
 
 /** The agent (or a link) can open a terminal in a folder. */
 export async function navigate(p) {
-  if (p.item || p.path) await newSession(p.item || p.path);
+  if (!(p.item || p.path)) return;
+  const spare = autoId && T.has(autoId) && !typed.has(autoId) ? autoId : null;
+  autoId = null;
+  await newSession(p.item || p.path);
+  if (spare) closeSession(spare);   // the empty home-folder tab made on first open isn't wanted
 }

@@ -113,10 +113,30 @@ async function browser(el, ctx, info) {
         : [h("div", { class: "p-empty" }, "No matches.")]));
     }, 180);
   });
-  el.replaceChildren(crumbs, h("div", { class: "files-tools" }, search,
+  el.replaceChildren(crumbs, h("div", { class: "files-tools" }, search, st.path && openIn(ctx, st.path, true),
     h("label", { class: "chk", style: "margin:0;white-space:nowrap" }, h("input", { type: "checkbox", checked: st.hidden, onchange: (e) => { st.hidden = e.target.checked; reload(); } }), "hidden")),
     body, manageRoots(el, ctx, info), h("div", { class: "p-s", style: "margin-top:12px" }, "Click @ on a file (or type @ in the chat box) to reference it. Ask the agent to edit, create or delete files in the chat."));
   if (st.q) search.dispatchEvent(new Event("input"));
+}
+
+/** "Open in" menu: the Terminal app at this folder, Finder, or VS Code. For a file: its folder in the Terminal,
+ *  the file selected in Finder, the file in VS Code. */
+function openIn(ctx, path, isDir) {
+  const { h, api, toast } = ctx;
+  const dir = isDir ? path : path.replace(/\/[^/]*$/, "");
+  const native = (app) => api.post(`${B}/open`, { path, app }).then(() => toast(app === "code" ? "Opened in VS Code" : "Opened in Finder")).catch((e) => toast(e.message, "error"));
+  const items = [
+    ["Terminal", "command", () => emit("ui", { action: "open", app: "shell", params: { path: dir } })],
+    [isDir ? "Finder" : "Show in Finder", "folder", () => native("finder")],
+    ["VS Code", "code", () => native("code")],
+  ];
+  const menu = h("div", { class: "openin-menu", role: "menu", hidden: true }, ...items.map(([label, ic, run]) =>
+    h("button", { type: "button", role: "menuitem", onclick: () => { menu.hidden = true; run(); } }, h("span", { html: icon(ic, 14) }), label)));
+  const close = (e) => { if (!wrap.contains(e.target)) { menu.hidden = true; removeEventListener("pointerdown", close, true); } };
+  const wrap = h("div", { class: "openin" },
+    h("button", { type: "button", class: "btn sm", "aria-haspopup": "menu", title: `Open ${isDir ? "this folder" : "this file"} in another app`,
+      onclick: () => { menu.hidden = !menu.hidden; if (!menu.hidden) addEventListener("pointerdown", close, true); } }, "Open in ▾"), menu);
+  return wrap;
 }
 
 /** @-reference text for a path: relative to its shared folder, quoted when it has spaces. */
@@ -136,6 +156,7 @@ async function viewer(el, ctx, info) {
   const back = () => { st.file = null; st.scroll = 0; reload(); };
   const bar = h("div", { class: "vbar" },
     h("button", { class: "btn sm", onclick: back }, "← Back"), h("div", { class: "vname grow", title: f.path }, f.name),
+    openIn(ctx, f.path, false),
     h("button", { class: "btn sm", title: "Put @file in the message box", onclick: () => prompt(`@${ref} `) }, "@ Reference"),
     h("button", { class: "btn sm", onclick: () => prompt(`In @${ref}: `) }, "Change with agent"),
     h("button", { class: "btn sm danger", onclick: () => prompt(`Delete @${ref}`) }, "Delete with agent"));

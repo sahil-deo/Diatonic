@@ -332,3 +332,25 @@ def test_a_nudged_reply_is_not_shown_twice(env, monkeypatch):
     assert [e for e in ev if e["type"] == "message"][0]["text"] == same
     assert {"type": "rewrite", "text": ""}.items() <= next(e for e in ev if e["type"] == "rewrite").items()    # the UI clears the first draft
     assert env[3].messages(conv["id"])[-1]["content"] == same
+
+
+def test_a_list_in_a_fixed_format_is_not_a_loop():
+    mails = [("Registration pending approval", "16:00", "sahildeowork@gmail.com", "You are awaiting approval for a meetup in Pune."),
+             ("Less than 8 hours left", "16:00", "sahildeo616@gmail.com", "Deadline reminder for the buildathon submission."),
+             ("Today is the last day to submit", "13:00", "sahildeo616@gmail.com", "Final call for submissions, both parts required."),
+             ("IMPORTANT: Round 2 video deadline", "12:33", "sahildeo616@gmail.com", "The deadline for the video round was extended."),
+             ("1 new project available to import", "10:33", "sahildeo616@gmail.com", "Vercel found a repository you can import.")]
+    text = "".join(f"title: {t}\ntime: 2026-11-15 {h} (Sun)\naccount: {a}\nsummary: {s}\n\n" for t, h, a, s in mails)
+    for cut in range(60, len(text), 37):          # never flagged at any point while it streams
+        assert detect_loop(text[:cut]) is None, text[:cut][-120:]
+    same = "".join(f"title: Build {i} finished\ntime: 2026-11-15 1{i}:00 (Sun)\naccount: sahildeo616@gmail.com\nsummary: Deploy number {i} succeeded.\n\n" for i in range(8))
+    assert detect_loop(same) is None              # even near-identical items that differ only in numbers
+
+
+def test_real_loops_are_still_caught():
+    block = "I have listed your emails above. Let me know if you want more detail on any of them. "
+    assert detect_loop("Here you go. " + block * 3) is not None                  # the same block cycling
+    long = "The meeting with the design team has been moved to Thursday afternoon at three. "
+    assert detect_loop("Here is the update. " + long + long) is not None                    # a long sentence straight again
+    cyc = "Checking your calendar for tomorrow now. Looking at all accounts to be sure. "
+    assert detect_loop(cyc * 3 + "Checking") is not None

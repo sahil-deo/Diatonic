@@ -407,7 +407,7 @@ def test_read_email_marks_content_untrusted_and_trims_quotes(gx):
 
 def test_mail_summary(gx):
     ctx, ga, cal, mail = gx
-    r = call(mail, "mail_summary")
+    r = call(mail, "unread_counts")
     by = {x["account"]: x for x in r}
     assert by["Work"]["unread_conversations"] >= 3 and by["Home"]["unread_conversations"] == 2
 
@@ -589,7 +589,7 @@ def test_loose_account_and_calendar_words_from_a_small_model_are_understood(gx):
     assert r["ref"].startswith(HOME + "|" + HOME + "|")
     r2 = call(cal, "create_event", summary="Gym2", start="2030-07-01T07:00:00", account="home", calendar="primary")["created"]
     assert r2["ref"].startswith(HOME + "|" + HOME + "|")
-    assert call(mail, "mail_summary", account="default")
+    assert call(mail, "unread_counts", account="default")
 
 
 def test_single_quoted_search_phrases_are_fixed(gx):
@@ -646,3 +646,22 @@ def test_over_specified_mail_search_falls_back_to_a_looser_one(gx):
     assert [e["subject"] for e in r["emails"]][:1] == ["Q3 numbers"] and "looser search" in r["note"]
     assert call(mail, "list_emails", query="from:nobody@nowhere.test")["emails"] == "No emails match."   # a real sender filter is kept
     assert mail.relax_query(f'from:{WORK} subject:"Q3 numbers" in:inbox', [WORK]) == '"Q3 numbers"'
+
+
+def test_mail_from_the_last_hours(gx, monkeypatch):
+    ctx, ga, cal, mail = gx
+    everything = call(mail, "list_emails", limit=25)["emails"]
+    seen = []
+    orig = mail.list_messages
+
+    async def spy(acc, query="", label="INBOX", limit=10):
+        seen.append(query)
+        return await orig(acc, query, label, limit)
+    monkeypatch.setattr(mail, "list_messages", spy)
+    recent = call(mail, "list_emails", hours=1, limit=25)["emails"]
+    assert all(q.startswith("after:") for q in seen)                              # Gmail's own filter does the work
+    assert isinstance(recent, str) or len(recent) <= len(everything)
+    call(mail, "list_emails", query="newer_than:10h from:priya", limit=5)
+    assert "newer_than" not in seen[-1] and "after:" in seen[-1] and "from:priya" in seen[-1]   # hours, which Gmail itself can't do
+    names = [t.name for t in mail.tools()]
+    assert "unread_counts" in names and "mail_summary" not in names

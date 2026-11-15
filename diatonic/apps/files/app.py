@@ -599,8 +599,37 @@ class FilesApp(App):
             pass
         return JSONResponse({"path": str(p), "parent": str(p.parent) if p != home_dir else None, "dirs": dirs[:300]})
 
+    async def r_open(self, request: Request):
+        """Open a shared file or folder in Finder or VS Code (the panel's "Open in" menu). Only paths inside the shared
+        folders, only from Diatonic's own page, and no shell: the path is passed as one argument."""
+        if request.headers.get("x-diatonic") != "1":
+            return JSONResponse({"error": "forbidden"}, 403)
+        b = await request.json()
+        try:
+            real = self.sandbox().resolve(str(b.get("path") or ""), must_exist=True)
+        except PathError as e:
+            return JSONResponse({"error": str(e)}, 400)
+        where = b.get("app")
+        if where == "finder":
+            argv = ["open", str(real)] if real.is_dir() else ["open", "-R", str(real)]   # a file: show it selected in its folder
+        elif where == "code":
+            code = shutil.which("code", path=os.environ.get("PATH", "") + ":/usr/local/bin:/opt/homebrew/bin")
+            argv = [code, str(real)] if code else ["open", "-a", "Visual Studio Code", str(real)]
+        else:
+            return JSONResponse({"error": "app must be finder or code"}, 400)
+        try:
+            p = await asyncio.create_subprocess_exec(*argv, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL,
+                                                     stderr=asyncio.subprocess.PIPE, start_new_session=True)
+            _, err = await asyncio.wait_for(p.communicate(), 15)
+        except (OSError, asyncio.TimeoutError) as e:
+            return JSONResponse({"error": f"Couldn't open it: {type(e).__name__}"}, 500)
+        if p.returncode:
+            msg = err.decode(errors="replace").strip()[:200] or f"exit {p.returncode}"
+            return JSONResponse({"error": "VS Code isn't installed (or its `code` command isn't)." if where == "code" else msg}, 500)
+        return JSONResponse({"ok": True})
+
     def routes(self):
-        return [Route("/state", self.r_state), Route("/roots", self.r_add_root, methods=["POST"]),
+        return [Route("/open", self.r_open, methods=["POST"]), Route("/state", self.r_state), Route("/roots", self.r_add_root, methods=["POST"]),
                 Route("/roots", self.r_remove_root, methods=["DELETE"]), Route("/sensitive", self.r_set_sensitive, methods=["POST"]),
                 Route("/ls", self.r_ls), Route("/file", self.r_file), Route("/raw", self.r_raw), Route("/find", self.r_find), Route("/pdf-text", self.r_pdf_text),
                 Route("/history", self.r_history), Route("/restore", self.r_restore, methods=["POST"]), Route("/dirs", self.r_dirs)]
