@@ -122,3 +122,65 @@ def test_the_verification_request_lists_what_a_panel_may_call(env, tmp_path, mon
     ctx, asked, ev = chat(env, tmp_path, monkeypatch, [[call("ui_add_panel", name="p", title="P", code=GOOD)], [{"content": "ok"}]], [OK])
     assert "fake_read" in asked[0]["tools"] and "fake_nuke" not in asked[0]["tools"] and not any(t.startswith(("ui_", "shell_")) for t in asked[0]["tools"])
     assert asked[0]["trackers"] == []
+
+
+# ---------- what the approval card says, and what a panel can read ----------
+def test_the_approval_card_leads_with_the_models_one_sentence_summary(env, tmp_path, monkeypatch):
+    ctx, asked, ev = chat(env, tmp_path, monkeypatch, [[call("ui_add_panel", name="p", title="Timer", code=GOOD, summary="A 25 minute countdown with start and reset.")], [{"content": "ok"}]], [OK])
+    card = [e for e in ev if e.get("type") == "tool_call"][0]
+    assert card["describe"].startswith("Add a new panel 'Timer'") and card["describe"].endswith(": A 25 minute countdown with start and reset.")
+    ctx, asked, ev = chat(env, tmp_path, monkeypatch, [[call("ui_add_panel", name="q", title="Plain", code=GOOD)], [{"content": "ok"}]], [OK])
+    assert [e for e in ev if e.get("type") == "tool_call"][0]["describe"] == "Add a new panel 'Plain'"          # no summary: nothing invented
+
+
+def test_a_panel_can_read_reminders_and_jobs_but_not_change_them(client):
+    assert client.post("/api/panel/tools/scheduler/list_reminders", json={}, headers=ORIGIN).status_code == 200
+    assert client.post("/api/panel/tools/scheduler/list_jobs", json={}, headers=ORIGIN).status_code == 200
+    assert client.post("/api/panel/tools/scheduler/delete_job", json={"id": 1}, headers=ORIGIN).status_code == 403
+
+
+def test_changing_something_already_built_offers_only_the_tools_for_changing_it(env, tmp_path):
+    ctx, reg, db, runs, events = setup(env, tmp_path)
+    seed(ctx)
+    tools, _ = select_tools(reg, "Make the timer button green", set())
+    ui = {n for n in tools if n.startswith("ui_")}
+    assert "ui_edit_panel" in ui and "ui_list_mods" in ui
+    assert not {"ui_create_app", "ui_add_field", "ui_add_list"} & ui       # the model once "added a duration field" instead of editing
+
+
+def test_the_sdk_tells_the_model_what_the_common_tools_return():
+    for part in ("todos_list_todos gives [{id, title", "gcal_list_events {events:", "Array.isArray"):
+        assert part in sdk.SDK
+
+
+# ---------- editing forgives the usual copy mistakes ----------
+def test_old_text_may_differ_in_spacing_and_line_breaks(env, tmp_path, monkeypatch):
+    sloppy = "const b = diatonic.h('button',   {style: 'color: red'},\n 'Go');"          # not how the code is laid out, same code
+    ctx, asked, ev = chat_with_seed(env, tmp_path, monkeypatch, [[call("ui_edit_panel", name="timer", old=sloppy, new="const b = diatonic.h('button', {}, 'Stop');")], [{"content": "ok"}]], [OK])
+    assert ctx.mods.get("timer")["code"] == "const b = diatonic.h('button', {}, 'Stop');\nel.append(b);"
+
+
+def test_a_missed_copy_says_which_lines_are_closest(env, tmp_path, monkeypatch):
+    ctx, asked, ev = chat_with_seed(env, tmp_path, monkeypatch, [[call("ui_edit_panel", name="timer", old="el.appendChild(b)", new="x")], [{"content": "no"}]], [])
+    msg = [e for e in ev if e.get("type") == "tool_result"][0]["preview"]
+    assert "closest lines" in msg and "el.append(b);" in msg and ctx.mods.get("timer")["code"] == CODE
+
+
+@pytest.mark.parametrize("name", ["timer", "Timer", "pomodoro timer", "the-timer", "pomodoro"])
+def test_the_panel_is_found_by_a_loose_name_when_the_match_is_clear(env, tmp_path, monkeypatch, name):
+    ctx, asked, ev = chat_with_seed(env, tmp_path, monkeypatch, [[call("ui_edit_panel", name=name, old="color: red", new="color: blue")], [{"content": "ok"}]], [OK])
+    assert "color: blue" in ctx.mods.get("timer")["code"]
+
+
+def test_with_two_panels_a_wrong_name_is_an_error_that_lists_them(env, tmp_path, monkeypatch):
+    import test_verify
+    orig = test_verify.setup
+
+    def two(e, t):
+        out = orig(e, t)
+        seed(out[0]); out[0].mods.put("panel", "clock", "el.append('c')", "Clock")
+        return out
+    monkeypatch.setattr(test_verify, "setup", two)
+    ctx, asked, ev = chat(env, tmp_path, monkeypatch, [[call("ui_edit_panel", name="weather", old="x", new="y")], [{"content": "no"}]], [])
+    msg = [e for e in ev if e.get("type") == "tool_result"][0]["preview"]
+    assert not asked and "timer" in msg and "clock" in msg

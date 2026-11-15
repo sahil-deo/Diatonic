@@ -9,7 +9,7 @@ SDK = (
     "In the code: `el` is the empty panel. diatonic.h(tag, {attrs, onclick}, ...children) builds an element "
     "(h('button', {class: 'btn', onclick: fn}, 'Go')); append with el.append(...). Style with style attrs; text input: "
     "h('input', {type: 'text'}). diatonic.every(ms, fn) repeats; ctx.state.get(key, default) and ctx.state.set(key, value) keep data between visits "
-    "(use them, not localStorage). Do not use fetch. Always await server calls. The user's own data: const todos = await ctx.tool('todos_list_todos', {}) (any app's read-only tool: <app>_<tool>, e.g. gcal_list_events, notes_list_notes); only trackers made with create_app use await ctx.data('app-id').get() or .add(list, {field: value}). Write plain JavaScript, no imports.")
+    "(use them, not localStorage). Do not use fetch. Always await server calls. The user's own data: const todos = await ctx.tool('todos_list_todos', {}) (any app's read-only tool: <app>_<tool>, e.g. gcal_list_events, notes_list_notes); only trackers made with create_app use await ctx.data('app-id').get() or .add(list, {field: value}). Results: todos_list_todos gives [{id, title, status, due}], notes_list_notes [{title, tags}], gcal_list_events {events: [{title, start, end, where}]}. A tool with nothing to list returns a text message, not a list, so check Array.isArray first. Write plain JavaScript, no imports.")
 
 TEMPLATES = [
     ("a counter or timer",

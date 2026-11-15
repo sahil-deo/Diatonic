@@ -32,6 +32,7 @@ VIEWS = {
     "todos": ["open", "done"],
 }
 VERIFY_WAIT = 6.0   # seconds to wait for the open window to run new code in its sandbox (it gives up after 4)
+SUMMARY = {"type": "string", "description": "One plain sentence for the user: what this shows or does"}
 COLOURS = {"green": "#34d399", "blue": "#7c9cff", "red": "#ef4444", "purple": "#a78bfa", "violet": "#a78bfa", "pink": "#f472b6", "orange": "#fb923c",
            "yellow": "#facc15", "teal": "#14b8a6", "cyan": "#22d3ee", "white": "#ffffff", "gray": "#9ca3af", "grey": "#9ca3af"}
 
@@ -380,8 +381,13 @@ class UiApp(App):
         return self._done(f"panel '{mod['title']}' was added to the left rail")
 
     async def list_mods(self, a: dict):
-        if (m := self.ctx.mods.get(self._slug(a.get("name")))) and m["kind"] in ("panel", "script"):
-            return {"name": m["name"], "kind": m["kind"], "title": m["title"], "code": m["code"]}   # to copy a piece of it for edit_panel
+        if a.get("name"):
+            try:
+                m = self._find_code_mod(a["name"])
+            except ToolError:
+                m = None
+            if m:
+                return {"name": m["name"], "kind": m["kind"], "title": m["title"], "code": m["code"]}   # to copy a piece of it for edit_panel
         mods = [{k: m[k] for k in ("name", "kind", "title", "enabled")} for m in self.ctx.mods.list()]
         return mods or "No interface changes have been made yet."
 
@@ -456,6 +462,12 @@ class UiApp(App):
         self._verified.add(key)
 
     @staticmethod
+    def _what(a: dict) -> str:
+        """The model's one-sentence account of what the code does, shown on the approval card above the code ('' if it gave none)."""
+        s = " ".join(str(a.get("summary") or "").split())[:200]
+        return f": {s}" if s else ""
+
+    @staticmethod
     def _slug(name) -> str:
         return str(name or "").strip().lower().replace(" ", "-").replace("_", "-")
 
@@ -474,19 +486,51 @@ class UiApp(App):
             return self._code_preview(a, "code")
         return preview
 
+    def _find_code_mod(self, name) -> dict:
+        """A panel or script by the name the model gave, forgiving: the exact name, then a name or title that contains it (or is part of it),
+        then the only panel or script there is. A small model names things after the request ("pomodoro"), not after what it called them ("timer")."""
+        mods = [m for m in self.ctx.mods.list() if m["kind"] in ("panel", "script")]
+        slug = self._slug(name)
+        for pick in (lambda m: m["name"] == slug,
+                     lambda m: slug and (slug in m["name"] or m["name"] in slug or slug in self._slug(m["title"]) or self._slug(m["title"]) in slug)):
+            hits = [m for m in mods if pick(m)]
+            if len(hits) == 1:
+                return hits[0]
+        if len(mods) == 1:
+            return mods[0]
+        raise ToolError("There is no panel or script with that name. Existing: " + (", ".join(f"{m['name']}" for m in mods) or "none") + ". list_mods shows them.", bad_args=True)
+
+    @staticmethod
+    def _locate(code: str, old: str) -> tuple[int, int] | None:
+        """Where `old` is in `code`: exactly as written, or failing that ignoring differences in spaces, indentation and line breaks (the usual way a
+        small model's copy goes wrong). None if it isn't there once."""
+        n = code.count(old)
+        if n == 1:
+            i = code.index(old)
+            return i, i + len(old)
+        if n > 1:
+            return None
+        parts = old.split()
+        if not parts:
+            return None
+        hits = list(re.finditer(r"\s*".join(re.escape(p) for p in parts), code))
+        return (hits[0].start(), hits[0].end()) if len(hits) == 1 else None
+
     def _edited(self, a: dict) -> tuple[dict, str]:
         """The panel or script being edited and its code with `old` replaced by `new`; a clear error if `old` doesn't match once."""
-        m = self.ctx.mods.get(self._slug(a.get("name")))
-        if not m or m["kind"] not in ("panel", "script"):
-            raise ToolError("There is no panel or script with that name. list_mods shows the names.", bad_args=True)
+        m = self._find_code_mod(a.get("name"))
         old, new = str(a.get("old") or ""), str(a.get("new") if a.get("new") is not None else "")
-        if not old:
-            raise ToolError("old must be a piece of the current code, copied exactly. list_mods with this name shows the code.", bad_args=True)
-        n = m["code"].count(old)
-        if n != 1:
-            raise ToolError("old is not in the code exactly as written. Call list_mods with this name, then copy a line from it." if n == 0
-                            else f"old appears {n} times. Include more of the surrounding code so it matches once.", bad_args=True)
-        return m, m["code"].replace(old, new, 1)
+        if not old.strip():
+            raise ToolError("old must be a piece of the current code. list_mods with this name shows the code.", bad_args=True)
+        at = self._locate(m["code"], old)
+        if at is None:
+            n = m["code"].count(old)
+            if n > 1:
+                raise ToolError(f"old appears {n} times. Include more of the surrounding code so it matches once.", bad_args=True)
+            close = difflib.get_close_matches(old.strip().splitlines()[0].strip(), [l.strip() for l in m["code"].splitlines() if l.strip()], n=3, cutoff=0.5)
+            raise ToolError("old is not in the code. " + (("The closest lines are: " + " | ".join(close) + ". ") if close else "")
+                            + "Copy a line from the code (list_mods with this name shows it) and put the change in new.", bad_args=True)
+        return m, m["code"][:at[0]] + new + m["code"][at[1]:]
 
     async def edit_panel(self, a: dict):
         self._guard_mod()
@@ -1032,27 +1076,27 @@ class UiApp(App):
                  # (to only rename a button, pass its name and the new label; it keeps doing what it did)
                  self.add_button, WRITE, title="Add button", precheck=self._blocked, describe=lambda a: f"Add a '{a.get('label')}' button"),
             Tool("add_script", "JavaScript for behaviour add_button can't do. The user approves the code first. " + SCRIPT_MAP + existing,
-                 {"properties": {"name": name, "code": {"type": "string", "description": "JavaScript"}, "title": {"type": "string"}}, "required": ["name", "code"]},
+                 {"properties": {"name": name, "code": {"type": "string", "description": "JavaScript"}, "title": {"type": "string"}, "summary": SUMMARY}, "required": ["name", "code"]},
                  self.add_script, WRITE, title="Add script", precheck=self._blocked,
-                 describe=lambda a: f"Run a new script '{a.get('name')}' in the interface{self._calls_server(a)}",
+                 describe=lambda a: f"Run a new script '{a.get('name')}' in the interface{self._calls_server(a)}{self._what(a)}",
                  preview=self._code_review("script")),
             Tool("add_panel", "Only for something create_app can't do (a clock, a game, a custom widget): a panel with its own JavaScript. "
                  "Trackers and lists use create_app; web APIs use connect_api. The code is test-run first and you hear about errors; the user then approves it. "
                  "To change a panel that already exists use edit_panel, not a new panel. " + SDK + examples() + existing,
-                 {"properties": {"name": name, "title": {"type": "string", "description": "Name shown in the rail"}, "code": {"type": "string", "description": "JavaScript that fills `el`"}},
+                 {"properties": {"name": name, "title": {"type": "string", "description": "Name shown in the rail"}, "code": {"type": "string", "description": "JavaScript that fills `el`"}, "summary": SUMMARY},
                   "required": ["name", "title", "code"]},
                  self.add_panel, WRITE, title="Add panel", precheck=self._blocked,
-                 describe=lambda a: f"Add a new panel '{a.get('title') or a.get('name')}'{self._calls_server(a)}",
+                 describe=lambda a: f"Add a new panel '{a.get('title') or a.get('name')}'{self._calls_server(a)}{self._what(a)}",
                  preview=self._code_review("panel")),
             Tool("list_mods", "List the interface changes made so far (styles, scripts, panels). With a name of a panel or script, also returns its code.",
                  {"properties": {"name": name}}, self.list_mods, title="List changes"),
             Tool("edit_panel", "Change a panel or script you already made by replacing one piece of its code: name, old = the exact current text to replace "
                  "(list_mods with the name shows the code), new = what goes there. For small changes ('make the button green'); use add_panel to rewrite it all. "
                  "The code is test-run, then the user approves the change shown as a diff." + existing,
-                 {"properties": {"name": name, "old": {"type": "string", "description": "Exact text from the current code"}, "new": {"type": "string", "description": "Replacement text"}},
+                 {"properties": {"name": name, "old": {"type": "string", "description": "Exact text from the current code"}, "new": {"type": "string", "description": "Replacement text"}, "summary": SUMMARY},
                   "required": ["name", "old", "new"]},
                  self.edit_panel, WRITE, title="Edit panel", precheck=self._blocked,
-                 describe=lambda a: f"Change '{a.get('name')}'", preview=self._edit_preview),
+                 describe=lambda a: f"Change '{a.get('name')}'{self._what(a)}", preview=self._edit_preview),
             Tool("remove_mod", "Remove one interface change by name." + existing, {"properties": {"name": name}, "required": ["name"]},
                  self.remove_mod, WRITE, title="Remove change", precheck=self._blocked),
             Tool("revert", "Undo the most recent interface change (theme, style, script or panel). Use for 'undo that', 'put it back'.", {},
@@ -1082,8 +1126,10 @@ class UiApp(App):
         code_mods = [m for m in self.ctx.mods.list() if m["kind"] in ("panel", "script")] if getattr(self.ctx, "mods", None) else []
         if code_mods and not api and not linked and EDIT_WORDS.search(t):
             words = {w for m in code_mods for w in re.findall(r"[a-z]{4,}", f"{m['name']} {m['title']}".lower())}
-            if build or any(re.search(rf"\b{re.escape(w)}", t) for w in words):    # "change the counter": it names something already built
-                want |= {"edit_panel", "list_mods", "add_panel"}                     # edit it in place instead of rewriting it
+            if any(re.search(rf"\b{re.escape(w)}", t) for w in words):      # "change the counter": it names something already built
+                want = {"edit_panel", "list_mods", "add_panel", "remove_mod", "revert", "open_app"}   # only ways to change it (not "add a field" tools)
+            elif build:
+                want |= {"edit_panel", "list_mods", "add_panel"}
         if HOME.search(t):   # "put X on the home screen" is about tiles, even when X is an app being built
             return [x for x in self.tools() if x.name in {"set_home", "revert", *NAV_TOOLS}]
         if CUSTOM.search(t):
