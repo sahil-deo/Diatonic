@@ -3,7 +3,7 @@ import { state } from "./store.js";
 
 export const DEFAULT_APPEARANCE = {
   theme: "system", accent: "", density: "comfortable", font: "system", font_size: 14, radius: "default", width: "default",
-  sidebar: "show", show_status_bar: true, show_quick_actions: true, show_suggestions: true, show_speak_button: true,
+  sidebar: "show", sidebar_width: "default", show_status_bar: true, show_quick_actions: true, show_suggestions: true, show_speak_button: true,
   rail_order: [], rail_hidden: [], custom_css: "",
 };
 export const ACCENTS = ["#7c9cff", "#a78bfa", "#f472b6", "#fb923c", "#34d399", "#22d3ee", "#facc15", "#ef4444"];
@@ -16,6 +16,7 @@ export const FONTS = {
 };
 const RADIUS = { sharp: 0.35, default: 1, round: 1.5 };
 const WIDTH = { narrow: "660px", default: "780px", wide: "980px", full: "100%" };
+const SIDEBAR = { narrow: "210px", default: null, wide: "340px" };
 
 const luminance = (hex) => {
   const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
@@ -35,6 +36,7 @@ export function applyAppearance(a = state.config?.appearance) {
   set("--fs", `${a.font_size}px`);
   set("--rs", String(RADIUS[a.radius] ?? 1));
   set("--content-w", WIDTH[a.width] || WIDTH.default);
+  set("--sb-w", SIDEBAR[a.sidebar_width] ?? null);
   const shell = document.getElementById("shell");
   shell.classList.toggle("hide-status", !a.show_status_bar);
   shell.classList.toggle("hide-qa", !a.show_quick_actions);
@@ -49,5 +51,5 @@ export function applyAppearance(a = state.config?.appearance) {
 /** Apps in the order and visibility the user chose for the left rail. */
 export function railApps(apps, a = state.config.appearance) {
   const hidden = new Set(a.rail_hidden), idx = (id) => { const i = a.rail_order.indexOf(id); return i < 0 ? 999 : i; };
-  return apps.filter((x) => x.enabled && x.panel && !hidden.has(x.id)).sort((x, y) => idx(x.id) - idx(y.id));
+  return [...apps, ...(state.modApps || [])].filter((x) => x.enabled && x.panel && !hidden.has(x.id)).sort((x, y) => idx(x.id) - idx(y.id));
 }

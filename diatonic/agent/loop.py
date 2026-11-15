@@ -19,7 +19,7 @@ import jsonschema
 
 from ..apps.base import ToolError
 from ..voice import summarizer
-from . import approvals
+from . import approvals, session
 from ..memory import LessonTracker, facts_block
 from .coerce import coerce_args
 from .guards import RunGuard, clip, collapse_repeats, detect_loop, looks_unfinished
@@ -47,13 +47,92 @@ def build_system_prompt(ctx, registry) -> str:
     return SYSTEM_PROMPT + f"\nTimezone: {ctx.tz_name}." + (f"\n\nUser preferences:\n{extra}" if extra else "")
 
 
-def select_tools(registry, text: str, prior_apps: set[str], force: set[str] | frozenset = frozenset()) -> tuple[dict, bool]:
+# "show my calendar", "open my latest email", "hide the sidebar": the user wants the screen moved, not data read out.
+# Only the interface tools are offered then, so a small model can't wander off into a lookup (and the prompt is tiny).
+_NAV = re.compile(r"^\W*(?:(?:please|can you|could you|just)\s+)*(?:show|open|go to|bring up|pull up|take me to|switch to|display|hide|expand|collapse|maximi[sz]e|minimi[sz]e|exit|leave|restore|shrink)\b", re.I)
+_NAV_NOT = re.compile(r"\b(?:and then|then|summari[sz]e|tell me|what|how many|count|explain|read (?:it|me)|list)\b|\d", re.I)
+
+
+def is_navigation(text: str) -> bool:
+    return bool(_NAV.match(text)) and not _NAV_NOT.search(text)
+
+
+# "summarize this", "reply to it", "delete that one": the user means what is open on their screen.
+_DEICTIC = re.compile(r"\b(?:this|that|it|these|those|here|current(?:ly)?|opened|on (?:the )?screen)\b", re.I)
+
+
+def screen_line(registry, screen) -> tuple[str, str | None]:
+    """A short note about the open panel and item, added to the user's turn only when they refer to it."""
+    if not isinstance(screen, dict):
+        return "", None
+    app = registry.apps.get(str(screen.get("app") or ""))
+    if not app or not app.panel:
+        return "", None
+    bits = [app.name]
+    if screen.get("title"):
+        bits.append(f"showing {str(screen.get('kind') or 'item')} \u201c{str(screen['title'])[:140]}\u201d")
+    if screen.get("ref"):
+        bits.append(f"ref: {str(screen['ref'])[:300]}")
+    return f"\n\n[On the user's screen: {', '.join(bits)}. 'this' or 'it' means that.]", app.id
+
+
+_STOP = set("""a an the and or but if then so to of in on at for from by with about into over as is are was were be been am do does did
+have has had i me my mine you your it its this that these those we us our they them their what which who whom when where why how can could
+would should will shall may might must please just also too very some any all each every no not new make made get got give let want need
+like use using up down out off than there here now today tomorrow app apps thing things one""".split())
+
+
+def _words(s: str) -> set[str]:
+    return {w[:6] for w in re.findall(r"[a-z]{3,}", s.lower()) if w not in _STOP}
+
+
+FALLBACK_ALL_CHARS = 9000   # ~2.5k tokens: above this, a request that names no app gets only its best-matching tools
+
+
+def rank_tools(registry, text: str, limit: int = 8) -> dict:
+    """No app was named: offer the few tools whose names and descriptions share words with the request (none for chit-chat).
+
+    Cheap (no model call) and bounded, unlike offering every tool, which no longer fits an 8k context.
+    """
+    want = _words(text)
+    if not want:
+        return {}
+    scored = []
+    for a in registry.enabled():
+        for t in a.tools():
+            name = _words(t.name.replace("_", " ") + " " + a.name)
+            desc = _words(t.description)
+            score = 3 * len(want & name) + len(want & desc)
+            if score:
+                scored.append((score, f"{a.id}_{t.name}", a, t))
+    scored.sort(key=lambda x: -x[0])
+    return {n: (a, t) for _, n, a, t in scored[:limit]}
+
+
+def fit_budget(tool_map: dict, specs: list[dict], fixed_chars: int, num_ctx: int, reply_tokens: int) -> tuple[dict, list[dict]]:
+    """Drop the last-offered tools until the prompt fits the context window, leaving room for the reply.
+
+    Tokens are estimated at 3.2 characters each, which overestimates for English and JSON, so this errs on the safe side.
+    """
+    budget = max(0, num_ctx - reply_tokens - 256) * 3.2
+    names, out = list(tool_map), list(specs)
+    while out and fixed_chars + len(json.dumps(out)) > budget:
+        out.pop(); names.pop()
+    return {n: tool_map[n] for n in names}, out
+
+
+def select_tools(registry, text: str, prior_apps: set[str], force: set[str] | frozenset = frozenset(),
+                 prior_tools: set[str] | frozenset = frozenset()) -> tuple[dict, bool]:
     """Show the model only the tools that plausibly matter (apps named, or already used in this chat).
 
     Returns (tool_map, matched) where `matched` means the request itself names an app, so a reply
     that calls no tool is suspicious.
     """
     apps = registry.enabled()
+    ui = next((x for x in apps if x.id == "ui"), None)
+    building = any(n in ("ui_create_app", "ui_add_list", "ui_connect_api", "ui_add_action", "ui_set_fields") for n in prior_tools)
+    if ui and not force and not building and is_navigation(text):
+        return {f"ui_{t.name}": (ui, t) for t in ui.tools() if t.name in ("open_app", "open_item", "set_layout")}, True
     low = text.lower()
     # Words inside paths and file names ("notes/todo.md") are not requests about the Notes app, so keyword matching
     # ignores them; only an app's own patterns (like file names for Files) look at the raw text.
@@ -61,14 +140,22 @@ def select_tools(registry, text: str, prior_apps: set[str], force: set[str] | fr
     named = [a for a in apps if a.id in force or any(re.search(rf"\b{re.escape(k)}(?:s|es)?\b", plain) for k in a.keywords)
              or any(re.search(p, low) for p in a.keyword_patterns)]
     chosen = [a for a in apps if a in named or a.id in prior_apps]
-    return {f"{a.id}_{t.name}": (a, t) for a in (chosen or apps) for t in a.tools()}, bool(named)
+    if not chosen:
+        every = {f"{a.id}_{t.name}": (a, t) for a in apps for t in a.tools()}
+        if len(json.dumps([tool_spec(a, t) for a, t in every.values()])) <= FALLBACK_ALL_CHARS:
+            return every, False          # few tools in total: offering them all is cheap and safest
+        return rank_tools(registry, text), False
+    return {f"{a.id}_{t.name}": (a, t) for a in chosen for t in a.tools_for(text, prior_tools)}, bool(named)
 
 
 TRACE_TURNS = 1       # how many of the most recent tool-using answers keep their tool trace in context
 TRACE_CHARS = 500     # per replayed tool result
 
 
-def build_history(rows: list[dict], max_chars: int) -> list[dict]:
+PRIVATE_NOTE = "[This earlier answer used private data, which isn't shared with a cloud model. Ask again if it's needed.]"
+
+
+def build_history(rows: list[dict], max_chars: int, hide_apps: set | frozenset = frozenset()) -> list[dict]:
     """Recent turns, de-looped and clipped, newest-first within a character budget.
 
     The latest tool-using answer is replayed as a real tool call + result, so the model keeps seeing that
@@ -78,8 +165,10 @@ def build_history(rows: list[dict], max_chars: int) -> list[dict]:
     for m in reversed(rows):
         content = collapse_repeats(m["content"]) if m["role"] == "assistant" else m["content"]
         content = clip(content, 1500 if m["role"] == "assistant" else 1200)
-        turn = [{"role": m["role"], "content": content}]
         tools = [t for t in (m.get("meta") or {}).get("tools", []) if t.get("ok") and t.get("name")]
+        if hide_apps and m["role"] == "assistant" and any(t.get("app") in hide_apps for t in tools):
+            content, tools = PRIVATE_NOTE, []   # made with a local model from private data: not for the cloud
+        turn = [{"role": m["role"], "content": content}]
         if m["role"] == "assistant" and tools and traces < TRACE_TURNS:
             traces += 1
             calls = [{"function": {"name": t["name"], "arguments": t.get("args") or {}}} for t in tools[:3]]
@@ -167,6 +256,8 @@ async def _execute(call: dict, tool_map: dict, registry, guard: RunGuard, out: d
     cid = uuid.uuid4().hex[:8]
     name, args = call["name"], _args(call["arguments"])
     entry = tool_map.get(name)
+    if entry is None and not guard.readonly:   # a real tool we didn't offer: the router guessed wrong, so let it run
+        entry = registry.tool_map().get(name)
     if entry is None:
         avail = ", ".join(tool_map) or "none"
         out.update(ok=False, content=f"Error: no tool named '{name}'. Available: {avail}.")
@@ -213,6 +304,10 @@ async def _execute(call: dict, tool_map: dict, registry, guard: RunGuard, out: d
 
     describe = tool.describe(args) if tool.describe else tool.title
     needs = tool.needs_approval and not registry.is_always_allowed(app, tool)
+    share = bool(getattr(guard, "cloud", False) and registry.is_private(app) and app.id not in guard.grants)
+    if share:   # the result would go to a model running elsewhere: the user decides, every time or for this chat
+        needs = True
+        describe = f"Let {guard.model_label} (cloud) use your {app.name}: {describe}"
     preview = None
     if needs and tool.preview:
         try:
@@ -229,7 +324,7 @@ async def _execute(call: dict, tool_map: dict, registry, guard: RunGuard, out: d
         except Exception:
             preview = None
     yield {"type": "tool_call", "id": cid, "name": name, "app": app.id, "title": tool.title, "args": args,
-           "risk": tool.risk, "describe": describe, "needs_approval": needs, "preview": preview}
+           "risk": tool.risk, "describe": describe, "needs_approval": needs, "preview": preview, "share": share}
     out["approval"] = False
     if needs:
         out["approval"] = True
@@ -241,6 +336,8 @@ async def _execute(call: dict, tool_map: dict, registry, guard: RunGuard, out: d
             approved = False  # unattended and nobody answered
         finally:
             approvals.discard(cid)
+        if approved == "chat" and share:
+            guard.grants.add(app.id)   # yes for the rest of this chat (with this model)
         yield {"type": "tool_status", "id": cid, "status": "approved" if approved else "denied"}
         if not approved:
             out.update(ok=False, denied=True, content="The user denied this action. Don't retry it; acknowledge and ask what they'd like instead.")
@@ -250,6 +347,8 @@ async def _execute(call: dict, tool_map: dict, registry, guard: RunGuard, out: d
 
     guard.calls += 1
     t0 = time.monotonic()
+    if tool.name in app.untrusted_tools:
+        session.mark_untrusted(app.id)   # from here on this run is not trusted to change the interface
     try:
         result = await asyncio.wait_for(tool.handler(args), 60)
         text, ok = _dump(result), True
@@ -293,32 +392,54 @@ def _fallback(cards: list[dict]) -> str:
 
 async def run_agent(ctx, registry, conv_id: str, text: str, *, speak: bool = False, readonly: bool = False,
                     approval_timeout: float | None = None, extra_system: str = "", attachments: str = "",
-                    force_apps: frozenset = frozenset()) -> AsyncIterator[dict]:
+                    force_apps: frozenset = frozenset(), screen: dict | None = None) -> AsyncIterator[dict]:
     cfg = ctx.config.data
     acfg = cfg["agent"]
+    session.UNTRUSTED.set({})
     t0 = time.monotonic()
     provider = make_provider(ctx)
     guard = RunGuard(acfg)
     guard.approval_timeout = approval_timeout
     trace = ctx.telemetry.begin(conv_id, text, "scheduled" if (readonly or approval_timeout is not None) else "chat", acfg["model"])
+    # A cloud model sees private apps' data only after the user says yes (once, or for this chat).
+    guard.cloud = ctx.cloud() if hasattr(ctx, "cloud") else False
+    guard.grants = ctx.cloud_grants.setdefault((conv_id, acfg.get("active_model") or acfg["model"]), set()) if guard.cloud else set()
+    guard.model_label = acfg["model"]
+    hidden = {a.id for a in registry.apps.values() if registry.is_private(a)} - guard.grants if guard.cloud else set()
 
-    history = build_history(ctx.db.history(conv_id, limit=int(acfg["history_messages"])), int(acfg["history_chars"]))
+    history = build_history(ctx.db.history(conv_id, limit=int(acfg["history_messages"])), int(acfg["history_chars"]), hidden)
     prior_apps = ctx.db.apps_used(conv_id)
+    prior_tools = ctx.db.tools_used(conv_id)
     ctx.db.add_message(conv_id, "user", text)
-    tool_map, expects_tool = select_tools(registry, text, prior_apps, force_apps)
+    tool_map, expects_tool = select_tools(registry, text, prior_apps, force_apps, prior_tools)
+    on_screen, screen_app = screen_line(registry, screen)
+    # "summarize this", or a follow-up like "list contents" that names no app: it's about what is on screen.
+    if screen_app and (_DEICTIC.search(text) or not expects_tool):
+        force_apps = frozenset(force_apps) | {screen_app}
+        tool_map, expects_tool = select_tools(registry, text, prior_apps, force_apps, prior_tools)
+    else:
+        on_screen = ""
+    if on_screen and screen_app in hidden:   # don't put an email subject or note title in a cloud prompt
+        on_screen = screen_line(registry, {k: v for k, v in screen.items() if k != "title"})[0]
     if attachments:   # the user attached what the answer needs, so a no-tool reply is legitimate (no 'call a tool' nudge)
         expects_tool = False
     if readonly:  # unattended runs may only read; nothing can be changed without a person present
-        tool_map = {n: (a, t) for n, (a, t) in tool_map.items() if not t.needs_approval}
+        tool_map = {n: (a, t) for n, (a, t) in tool_map.items() if not t.needs_approval and a.id not in hidden}
     mem = ctx.memory
     # With no app named in the request every app's tools are offered as a fallback, but app-specific facts aren't.
     facts = mem.relevant({a.id for a, _ in tool_map.values()} if (expects_tool or prior_apps) else set())
+    if "memory" in hidden:   # remembered facts about the user stay local
+        facts = []
     specs = [tool_spec(a, t, mem.tool_notes(n)) for n, (a, t) in tool_map.items()]
-    trace.routing(sorted({a.id for a, _ in tool_map.values()}), len(specs))
+    guard.readonly = readonly
     learner = LessonTracker() if acfg and ctx.config.data["memory"]["auto_learn"] and ctx.config.data["memory"]["enabled"] else None
     now = ctx.now().strftime("%A %Y-%m-%d %H:%M")
     messages = [{"role": "system", "content": build_system_prompt(ctx, registry) + facts_block(facts) + extra_system}, *history,
-                {"role": "user", "content": f"{text}{attachments}\n\n(Now: {now})"}]
+                {"role": "user", "content": f"{text}{attachments}{on_screen}\n\n(Now: {now})"}]
+    # Never send more than the model can take: a context overflow is a hard error from Ollama, not a slow answer.
+    fixed = sum(len(m.get("content") or "") for m in messages) + 600 * len(history) // 10
+    tool_map, specs = fit_budget(tool_map, specs, fixed, int(acfg.get("num_ctx") or 8192), int(acfg.get("max_tokens") or 1024))
+    trace.routing(sorted({a.id for a, _ in tool_map.values()}), len(specs))
 
     cards: dict[str, dict] = {}
     texts: list[str] = []
@@ -390,7 +511,8 @@ async def run_agent(ctx, registry, conv_id: str, text: str, *, speak: bool = Fal
                 break
 
             messages.append({"role": "assistant", "content": content,
-                             "tool_calls": [{"function": {"name": c["name"], "arguments": _args(c["arguments"])}}
+                             "tool_calls": [{"function": {"name": c["name"], "arguments": _args(c["arguments"])},
+                                             **({"extra": c["extra"]} if c.get("extra") else {})}   # e.g. Gemini's thought signature, sent back as-is
                                             for c in calls[:MAX_CALLS_PER_STEP]]})
             used_tools = True
             for call in calls[:MAX_CALLS_PER_STEP]:

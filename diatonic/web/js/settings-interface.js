@@ -31,6 +31,7 @@ export function interfacePane() {
       oninput: (e) => { e.target.closest(".field").querySelector("label").textContent = `Text size: ${e.target.value}px`; set({ font_size: Number(e.target.value) }, true); } })),
     field("Font", segmented(a.font, Object.keys(FONTS).map((k) => [k, k[0].toUpperCase() + k.slice(1)]), (v) => set({ font: v }))),
     field("Corners", segmented(a.radius, [["sharp", "Sharp"], ["default", "Default"], ["round", "Round"]], (v) => set({ radius: v }))),
+    field("Chat list width", segmented(a.sidebar_width || "default", [["narrow", "Narrow"], ["default", "Default"], ["wide", "Wide"]], (v) => set({ sidebar_width: v }))),
     field("Chat width", segmented(a.width, [["narrow", "Narrow"], ["default", "Default"], ["wide", "Wide"], ["full", "Full"]], (v) => set({ width: v }))),
 
     h("div", { style: "height:12px" }), h("div", { class: "p-section" }, "Layout"),
@@ -54,6 +55,16 @@ export function interfacePane() {
       h("button", { class: "btn", onclick: async () => { if (await save({ appearance: { custom_css: cssBox.value } })) { applyAppearance(); toast("Applied"); } } }, "Apply CSS"),
       h("button", { class: "btn", onclick: async () => { cssBox.value = ""; if (await save({ appearance: { custom_css: "" } })) applyAppearance(); } }, "Clear")),
     h("div", { class: "help" }, "Runs only on this page. Variables you can override: --accent, --bg, --surface, --border, --text, --radius."),
+
+    h("div", { style: "height:22px" }), h("div", { class: "p-section" }, "Changes the agent made"),
+    ...((state.mods || []).length ? state.mods.map((m) => h("div", { class: "rail-edit" },
+      h("span", { class: "grow", title: m.kind === "style" ? "CSS" : "Runs in this page" }, `${m.title} · ${m.kind}`),
+      h("label", { class: "chk", style: "margin:0" }, h("input", { type: "checkbox", checked: m.enabled, onchange: async (e) => { await api.put(`/api/mods/${encodeURIComponent(m.name)}`, { enabled: e.target.checked }).catch((x) => toast(x.message, "error")); setTimeout(rerenderSettings, 300); } }), "on"),
+      h("button", { class: "icon-btn sm", "aria-label": "Remove", title: "Remove", onclick: async () => { await api.del(`/api/mods/${encodeURIComponent(m.name)}`).catch((x) => toast(x.message, "error")); setTimeout(rerenderSettings, 300); }, html: "×" })))
+      : [h("div", { class: "help" }, "Nothing yet. Ask the agent, e.g. “make the sidebar narrower” or “add a panel with a clock”.")]),
+    h("div", { class: "row", style: "margin-top:8px" },
+      h("button", { class: "btn", onclick: async () => { try { toast((await api.post("/api/mods/revert")).what); } catch (x) { toast(x.message, "error"); } setTimeout(rerenderSettings, 300); } }, "Undo last change")),
+    h("div", { class: "help" }, "Styles and scripts the agent adds load after the built-in interface. Add ?safe=1 to the address to start with all of them off."),
 
     h("div", { style: "height:22px" }), h("div", { class: "p-section" }, "Backup and reset"),
     h("div", { class: "row" },

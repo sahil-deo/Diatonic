@@ -12,11 +12,12 @@ def request(approval_id: str) -> asyncio.Future:
     return fut
 
 
-def resolve(approval_id: str, approved: bool) -> bool:
+def resolve(approval_id: str, approved: bool | str) -> bool:
+    """approved: True / False, or "chat" = yes, and don't ask again in this chat (cloud sharing)."""
     fut = _pending.get(approval_id)
     if fut is None or fut.done():
         return False
-    fut.set_result(bool(approved))
+    fut.set_result(approved if approved == "chat" else bool(approved))
     return True
 
 

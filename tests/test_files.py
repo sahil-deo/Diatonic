@@ -525,3 +525,66 @@ def test_previews_warn_when_a_change_breaks_python_or_json(fx):
     assert "syntax error" in r["warning"]                       # the model is told too, so it can repair it
     (root / "broken.py").write_text("def x(:\n")
     assert not t["edit_file"].preview({"path": "broken.py", "start_line": 1, "end_line": 1, "new_text": "def y(:"}).startswith("⚠")   # already broken: not our change
+
+
+def test_locate_forgives_near_miss_paths(fx):
+    files, root, outside, ctx, reg = fx
+    assert files.locate("src")[1] == "src" and files.locate("src")[0].is_dir()
+    assert files.locate("Projects/Src")[1] == "src"                 # root name, plural and case are forgiven
+    assert files.locate("my-notes.md")[1] == "notes/My Notes.md"     # a name anywhere, spaces/dashes ignored
+    with pytest.raises(ToolError, match="Nothing called"):
+        files.locate("nowhere/at-all")
+
+
+def test_open_app_goes_to_a_folder_and_never_claims_what_it_ignored(fx):
+    from diatonic.agent.runs import RunManager
+    from diatonic.agent.session import RUN_CLIENT
+    from diatonic.apps.ui import create as create_ui
+    files, root, outside, ctx, reg = fx
+    runs = RunManager(); q = runs.subscribe("tab")
+    ctx.send_ui, ctx.registry = runs.send_ui, reg
+    ui = create_ui(ctx); reg.register(ui)
+
+    async def go():
+        RUN_CLIENT.set("tab")
+        r = await ui.open_app({"app": "file explorer", "query": "Project/src"})
+        assert "shows the folder src" in r
+        ev = q.get_nowait()
+        assert ev["params"] == {"item": "src", "kind": "folder"}
+        r = await ui.open_app({"app": "files", "view": "week"})
+        assert "NOT applied" in r and "view" in r                      # told, so it can't claim the week view
+        await ui.open_item({"app": "files", "what": "app.py"})
+        assert [e for e in [q.get_nowait(), q.get_nowait()] if e["params"].get("kind") == "file"][0]["params"]["item"] == "src/app.py"
+
+    asyncio.run(go())
+
+
+def test_a_follow_up_naming_no_app_gets_the_on_screen_apps_tools(fx, monkeypatch):
+    files, root, outside, ctx, reg = fx
+    seen = {}
+
+    class P(ScriptedProvider):
+        async def stream(self, messages, tools=None, model=None, options=None):
+            seen.setdefault("tools", [t["function"]["name"] for t in tools or []])
+            seen.setdefault("user", messages[-1]["content"])
+            async for c in super().stream(messages, tools, model, options):
+                yield c
+
+    monkeypatch.setattr(loop, "make_provider", lambda c: P([[{"content": "ok"}]] * 4))
+    monkeypatch.setattr(loop, "FALLBACK_ALL_CHARS", 0)                # behave like the full app set
+
+    async def go():
+        async for _ in loop.run_agent(ctx, reg, ctx.db.create_conversation()["id"], "list contents",
+                                      screen={"app": "files", "kind": "folder", "ref": "src", "title": "src"}):
+            pass
+    asyncio.run(go())
+    assert "files_list_files" in seen["tools"] and "ref: src" in seen["user"]
+
+
+def test_reading_forgives_near_miss_paths_but_changing_does_not(fx):
+    files, root, outside, ctx, reg = fx
+    assert run(files, "list_files", path="Projects/SRC")["folder"] == "src"
+    assert "def main" in str(run(files, "read_file", path="Project/src/app.py"))
+    with pytest.raises(ToolError):
+        run(files, "delete_file", path="Project/src/app.py")          # a near miss is never good enough to change a file
+    assert (root / "src" / "app.py").exists()

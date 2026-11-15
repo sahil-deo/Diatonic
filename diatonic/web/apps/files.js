@@ -2,7 +2,7 @@
 import { render as md } from "/js/md.js";
 import { lines as hlLines } from "/js/highlight.js";
 import { icon } from "/js/icons.js";
-import { state } from "/js/store.js";
+import { state, emit } from "/js/store.js";
 
 const B = "/api/apps/files";
 export const wide = true;
@@ -15,11 +15,25 @@ const size = (n) => (n == null ? "" : n < 1024 ? `${n} B` : n < 1048576 ? `${(n 
 const ago = (t) => new Date(t * 1000).toLocaleDateString([], { month: "short", day: "numeric", year: t * 1000 < Date.now() - 3e10 ? "numeric" : undefined });
 const KIND_ICON = { folder: "folder", markdown: "file-text", pdf: "file-text", image: "image", text: "code", binary: "file" };
 
+let host = null;
+export const current = () => (st.file ? { kind: "file", ref: st.file, title: st.file.split("/").pop() }
+  : host?.el?.isConnected ? { kind: "folder", ref: st.path || ".", title: st.path || "the shared folders" } : null);
+/** Called by the agent: open a file in the viewer, or a folder in the browser. */
+export async function navigate(p) {
+  if (!p.item || !host) return;
+  const path = p.item.replace(/^@/, "");
+  const isFile = p.kind ? p.kind === "file" : /\.[A-Za-z0-9]{1,8}$/.test(path.split("/").pop());
+  if (isFile) { st.file = path; st.path = path.replace(/\/[^/]*$/, ""); } else { st.file = null; st.path = path; }
+  await render(host.el, host.ctx);
+}
+
 export async function render(el, ctx) {
   const { api, h, toast, reload, prompt } = ctx;
+  host = { el, ctx };
   const info = await api.get(`${B}/state`);
   if (state.openFile) { st.file = state.openFile; st.path = state.openFile.replace(/\/[^/]*$/, ""); state.openFile = null; }
   if (!info.roots.length) return onboarding(el, ctx, info);
+  queueMicrotask(() => emit("screen"));
   if (st.file) return viewer(el, ctx, info);
   return browser(el, ctx, info);
 }

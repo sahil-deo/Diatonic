@@ -1,14 +1,21 @@
 import { render as md } from "/js/md.js";
+import { emit } from "/js/store.js";
 
 const BASE = "/api/apps/notes";
 export const wide = true;
 
+let nav = null, open = null;
+export const current = () => (open ? { kind: "note", ref: open, title: open } : null);
+/** Called by the agent: open a note by title, or show a search. */
+export async function navigate(p) { if (nav) return p.item ? nav.edit(p.item) : nav.list(p.query || ""); }
+
 export async function render(el, ctx) {
   const { api, h, toast, reload } = ctx;
+  nav = { list, edit };
   await list("");
 
   async function list(q) {
-    el.replaceChildren(); delete el.dataset.dirty;
+    el.replaceChildren(); delete el.dataset.dirty; open = null; emit("screen");
     const d = await api.get(`${BASE}/notes${q ? `?q=${encodeURIComponent(q)}` : ""}`);
     const search = h("input", { type: "search", placeholder: "Search notes…", value: q, "aria-label": "Search notes" });
     let t; search.addEventListener("input", () => { clearTimeout(t); t = setTimeout(() => list(search.value.trim()).then(() => el.querySelector("input[type=search]").focus()), 250); });
@@ -23,6 +30,7 @@ export async function render(el, ctx) {
   async function edit(slug) {
     const n = slug ? await api.get(`${BASE}/notes/${encodeURIComponent(slug)}`) : { title: "", tags: [], body: "" };
     let cur = slug, preview = false, timer;
+    open = n.title || null; emit("screen");
     const title = h("input", { type: "text", class: "note-title", placeholder: "Title", value: n.title });
     const tags = h("input", { type: "text", placeholder: "tags, comma separated", value: n.tags.join(", ") });
     const body = h("textarea", { class: "note-body", placeholder: "Write in markdown…", spellcheck: "true" }, n.body);

@@ -21,7 +21,7 @@ Targets: first-message-in-chat under 6 s, follow-ups under 3 s, plain lookups un
 - [ ] **Skip the second model call for plain lookups.** For list/show/what's-on requests, render the tool result with code (calendar events, to-dos, repos, reminders, notes) and show it immediately; only call the model when the request needs reasoning ("which is most urgent?", "summarize"). *Expected:* about 3 s saved per lookup, and no chance of the model misreporting the data. Needs a per-tool `render()` and a cheap "does this need the model?" rule.
 - [ ] **Tool-level routing.** Replace per-app keyword routing with a local scorer (no model) that ranks individual tools and offers the top 6–8. Today a reminder request still pulls in 18 tools. *Measure:* "Tools offered" and prompt size in run detail.
   - [ ] Fix keyword overlaps (the calendar app lists "remind", which drags it into every reminder request).
-  - [ ] **Replace the "offer every tool" fallback** with no tools for requests that match nothing (plain chat), and **auto-expand** when the model calls a real tool we didn't offer: add that app's tools and continue instead of returning "no tool named".
+  - [x] **Replaced the "offer every tool" fallback**: requests that name no app get their best-matching tools by word overlap (none for chit-chat), unoffered real tools still run if the model calls them, apps can narrow their own tools per request (`tools_for`), and a budget check trims tools so a prompt never exceeds `num_ctx` (the 9.3k-token overflow).
   - [ ] Optional: a tiny constrained classification call (enum output, about 8 tokens) for ambiguous requests only. Never on every request.
 - [ ] **Code-parsed fast paths for daily commands.** "Remind me in 20 minutes to …", "add a to-do …", "what's on my calendar today" can be recognised and executed in about 0.1 s with the existing time parser, falling back to the model for fuzzy phrasing. Show what was understood and keep approvals for anything that changes data.
 - [ ] **Eval harness.** About 40 realistic requests with the expected tool and arguments, run against the real model, comparing routing strategies and prompt changes (accuracy, steps, tokens, seconds). Store results; run nightly with our own scheduler; show regressions in the Telemetry panel. Every change in this file should be judged with it.
@@ -37,6 +37,25 @@ Targets: first-message-in-chat under 6 s, follow-ups under 3 s, plain lookups un
 - [ ] **Parallel tool execution** when the model emits several independent read calls in one step.
 - [ ] **Reference resolution.** "Close the second one", "snooze that" resolved against the last results in code (numbered handles), not by the model.
 - [ ] **Rolling state instead of history replay.** A short structured "what we were just doing" (last entities and results) in place of replaying old turns; cheaper and more cache-stable than summarising with the model.
+
+## Interface control follow-ups
+
+- [x] Agent opens apps, items and layouts (`ui` tools, `navigate()` hooks in panels).
+- [x] **Always-visible bottom dock** (text, mic, latest reply, approvals) whenever a panel covers the chat. Not in the dock yet: `/` commands, `@` file mentions, quick-action buttons, and a narrow-screen version (under 820px the chat is shown instead).
+- [x] **Agent-made interface changes** (`set_theme`, `add_style`, `add_script`, `add_panel`, undo) with approval cards showing the code, refused in any run that has read mail. Taint is per app tool (`untrusted_tools`); only Gmail declares any so far, so web or GitHub issue text isn't covered yet.
+- [x] Declarative top-bar buttons (`ui_add_button`), rail icon show/hide and chat-list width in `set_theme`, scripts cleaned up and re-run on change (no reload), syntax warning on code approval cards, existing mod names shown to the model so edits replace instead of duplicating.
+- [x] Screen context ("summarize this email") and a looser retry for over-specified mail searches.
+- [x] Interface tools only report what they actually did (ignored options are named so the model can't claim them); Files takes folder paths and forgives near misses for reading (never for changes, never around the block list); a follow-up that names no app gets the on-screen app's tools.
+- [x] **API apps** (`apiapps.py`): web-API apps as data, built step by step by the agent with immediate test calls; generic panel; server-side calls with host/SSRF/size limits; key in keychain. Verified end to end with Open-Meteo on the real model.
+- [x] **Data apps** (`dataapps.py`): personal apps with no API or code (lists, typed fields, nesting), generic panel, generated tools found by name, agent deletes always ask. Verified end to end (exam tracker) on the real model.
+- [ ] Data apps: sorting/filter views, due-date reminders through the scheduler, export as Markdown/CSV, reordering by drag.
+- [ ] API apps: OAuth, pagination, import from an OpenAPI file (would make building almost fully code-driven), POST bodies beyond flat fields, eval over ~8 public APIs.
+- [x] **Saved models + cloud providers**: status-bar switcher, Settings → Models (Ollama, Gemini via AI Studio, Groq, any OpenAI-compatible), keys in keychain, private apps behind approval for cloud models. Cloud verified only with mocked APIs so far: needs a real Gemini and Groq key test.
+- [ ] Models: per-model sampling settings, token/cost totals per cloud model in Telemetry, automatic fallback to the local model when a cloud API is down.
+- [ ] **Answer grounding check** is still the general fix for confident claims: compare what the final answer says happened with the tool results.
+- [ ] Mods: syntax-check scripts server-side (a broken script is only noticed after it runs), a diff when a mod is updated, and export/import of mods.
+- [x] Navigation, event/mail/note opening, dock approvals and layout modes verified in Chrome over the DevTools protocol (real model, real accounts). Still to check in Zen.
+- [ ] Code-parsed fast path for plain "show/open <app>" (no model call at all).
 
 ## Google (Calendar and Mail) follow-ups
 

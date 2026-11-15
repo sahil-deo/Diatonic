@@ -8,7 +8,8 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from . import secrets
-from .config import Config
+from .config import Config, home
+from .mods import ModStore
 from .db import Database
 from .memory import MemoryStore
 from .telemetry import Telemetry
@@ -34,9 +35,18 @@ class Context:
         self.memory = MemoryStore(db, config)
         self.telemetry = Telemetry(db, config)
         self.google = GoogleAccounts(self)
+        self.mods = ModStore(home() / "ui")
         self.scheduler = None   # set by the server once the engine exists
         self.notifier = None
         self.broadcast = lambda ev: None   # pushes an event to every connected UI
+        self.send_ui = lambda client, ev: False   # pushes a screen-control event to one window
+        self.registry = None
+        self.cloud_grants: dict[tuple, set] = {}   # (conversation, model) -> private apps allowed for that chat
+
+    def cloud(self) -> bool:
+        """Is the model in use running somewhere other than this computer?"""
+        from .models import is_cloud
+        return is_cloud(self.config.data["agent"])
 
     def app_cfg(self, app_id: str) -> dict:
         return self.config.app(app_id)

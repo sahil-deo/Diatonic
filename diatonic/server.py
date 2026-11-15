@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -18,6 +19,11 @@ from .agent import approvals
 from .actions import ActionRunner, clean_actions, clean_appearance, export_bundle, import_bundle
 from .agent.guards import collapse_repeats
 from .agent.runs import RunBusy, RunManager
+from .mods import ModError
+from . import models as M
+from . import secrets
+from .apiapps import call as api_call, pick as api_pick
+from .apps.base import ToolError
 from .agent.providers import ProviderError, make_provider
 from .apps.registry import Registry
 from .config import Config, home
@@ -74,8 +80,12 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
     runs = RunManager()
     store = Store(db)
     ctx.broadcast = runs.broadcast
+    ctx.send_ui = runs.send_ui
     ctx.notifier = Notifier(ctx, store, runs.broadcast)
     registry = registry or Registry(ctx).discover()
+    ctx.registry = registry
+    ctx.mods.on_change = registry.sync_api_apps   # API apps the agent makes become real apps (tools, panel) at once
+    registry.sync_api_apps()
     ctx.scheduler = Scheduler(ctx, registry, runs, ctx.notifier, store)
     action_runner = ActionRunner(ctx)
     stt, tts = STT(), TTS()
@@ -97,7 +107,8 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
         cfg = ctx.app_cfg(a.id)
         fields = [{**f, "set": bool(a.secret(f["key"])) if f.get("secret") else None,
                    "value": None if f.get("secret") else cfg["settings"].get(f["key"], "")} for f in a.settings]
-        return {"id": a.id, "name": a.name, "icon": a.icon, "description": a.description, "panel": a.panel,
+        return {"id": a.id, "name": a.name, "icon": a.icon, "description": a.description, "panel": a.panel, "module": getattr(a, "module", None),
+                "private": registry.is_private(a),
                 "enabled": cfg["enabled"], "fields": fields, "status": await a.status() if cfg["enabled"] else None,
                 "tools": [{"name": t.name, "title": t.title, "risk": t.risk, "description": t.description,
                            "always_allow": t.name in (a.default_allow if cfg.get("always_allow") is None else cfg["always_allow"])}
@@ -113,8 +124,10 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
     async def health(request):
         agent = await make_provider(ctx).health()
         voice = config.data["voice"]
+        act = M.active(config)
         return JSONResponse({
-            "agent": {**agent, "model": config.data["agent"]["model"], "provider": config.data["agent"]["provider"]},
+            "agent": {**agent, "model": config.data["agent"]["model"], "provider": config.data["agent"]["provider"],
+                      "label": act["label"], "cloud": M.is_cloud(act), "model_id": act["id"]},
             "voice": {"stt": {"available": stt.available(), "ready": stt.ready(voice["stt_model"]),
                               "model": voice["stt_model"]},
                       "tts": {"available": tts.available(), "ready": tts.ready(voice["tts_voice"]),
@@ -130,6 +143,167 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
                 return JSONResponse({"error": str(e)}, 400)
         patch.pop("actions", None)  # actions go through the validating endpoint
         return JSONResponse(config.update(patch))
+
+    # ---- interface mods (the agent's own changes to the UI) ----------------------
+    def mods_changed(summary: str) -> None:
+        ctx.broadcast({"type": "mods_changed", "by": None, "summary": summary})
+
+    async def mods_list(request):
+        return JSONResponse(ctx.mods.list())
+
+    async def mods_set(request):
+        try:
+            ctx.mods.set_enabled(request.path_params["name"], bool((await request.json()).get("enabled")))
+        except ModError as e:
+            return JSONResponse({"error": str(e)}, 404)
+        mods_changed("changed a mod")
+        return JSONResponse({"ok": True})
+
+    async def mods_delete(request):
+        try:
+            ctx.mods.remove(request.path_params["name"])
+        except ModError as e:
+            return JSONResponse({"error": str(e)}, 404)
+        mods_changed("removed a mod")
+        return JSONResponse({"ok": True})
+
+    async def mods_revert(request):
+        try:
+            what = ctx.mods.revert(config)
+        except ModError as e:
+            return JSONResponse({"error": str(e)}, 400)
+        mods_changed(what)
+        return JSONResponse({"ok": True, "what": what})
+
+    # ---- API apps: the generic panel reads the definition and runs actions through the server -------------
+    def api_app(request):
+        a = registry.apps.get(request.path_params["app_id"])
+        if not getattr(a, "api_app", False):
+            raise HTTPException(404, "No such API app")
+        return a
+
+    async def xapp_info(request):
+        a = api_app(request)
+        return JSONResponse({"id": a.id, "manifest": a.m, "needs_key": bool(a.settings), "key_set": bool(a.key())})
+
+    def data_app(request):
+        a = registry.apps.get(request.path_params["app_id"])
+        if not getattr(a, "data_app", False):
+            raise HTTPException(404, "No such app")
+        return a
+
+    async def dapp_get(request):
+        a = data_app(request)
+        return JSONResponse({"id": a.id, "manifest": a.m, "items": ctx.db.items(a.id)})
+
+    async def dapp_add(request):   # the user typed it in the panel
+        a, b = data_app(request), await request.json()
+        lst = request.path_params["list"]
+        if lst not in a.m["lists"]:
+            raise HTTPException(404, "No such list")
+        from .dataapps import coerce
+        try:
+            data = {f["name"]: coerce(f, b.get("data", {}).get(f["name"]), ctx.now().date()) for f in a.m["lists"][lst]["fields"]}
+        except ToolError as e:
+            return JSONResponse({"error": str(e)}, 400)
+        if not data.get(a.m["lists"][lst]["fields"][0]["name"]):
+            return JSONResponse({"error": "Give it a name."}, 400)
+        return JSONResponse(ctx.db.add_item(a.id, lst, {k: v for k, v in data.items() if v is not None}, b.get("parent")))
+
+    async def dapp_patch(request):
+        a, iid = data_app(request), int(request.path_params["iid"])
+        it = ctx.db.item(a.id, iid)
+        if not it:
+            raise HTTPException(404, "No such item")
+        from .dataapps import coerce
+        fields = {f["name"]: f for f in a.m["lists"][it["list"]]["fields"]}
+        try:
+            changes = {k: coerce(fields[k], v, ctx.now().date()) for k, v in ((await request.json()).get("data") or {}).items() if k in fields}
+        except ToolError as e:
+            return JSONResponse({"error": str(e)}, 400)
+        return JSONResponse(ctx.db.update_item(a.id, iid, {**it["data"], **changes}))
+
+    async def dapp_delete(request):
+        a = data_app(request)
+        return JSONResponse({"deleted": ctx.db.delete_item(a.id, int(request.path_params["iid"]))})
+
+    async def xapp_call(request):
+        a = api_app(request)
+        action = request.path_params["action"]
+        try:
+            r = await api_call(ctx.http, a.m, action, (await request.json()).get("args") or {}, a.key())   # the user pressed Run
+        except ToolError as e:
+            return JSONResponse({"error": str(e)}, 400)
+        act = a.m["actions"][action]
+        fields = {f: api_pick(r["data"], f) for f in act["fields"]} if act["fields"] else None
+        return JSONResponse({"status": r["status"], "data": r["data"], "fields": fields})
+
+    # ---- saved models: switch from the status bar, manage in Settings → Models ------------------------------
+    async def models_list(request):
+        return JSONResponse(M.public(config))
+
+    async def models_save(request):
+        b = await request.json()
+        saved = M.ensure(config)
+        try:
+            m = M.clean(b, [x for x in saved if x["id"] != b.get("id")])
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, 400)
+        if b.get("key"):   # the key is per API host, kept in the keychain
+            secrets.set(M.key_name(m["endpoint"]), str(b["key"]).strip())
+        config.data["models"] = [x for x in saved if x["id"] != m["id"]] + [m]
+        config.save()
+        if config.data["agent"].get("active_model") == m["id"]:
+            M.activate(config, m["id"]); ctx.broadcast({"type": "model_changed", "model": m["id"]})
+        return JSONResponse(M.public(config))
+
+    async def models_delete(request):
+        mid = request.path_params["mid"]
+        if config.data["agent"].get("active_model") == mid:
+            return JSONResponse({"error": "That model is in use. Switch to another one first."}, 400)
+        config.data["models"] = [x for x in M.ensure(config) if x["id"] != mid]
+        config.save()
+        return JSONResponse(M.public(config))
+
+    async def models_activate(request):
+        try:
+            m = M.activate(config, str((await request.json()).get("id") or ""))
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, 404)
+        ctx.broadcast({"type": "model_changed", "model": m["id"]})   # every open window follows
+        return JSONResponse(M.public(config))
+
+    async def models_test(request):
+        """One small request with a tool, so you know the model answers and can call tools before relying on it."""
+        b = await request.json()
+        m = next((x for x in M.ensure(config) if x["id"] == b.get("id")), None)
+        if m is None:
+            return JSONResponse({"error": "Save the model first."}, 404)
+        tool = {"type": "function", "function": {"name": "get_time", "description": "Current time in a city.",
+                                                  "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}}}
+        t0 = time.monotonic()
+        try:
+            calls, text = [], ""
+            async for ch in make_provider(ctx, m).stream([{"role": "user", "content": "What time is it in Tokyo? Use the tool."}], [tool]):
+                text += ch.get("content", "")
+                calls += ch.get("tool_calls", [])
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": str(e)})
+        return JSONResponse({"ok": True, "tools": bool(calls) and calls[0]["name"] == "get_time", "seconds": round(time.monotonic() - t0, 1),
+                             "reply": text[:200]})
+
+    async def models_available(request):
+        """Model names the provider reports (Ollama: installed; cloud: what the key can use), for the Add form."""
+        q = request.query_params
+        endpoint = (q.get("endpoint") or "").rstrip("/")
+        try:
+            prov = make_provider(ctx, {"provider": q.get("provider") or "openai", "model": "-", "endpoint": endpoint})
+            if q.get("key"):
+                prov.cfg["api_key"] = q["key"]
+            names = (await prov.health())["models"] if q.get("provider") == "ollama" else await prov.list_models()
+        except Exception as e:
+            return JSONResponse({"names": [], "error": str(e)})
+        return JSONResponse({"names": names[:300]})
 
     # ---- quick actions -------------------------------------------------------
     async def put_actions(request):
@@ -176,6 +350,8 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
         if "settings" in body:
             cfg["settings"].update({k: v for k, v in body["settings"].items()
                                     if k in {f["key"] for f in a.settings if not f.get("secret")}})
+        if "private" in body:
+            cfg["private"] = bool(body["private"])
         if "always_allow" in body:
             known = {t.name for t in a.tools()}
             cfg["always_allow"] = [n for n in body["always_allow"] if n in known]
@@ -238,10 +414,15 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
         attach, refs = "", []
         files_app = registry.apps.get("files")
         if files_app and ctx.app_cfg("files")["enabled"] and "@" in text:
-            attach, refs = files_app.expand_mentions(text)   # @file / @file:10-25 become compact numbered attachments
+            granted = ctx.cloud_grants.get((conv["id"], config.data["agent"].get("active_model") or config.data["agent"]["model"]), set())
+            if ctx.cloud() and registry.is_private(files_app) and "files" not in granted:
+                attach = "\n\n[Files mentioned with @ aren't attached for a cloud model; read them with files_read_file (the user is asked first).]"
+            else:
+                attach, refs = files_app.expand_mentions(text)   # @file / @file:10-25 become compact numbered attachments
         try:
             run = runs.start(ctx, registry, conv, text, bool(body.get("speak")), attachments=attach,
-                             force_apps=frozenset({"files"}) if attach else frozenset(), client=str(body.get("client") or "")[:64] or None)
+                             force_apps=frozenset({"files"}) if attach else frozenset(), client=str(body.get("client") or "")[:64] or None,
+                             screen=body.get("screen") if isinstance(body.get("screen"), dict) else None)
         except RunBusy:
             return JSONResponse({"error": "This chat is still working. Stop it first, or start a new chat."}, 409)
         return JSONResponse({"conversation_id": conv["id"], "title": conv["title"], "run": run.replay(), "attached": refs})
@@ -275,7 +456,7 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
 
     async def approve(request):
         body = await request.json()
-        ok = approvals.resolve(request.path_params["aid"], bool(body.get("approve")))
+        ok = approvals.resolve(request.path_params["aid"], "chat" if body.get("approve") and body.get("scope") == "chat" else bool(body.get("approve")))
         return JSONResponse({"ok": ok})
 
     # ---- voice -----------------------------------------------------------
@@ -399,6 +580,22 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
         Route("/api/actions/{aid}/run", run_action, methods=["POST"]),
         Route("/api/customization/export", export_custom),
         Route("/api/customization/import", import_custom, methods=["POST"]),
+        Route("/api/dapps/{app_id}", dapp_get),
+        Route("/api/dapps/{app_id}/items/{iid:int}", dapp_patch, methods=["PATCH"]),
+        Route("/api/dapps/{app_id}/items/{iid:int}", dapp_delete, methods=["DELETE"]),
+        Route("/api/dapps/{app_id}/{list}", dapp_add, methods=["POST"]),
+        Route("/api/xapps/{app_id}", xapp_info),
+        Route("/api/xapps/{app_id}/call/{action}", xapp_call, methods=["POST"]),
+        Route("/api/models", models_list),
+        Route("/api/models", models_save, methods=["POST"]),
+        Route("/api/models/active", models_activate, methods=["PUT"]),
+        Route("/api/models/test", models_test, methods=["POST"]),
+        Route("/api/models/available", models_available),
+        Route("/api/models/{mid}", models_delete, methods=["DELETE"]),
+        Route("/api/mods", mods_list),
+        Route("/api/mods/revert", mods_revert, methods=["POST"]),
+        Route("/api/mods/{name}", mods_set, methods=["PUT"]),
+        Route("/api/mods/{name}", mods_delete, methods=["DELETE"]),
         Route("/api/apps", get_apps),
         Route("/api/apps/{app_id}/config", put_app, methods=["PUT"]),
         Route("/api/apps/{app_id}/secrets/{key}", clear_secret, methods=["DELETE"]),

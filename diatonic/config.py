@@ -35,7 +35,9 @@ DEFAULTS: dict[str, Any] = {
         "history_messages": 12,
         "history_chars": 6000,      # prompt budget for earlier turns
         "system_prompt": "",
+        "active_model": "",         # id of the saved model in use (see "models")
     },
+    "models": [],   # saved models: [{id, label, provider, model, endpoint, context, max_tokens}]; keys are in the keychain
     "voice": {
         "stt_model": "small.en",
         "auto_send": False,  # False = review the transcript before sending
@@ -62,6 +64,7 @@ DEFAULTS: dict[str, Any] = {
         "radius": "default",        # sharp | default | round
         "width": "default",         # narrow | default | wide | full (chat column)
         "sidebar": "show",          # show | hide
+        "sidebar_width": "default", # narrow | default | wide (the chat list)
         "show_status_bar": True,
         "show_quick_actions": True,
         "show_suggestions": True,

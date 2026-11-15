@@ -22,6 +22,7 @@ NUM = {"type": "integer", "description": "Issue/PR number"}
 
 
 class GitHubApp(App):
+    private = True   # a cloud model must ask before reading or changing it
     id = "github"
     name = "GitHub"
     icon = "git-branch"

@@ -10,6 +10,7 @@ export const api = {
   get: (u) => j("GET", u),
   post: (u, b) => j("POST", u, b || {}),
   put: (u, b) => j("PUT", u, b || {}),
+  patch: (u, b) => j("PATCH", u, b || {}),
   del: (u) => j("DELETE", u),
   state: () => j("GET", "/api/state"),
   health: () => j("GET", "/api/health"),
@@ -19,7 +20,7 @@ export const api = {
   conversations: () => j("GET", "/api/conversations"),
   conversation: (id) => j("GET", `/api/conversations/${id}`),
   deleteConversation: (id) => j("DELETE", `/api/conversations/${id}`),
-  approve: (id, approve) => j("POST", `/api/approvals/${id}`, { approve }),
+  approve: (id, approve, scope) => j("POST", `/api/approvals/${id}`, { approve, scope }),
   setupVoice: () => j("POST", "/api/voice/setup"),
   async transcribe(int16) {
     const r = await fetch("/api/voice/transcribe", { method: "POST", body: int16, headers: { "Content-Type": "application/octet-stream" } });

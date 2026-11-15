@@ -416,3 +416,16 @@ function openEditor({ event, start, end, allDay }) {
   d.addEventListener("keydown", (k) => { if (k.key === "Enter" && !k.shiftKey && k.target.tagName === "INPUT" && k.target.type === "text") { k.preventDefault(); save(); } });
   setTimeout(() => title.focus(), 30);
 }
+
+/** Called by the agent (or anything else) to land on a view, a date or one event. */
+export async function navigate(p) {
+  const { api } = S.ctx;
+  let ev = null;
+  if (p.item) { try { ev = parse(await api.get(`${B}/event?ref=${encodeURIComponent(p.item)}`)); } catch { throw new Error("I couldn't find that event."); } }
+  if (["day", "week", "month", "agenda"].includes(p.view)) { S.view = p.view; try { localStorage.setItem("cal:view", p.view); } catch {} }
+  if (p.date) { const [y, m, d] = p.date.split("-").map(Number); S.cursor = new Date(y, m - 1, d); } else if (ev) S.cursor = ev.s;
+  S.mini = null;
+  S.el.querySelectorAll(".cal-bar .seg button").forEach((b) => b.classList.toggle("on", b.dataset.v === S.view));
+  paintSide(); await load();
+  if (ev) openEditor({ event: ev });
+}

@@ -10,6 +10,7 @@ import asyncio
 import time
 
 from . import loop as agent_loop
+from .session import RUN_CLIENT
 
 
 class RunBusy(Exception):
@@ -70,6 +71,14 @@ class RunManager:
         for q in list(self._subs):
             q.put_nowait(ev)
 
+    def send_ui(self, client: str, ev: dict) -> bool:
+        """Push a screen-control event to one window only. False if that window is gone."""
+        sent = False
+        for q, c in list(self._client_of.items()):
+            if c == client and q in self._subs:
+                q.put_nowait({**ev, "target": client}); sent = True
+        return sent
+
     # ---- lifecycle -----------------------------------------------------
     def start(self, ctx, registry, conv: dict, text: str, speak: bool, **opts) -> Run:
         if conv["id"] in self.runs:
@@ -96,6 +105,7 @@ class RunManager:
 
     async def _drive(self, run: Run, ctx, registry, text: str, speak: bool, opts: dict) -> None:
         finished = False
+        RUN_CLIENT.set(run.client)   # tools that act on the screen need to know which window asked
         try:
             async for ev in agent_loop.run_agent(ctx, registry, run.conv_id, text, speak=speak, **opts):
                 finished = finished or ev["type"] == "done"

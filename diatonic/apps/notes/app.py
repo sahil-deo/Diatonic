@@ -42,6 +42,7 @@ def dump(meta: dict, body: str) -> str:
 
 
 class NotesApp(App):
+    private = True   # a cloud model must ask before reading or changing it
     id = "notes"
     name = "Notes"
     icon = "file-text"

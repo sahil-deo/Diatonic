@@ -25,6 +25,7 @@ EVENT = _s("The event's `ref` from list_events")
 
 
 class GCalApp(App):
+    private = True   # a cloud model must ask before reading or changing it
     id = "gcal"
     name = "Calendar"
     icon = "calendar"
@@ -331,6 +332,14 @@ class GCalApp(App):
             return self._err(e)
         return JSONResponse({"events": evs, "errors": errors})
 
+    async def r_get(self, request: Request):
+        try:
+            acc, cal, eid = await self._locate(request.query_params["ref"])
+            r = await self.ga.json(acc["email"], "GET", f"{urls()['cal']}/calendars/{quote(cal['id'], safe='')}/events/{quote(eid, safe='')}")
+        except (KeyError, ValueError, ToolError) as e:
+            return self._err(e)
+        return JSONResponse(E.norm_event(r, acc, cal, self.ga.label(acc)))
+
     async def r_create(self, request: Request):
         b = await request.json()
         try:
@@ -405,6 +414,6 @@ class GCalApp(App):
 
     def routes(self):
         return [Route("/calendars", self.r_calendars), Route("/calendar-prefs", self.r_prefs, methods=["PUT"]), Route("/events", self.r_events),
-                Route("/events", self.r_create, methods=["POST"]), Route("/event", self.r_patch, methods=["PATCH"]),
+                Route("/events", self.r_create, methods=["POST"]), Route("/event", self.r_get), Route("/event", self.r_patch, methods=["PATCH"]),
                 Route("/event", self.r_delete, methods=["DELETE"]), Route("/rsvp", self.r_rsvp, methods=["POST"]),
                 Route("/quickadd", self.r_quickadd, methods=["POST"])]

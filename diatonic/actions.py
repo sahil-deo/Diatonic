@@ -86,7 +86,7 @@ def clean_actions(raw) -> list[dict]:
 FONTS = {"system", "sans", "serif", "mono", "rounded"}
 ENUMS = {"theme": {"system", "light", "dark"}, "density": {"comfortable", "compact"}, "font": FONTS,
          "radius": {"sharp", "default", "round"}, "width": {"narrow", "default", "wide", "full"},
-         "sidebar": {"show", "hide"}}
+         "sidebar": {"show", "hide"}, "sidebar_width": {"narrow", "default", "wide"}}
 BOOLS = {"show_status_bar", "show_quick_actions", "show_suggestions", "show_speak_button"}
 
 

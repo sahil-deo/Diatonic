@@ -1,5 +1,6 @@
 // Mail: a Gmail-style client over every connected Google account (unified or per-account).
 import { icon } from "/js/icons.js";
+import { emit } from "/js/store.js";
 
 const B = "/api/apps/gmail";
 export const full = true;
@@ -133,7 +134,9 @@ async function act(action, refs, closeAfter = false) {
 }
 
 /* ------------------------------------------------------------ reader */
-function closeReader() { M.open = null; M.el.querySelector(".mail")?.classList.remove("reading"); paintReader(); paintRows(); }
+function closeReader() { M.open = null; M.el.querySelector(".mail")?.classList.remove("reading"); paintReader(); paintRows(); emit("screen"); }
+/** The open conversation, for "summarize this". */
+export const current = () => (M.open && M.el?.isConnected ? { kind: "email", ref: M.open.ref, title: M.open.data?.subject || M.threads.find((t) => t.ref === M.open.ref)?.subject || "" } : null);
 
 async function openThread(t) {
   const { api, h } = M.ctx;
@@ -141,7 +144,7 @@ async function openThread(t) {
   M.el.querySelector(".mail").classList.add("reading");
   const pane = M.el.querySelector(".mail-read"); pane.replaceChildren(h("div", { class: "skeleton", style: "margin:20px" }), h("div", { class: "skeleton", style: "margin:20px" }));
   try { M.open.data = await api.get(`${B}/thread?ref=${enc(t.ref)}&mark_read=1`); } catch (e) { pane.replaceChildren(h("div", { class: "err", style: "margin:20px" }, e.message)); return; }
-  paintReader(); loadLabels();
+  paintReader(); loadLabels(); emit("screen");
 }
 
 function paintReader() {
@@ -155,7 +158,7 @@ function paintReader() {
     h("div", { class: "mr-bar" }, h("button", { type: "button", class: "btn sm back-narrow", onclick: closeReader }, "← Back"),
       tb("Archive", "archive", () => act("archive", [d.ref], true), !manage), tb("Delete", "trash", () => act("trash", [d.ref], true), !manage), tb("Report spam", "spam", () => act("spam", [d.ref], true), !manage),
       tb("Mark as unread", "mail", () => act("mark_unread", [d.ref]).then(closeReader), !manage), h("div", { class: "grow" }),
-      h("button", { type: "button", class: "btn sm", onclick: () => M.ctx.prompt(`Summarize the email “${d.subject}” from ${last.from.name || last.from.email} (${d.account_label}). `) }, "Summarize with the agent")),
+      h("button", { type: "button", class: "btn sm", onclick: () => M.ctx.prompt("Summarize this email.") }, "Summarize with the agent")),
     h("div", { class: "mr-scroll" }, h("h2", { class: "mr-subject" }, d.subject, d.account_label && M.accounts.length > 1 && h("span", { class: "pill", style: `color:${a?.color}` }, d.account_label)),
       ...d.messages.map((m, i) => messageCard(m, d, i === d.messages.length - 1 || m.unread))));
 }
@@ -217,4 +220,15 @@ function compose(init) {
   d.addEventListener("close", () => d.remove()); document.body.append(d); d.showModal();
   d.addEventListener("keydown", (e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") go(false); });
   if (init.thread_id) setTimeout(() => { body.focus(); body.setSelectionRange(0, 0); }, 30);
+}
+
+/** Called by the agent to show a folder, a search, one account, or one conversation. */
+const FOLDER_OF = Object.fromEntries(FOLDERS.map(([id, label]) => [label.toLowerCase(), id]));
+export async function navigate(p) {
+  let reload = false;
+  if (p.account) { const a = M.accounts.find((x) => [x.email, x.label].some((v) => v && v.toLowerCase() === p.account.toLowerCase())); M.account = a ? a.email : "all"; reload = true; }
+  if (p.view && FOLDER_OF[p.view]) { M.label = FOLDER_OF[p.view]; reload = true; }
+  if (p.query != null) { M.q = p.query; reload = true; } else if (reload) M.q = "";
+  if (reload) { const box = M.el.querySelector(".mail-search"); if (box) box.value = M.q; paintNav(); await loadThreads(true); }
+  if (p.item) await openThread({ ref: p.item });
 }
