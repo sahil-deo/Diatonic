@@ -38,3 +38,15 @@ The first chat panel adopts the main chat (`#main`: streaming, approval cards, t
 ## Styling a panel
 
 A panel body is wrapped in `.panel-body`, whose generic form rules (border, background, padding on every `input`/`textarea`, and `input + input { margin-top: 8px }`) reach everything inside it, including the main chat's composer. When a control inside a panel must look different, give your rule a `.panel-body` prefix or a higher specificity, then check the control's size in the browser. An icon next to a label goes in a span that holds only the icon: the app styles that span so the icon is centred on the text.
+
+## Layouts
+
+A **layout** is how the panels are arranged: the tree of splits and tabs and the app in each. There is one word and one way to keep one:
+
+- Arrange it with presets (`layout.preset.*`), splits, drag and drop, or the agent (`ui_arrange_panels`); `layout.undo` and `layout.redo` step through changes.
+- **Save** the current arrangement under a name with `layout.save` (or ask the agent: "save this layout as Dev"). **Switch** with `layout.switch` or `/layout <name>` in the command bar, which lists the presets and your saved layouts together. To delete one, open the command bar and type `delete layout`: each saved layout has its own row, and you are asked to confirm. (`layout.delete` with no name opens that list.)
+- Saved layouts live in `layouts.json` in the Diatonic home folder (`GET`/`PUT /api/layouts`). A `workspaces.json` from an earlier version is read until the next save.
+- A **macro** is a different thing: a list of commands to run. Do not save a layout as a macro.
+
+In the code, "workspace" only names the area of the window that shows the layout (`js/workspace.js`, `.workspace-*` classes).
+

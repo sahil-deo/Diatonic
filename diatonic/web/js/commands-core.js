@@ -2,14 +2,15 @@
 // panel…); registering them gives every one an id, a place in the command palette and a key in keymap.json.
 import { state } from "./store.js";
 import { icon } from "./icons.js";
+import { toast } from "./dom.js";
 import * as chat from "./chat.js";
 import { register, addProvider, labelOf, get } from "./commands.js";
 import { openPanel, closePanel, refreshPanel, toggleFull } from "./panel.js";
 import { openSettings } from "./settings.js";
 import { openPalette } from "./palette.js";
 import { invoke as invokeAction } from "./actions.js";
-import { getMacros, runMacro, startRecording, isRecording, saveCurrentLayoutAsMacro } from "./macros.js";
-import { applyTree, getWorkspaces, switchWorkspace, saveCurrentWorkspace, deleteWorkspace, undoLayout, redoLayout } from "./workspace.js";
+import { getMacros, runMacro, startRecording, isRecording } from "./macros.js";
+import { applyTree, getLayouts, switchLayout, saveCurrentLayout, deleteLayout, undoLayout, redoLayout } from "./workspace.js";
 import { hintFor, keymap, userKeymap, saveKeymap } from "./keymap.js";
 import { registerNav, setRegion, markKeyboard } from "./nav.js";
 import { getOpenTabs, focusTab, applyPreset } from "./workspace.js";
@@ -73,17 +74,17 @@ export function registerCore(h) {
     { id: "focus.right", title: "Focus right panel", group: "Navigate", icon: "chevright", run: () => { import("./workspace.js").then((m) => m.focusNeighbor("right")); setRegion("panel"); } },
     { id: "focus.up", title: "Focus upper panel", group: "Navigate", icon: "chevron", run: () => { import("./workspace.js").then((m) => m.focusNeighbor("up")); setRegion("panel"); } },
     { id: "focus.down", title: "Focus lower panel", group: "Navigate", icon: "chevron", run: () => { import("./workspace.js").then((m) => m.focusNeighbor("down")); setRegion("panel"); } },
-    { id: "panel.split.right", title: "Split panel side-by-side", group: "Workspace", icon: "chevron", run: (a) => { import("./workspace.js").then((m) => m.splitActive("row", a?.app)); } },
-    { id: "panel.split.down", title: "Split panel stacked", group: "Workspace", icon: "chevron", run: (a) => { import("./workspace.js").then((m) => m.splitActive("col", a?.app)); } },
-    { id: "layout.preset.single", title: "Layout: Single panel", group: "Workspace", icon: "box", run: () => applyPreset("single") },
-    { id: "layout.preset.side_by_side", title: "Layout: Side-by-side", group: "Workspace", icon: "split-v", run: () => applyPreset("side-by-side") },
-    { id: "layout.preset.stacked", title: "Layout: Stacked", group: "Workspace", icon: "split-h", run: () => applyPreset("stacked") },
-    { id: "layout.preset.three_column", title: "Layout: Three columns", group: "Workspace", icon: "chevron", run: () => applyPreset("three-column") },
-    { id: "layout.preset.grid", title: "Layout: 2x2 Grid", group: "Workspace", icon: "chevron", run: () => applyPreset("grid") },
-    { id: "tab.next", title: "Next panel tab", group: "Workspace", icon: "chevron", run: () => { import("./workspace.js").then((m) => m.focusNeighbor("right")); } },
-    { id: "tab.prev", title: "Previous panel tab", group: "Workspace", icon: "chevron", run: () => { import("./workspace.js").then((m) => m.focusNeighbor("left")); } },
-    { id: "tab.reopen", title: "Reopen closed panel tab", group: "Workspace", icon: "plus", run: () => { import("./workspace.js").then((m) => m.reopenClosedTab()); } },
-    { id: "statusbar.pin", title: "Pin app to status bar", group: "Workspace", icon: "command", run: async () => {
+    { id: "panel.split.right", title: "Split panel side-by-side", group: "Layout", icon: "chevron", run: (a) => { import("./workspace.js").then((m) => m.splitActive("row", a?.app)); } },
+    { id: "panel.split.down", title: "Split panel stacked", group: "Layout", icon: "chevron", run: (a) => { import("./workspace.js").then((m) => m.splitActive("col", a?.app)); } },
+    { id: "layout.preset.single", title: "Layout: Single panel", group: "Layout", icon: "box", run: () => applyPreset("single") },
+    { id: "layout.preset.side_by_side", title: "Layout: Side-by-side", group: "Layout", icon: "split-v", run: () => applyPreset("side-by-side") },
+    { id: "layout.preset.stacked", title: "Layout: Stacked", group: "Layout", icon: "split-h", run: () => applyPreset("stacked") },
+    { id: "layout.preset.three_column", title: "Layout: Three columns", group: "Layout", icon: "chevron", run: () => applyPreset("three-column") },
+    { id: "layout.preset.grid", title: "Layout: 2x2 Grid", group: "Layout", icon: "chevron", run: () => applyPreset("grid") },
+    { id: "tab.next", title: "Next panel tab", group: "Layout", icon: "chevron", run: () => { import("./workspace.js").then((m) => m.focusNeighbor("right")); } },
+    { id: "tab.prev", title: "Previous panel tab", group: "Layout", icon: "chevron", run: () => { import("./workspace.js").then((m) => m.focusNeighbor("left")); } },
+    { id: "tab.reopen", title: "Reopen closed panel tab", group: "Layout", icon: "plus", run: () => { import("./workspace.js").then((m) => m.reopenClosedTab()); } },
+    { id: "statusbar.pin", title: "Pin app to status bar", group: "Layout", icon: "command", run: async () => {
       const { pickApp } = await import("./palette.js");
       const { addPin } = await import("./statusbar.js");
       const appId = await pickApp("Pin app to status bar…");
@@ -94,7 +95,9 @@ export function registerCore(h) {
     } },
     { id: "keys.vim.toggle", group: "Navigate", icon: "command", title: () => (keymap().vim ? "Turn off vim-style keys (j k g G)" : "Turn on vim-style keys (j k g G)"),
       run: () => saveKeymap({ ...userKeymap(), vim: !keymap().vim }) },
-    { id: "workspace.applyTree", title: "Apply workspace layout tree", group: "Workspace", hidden: true,
+    { id: "layout.apply", title: "Apply a layout tree", group: "Layout", hidden: true,
+      run: (a) => { if (a?.tree) applyTree(a.tree); } },
+    { id: "workspace.applyTree", title: "Apply a layout tree", group: "Layout", hidden: true,   // old name, kept so macros saved earlier still run
       run: (a) => { if (a?.tree) applyTree(a.tree); } },
     { id: "macro.record.start", title: "Start recording macro", group: "Macros", icon: "activity",
       when: () => !isRecording(),
@@ -108,25 +111,21 @@ export function registerCore(h) {
         const { saveRecorded } = await import("./macros.js");
         saveRecorded();
       } },
-    { id: "macro.save_layout", title: "Save current layout as macro", group: "Macros", icon: "sliders",
-      run: () => {
-        const name = prompt("Name this layout macro:") || "Saved Layout";
-        saveCurrentLayoutAsMacro(name);
-      } },
-    { id: "workspace.save", title: "Save current workspace", group: "Workspace", icon: "sliders",
+    { id: "layout.save", title: "Save current layout", group: "Layout", icon: "sliders",
       run: (a) => {
-        const name = a?.name || prompt("Workspace name:") || "Workspace";
-        return saveCurrentWorkspace(name);
+        const name = a?.name || prompt("Layout name:") || "Layout";
+        return saveCurrentLayout(name);
       } },
-    { id: "workspace.switch", title: "Switch workspace", group: "Workspace", icon: "sliders",
+    { id: "layout.switch", title: "Switch layout", group: "Layout", icon: "sliders",
       run: (a) => {
         if (!a?.id && !a?.name) return false;
-        return switchWorkspace(a.id || a.name);
+        return switchLayout(a.id || a.name);
       } },
-    { id: "workspace.delete", title: "Delete workspace", group: "Workspace", icon: "x",
+    { id: "layout.delete", title: "Delete layout", group: "Layout", icon: "x",
       run: (a) => {
-        if (!a?.id && !a?.name) return false;
-        return deleteWorkspace(a.id || a.name);
+        if (a?.id || a?.name) return deleteLayout(a.id || a.name);
+        if (!getLayouts().length) { toast("No saved layouts to delete", "error"); return false; }
+        openPalette({ initialQuery: "Delete layout" });   // a list of your layouts, one per row
       } },
     { id: "layout.undo", title: "Undo layout change", group: "Layouts", icon: "refresh", run: () => undoLayout() },
     { id: "layout.redo", title: "Redo layout change", group: "Layouts", icon: "refresh", run: () => redoLayout() },
@@ -135,8 +134,8 @@ export function registerCore(h) {
   for (const [tab, title, ic] of SETTINGS) register({ id: `settings.${tab}`, title, group: "Actions", icon: ic, run: () => openSettings(tab) });
 
   addProvider(() => panelApps().map((a) => ({ id: `app.open:${a.id}`, appId: a.id, group: "Apps", label: `Open ${a.name}`, icon: a.icon, hint: hintFor("app.open", { id: a.id }), run: () => get("app.open").run({ id: a.id }) })));
-  addProvider(() => panelApps().map((a) => ({ id: `app.split.row:${a.id}`, appId: a.id, group: "Workspace", label: `Split side-by-side with ${a.name}`, icon: "chevright", run: () => { import("./workspace.js").then((m) => m.splitActive("row", a.id)); } })));
-  addProvider(() => panelApps().map((a) => ({ id: `app.split.col:${a.id}`, appId: a.id, group: "Workspace", label: `Split stacked with ${a.name}`, icon: "chevron", run: () => { import("./workspace.js").then((m) => m.splitActive("col", a.id)); } })));
+  addProvider(() => panelApps().map((a) => ({ id: `app.split.row:${a.id}`, appId: a.id, group: "Layout", label: `Split side-by-side with ${a.name}`, icon: "chevright", run: () => { import("./workspace.js").then((m) => m.splitActive("row", a.id)); } })));
+  addProvider(() => panelApps().map((a) => ({ id: `app.split.col:${a.id}`, appId: a.id, group: "Layout", label: `Split stacked with ${a.name}`, icon: "chevron", run: () => { import("./workspace.js").then((m) => m.splitActive("col", a.id)); } })));
   addProvider(() => panelApps().map((a) => ({ id: `statusbar.pin:${a.id}`, group: "Status Bar", label: `Pin ${a.name} to status bar`, icon: a.icon, run: () => { import("./statusbar.js").then((m) => m.addPin({ appId: a.id, label: a.name, icon: a.icon })); } })));
   addProvider(() => (state.config.actions || []).map((a) => ({ id: `action:${a.id}`, group: "Your actions", label: a.label, icon: a.kind === "script" ? "command" : "chat",
     hint: a.name ? "/" + a.name : "", run: () => invokeAction(a) })));
@@ -174,12 +173,21 @@ export function registerCore(h) {
     run: () => runMacro(m),
   })));
 
-  addProvider(() => getWorkspaces().map((w) => ({
-    id: `workspace.switch:${w.id}`,
-    group: "Workspaces",
-    label: `Switch to workspace: ${w.name}`,
+  addProvider(() => getLayouts().map((w) => ({
+    id: `layout.switch:${w.id}`,
+    group: "Layouts",
+    label: `Switch to layout: ${w.name}`,
     icon: "sliders",
-    hint: w.description || "Workspace",
-    run: () => switchWorkspace(w.id),
+    hint: w.description || "Layout",
+    run: () => switchLayout(w.id),
+  })));
+
+  addProvider(() => getLayouts().map((w) => ({
+    id: `layout.delete:${w.id}`,
+    group: "Layouts",
+    label: `Delete layout: ${w.name}`,
+    icon: "x",
+    hint: "Saved layout",
+    run: () => { if (confirm(`Delete the layout "${w.name}"? Your open panels stay as they are.`)) return deleteLayout(w.id); },
   })));
 }

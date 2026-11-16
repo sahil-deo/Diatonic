@@ -1,6 +1,6 @@
-"""User and agent named workspaces: saved layout trees stored in workspaces.json.
+"""Saved layouts: named layout trees (what the user or the agent saved as "Dev"), stored in layouts.json.
 
-Stored in workspaces.json in the Diatonic home folder:
+Stored in layouts.json in the Diatonic home folder:
 [
   {
     "id": "dev",
@@ -33,31 +33,36 @@ from pathlib import Path
 
 from .config import home
 
-MAX_WORKSPACES = 50
+MAX_LAYOUTS = 50
 MAX_TEXT = 120
 MAX_DESC = 300
 MAX_DEPTH = 10
 ID_RE = re.compile(r"^[a-zA-Z0-9_\-:]+$")
 
 
-class WorkspaceError(ValueError):
+class LayoutError(ValueError):
     pass
 
 
 def path() -> Path:
+    return home() / "layouts.json"
+
+
+def _legacy_path() -> Path:
+    """Saved layouts used to be called workspaces; read the old file until the first save writes the new one."""
     return home() / "workspaces.json"
 
 
 def _clean_node(node: dict, depth: int = 0) -> dict:
     if depth > MAX_DEPTH:
-        raise WorkspaceError(f"Layout tree exceeds maximum depth of {MAX_DEPTH}.")
+        raise LayoutError(f"Layout tree exceeds maximum depth of {MAX_DEPTH}.")
     if not isinstance(node, dict):
-        raise WorkspaceError("Layout tree nodes must be objects.")
+        raise LayoutError("Layout tree nodes must be objects.")
     ntype = node.get("type")
     if ntype == "stack":
         tabs = node.get("tabs") or []
         if not isinstance(tabs, list):
-            raise WorkspaceError("Stack tabs must be a list.")
+            raise LayoutError("Stack tabs must be a list.")
         clean_tabs = []
         for t in tabs:
             if not isinstance(t, dict):
@@ -82,7 +87,7 @@ def _clean_node(node: dict, depth: int = 0) -> dict:
         dir_ = "col" if node.get("dir") == "col" else "row"
         raw_children = node.get("children")
         if not isinstance(raw_children, list) or len(raw_children) < 1:
-            raise WorkspaceError("Split nodes must have at least one child.")
+            raise LayoutError("Split nodes must have at least one child.")
         children = [_clean_node(c, depth + 1) for c in raw_children]
         raw_sizes = node.get("sizes")
         if isinstance(raw_sizes, list) and len(raw_sizes) == len(children) and all(isinstance(s, (int, float)) for s in raw_sizes):
@@ -98,33 +103,33 @@ def _clean_node(node: dict, depth: int = 0) -> dict:
             "children": children,
         }
     else:
-        raise WorkspaceError(f"Unknown layout node type '{ntype}'.")
+        raise LayoutError(f"Unknown layout node type '{ntype}'.")
 
 
 def clean_tree(raw_tree: dict) -> dict:
     if not isinstance(raw_tree, dict):
-        raise WorkspaceError("Workspace tree must be an object.")
+        raise LayoutError("Layout tree must be an object.")
     root = raw_tree.get("root")
     if not isinstance(root, dict):
-        raise WorkspaceError("Workspace tree must have a root node object.")
+        raise LayoutError("Layout tree must have a root node object.")
     return {
         "v": int(raw_tree.get("v") or 1),
         "root": _clean_node(root, 0),
     }
 
 
-def clean_workspace(raw) -> dict:
+def clean_layout(raw) -> dict:
     if not isinstance(raw, dict):
-        raise WorkspaceError("A workspace must be an object.")
+        raise LayoutError("A layout must be an object.")
     wid = raw.get("id")
     if not isinstance(wid, str) or not wid.strip() or len(wid) > MAX_TEXT or not ID_RE.match(wid.strip()):
-        raise WorkspaceError("Workspace id must be letters, numbers, hyphens or underscores (at most 120 chars).")
+        raise LayoutError("Layout id must be letters, numbers, hyphens or underscores (at most 120 chars).")
     name = raw.get("name")
     if not isinstance(name, str) or not name.strip() or len(name) > MAX_TEXT:
-        raise WorkspaceError("Workspace name must be text of at most 120 characters.")
+        raise LayoutError("Layout name must be text of at most 120 characters.")
     desc = raw.get("description") or ""
     if not isinstance(desc, str) or len(desc) > MAX_DESC:
-        raise WorkspaceError(f"Workspace description must be text of at most {MAX_DESC} characters.")
+        raise LayoutError(f"Layout description must be text of at most {MAX_DESC} characters.")
 
     tree = clean_tree(raw.get("tree"))
     created_at = raw.get("created_at")
@@ -139,17 +144,17 @@ def clean_workspace(raw) -> dict:
     }
 
 
-def clean_workspaces(raw) -> list[dict]:
+def clean_layouts(raw) -> list[dict]:
     if not isinstance(raw, list):
-        raise WorkspaceError("Workspaces must be a list.")
-    if len(raw) > MAX_WORKSPACES:
-        raise WorkspaceError(f"At most {MAX_WORKSPACES} workspaces allowed.")
+        raise LayoutError("Layouts must be a list.")
+    if len(raw) > MAX_LAYOUTS:
+        raise LayoutError(f"At most {MAX_LAYOUTS} layouts allowed.")
     seen_ids = set()
     out = []
     for item in raw:
-        cleaned = clean_workspace(item)
+        cleaned = clean_layout(item)
         if cleaned["id"] in seen_ids:
-            raise WorkspaceError(f"Duplicate workspace id '{cleaned['id']}'.")
+            raise LayoutError(f"Duplicate layout id '{cleaned['id']}'.")
         seen_ids.add(cleaned["id"])
         out.append(cleaned)
     return out
@@ -158,16 +163,18 @@ def clean_workspaces(raw) -> list[dict]:
 def load() -> list[dict]:
     p = path()
     if not p.exists():
+        p = _legacy_path()
+    if not p.exists():
         return []
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
-        return clean_workspaces(data)
+        return clean_layouts(data)
     except Exception:
         return []
 
 
 def save(data) -> list[dict]:
-    cleaned = clean_workspaces(data)
+    cleaned = clean_layouts(data)
     p = path()
     p.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("w", dir=p.parent, delete=False, encoding="utf-8") as tf:

@@ -773,8 +773,12 @@ body.keyboard .region-focus { box-shadow: inset 0 0 0 1px color-mix(in srgb, var
 .sb-pin { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 8px; border-radius: calc(6px * var(--rs, 1)); border: 1px solid transparent; background: transparent; color: var(--muted); cursor: pointer; font-size: 11.5px; font-weight: 500; outline: none !important; box-shadow: none !important; transition: background .12s, color .12s, border-color .12s; text-decoration: none !important; user-select: none; flex: none; }
 .sb-pin:focus, .sb-pin:focus-visible { outline: none !important; box-shadow: none !important; }
 .sb-pin:hover { background: var(--surface-2); color: var(--text); border-color: var(--border); }
-.sb-pin.active { background: var(--surface-2); color: var(--text); border-color: transparent; font-weight: 550; }
-.sb-pin.active:hover { border-color: var(--border); }
+/* The pin of the panel you are in: same weight (no width jump), accent icon, a dot underneath. */
+.sb-pin { position: relative; }
+.sb-pin svg.i, .sb-menu-item svg.i { width: 14px; height: 14px; }
+.sb-pin.active { color: var(--text); border-color: transparent; }
+.sb-pin.active .sb-pin-icon { color: var(--accent); }
+.sb-pin.active::after { content: ""; position: absolute; left: 50%; bottom: 0; width: 4px; height: 4px; margin-left: -2px; border-radius: 50%; background: var(--accent); }
 .sb-pin-icon { display: flex; align-items: center; color: inherit; }
 .sb-pin-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 120px; }
 .sb-pin .st-badge { margin-left: 3px; font-size: 10px; font-weight: 700; height: 16px; min-width: 16px; padding: 0 5px; border-radius: 999px; background: var(--accent); color: #fff; display: inline-flex; align-items: center; justify-content: center; }

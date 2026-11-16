@@ -769,95 +769,95 @@ export function getOpenTabs() {
   });
 }
 
-const WORKSPACE_ACTIVE_KEY = "diatonic.workspace.active";
-let workspacesList = [];
+const LAYOUT_ACTIVE_KEY = "diatonic.layout.active";
+let layoutsList = [];
 
-export function getWorkspaces() {
-  return workspacesList;
+export function getLayouts() {
+  return layoutsList;
 }
 
-export function getActiveWorkspaceId() {
+export function getActiveLayoutId() {
   try {
-    return localStorage.getItem(WORKSPACE_ACTIVE_KEY) || null;
+    return localStorage.getItem(LAYOUT_ACTIVE_KEY) || null;
   } catch {
     return null;
   }
 }
 
-export async function loadWorkspaces() {
+export async function loadLayouts() {
   try {
-    const res = await api.get("/api/workspaces");
-    workspacesList = res.workspaces || [];
-    emit("workspaces", workspacesList);
-    return workspacesList;
+    const res = await api.get("/api/layouts");
+    layoutsList = res.layouts || [];
+    emit("layouts", layoutsList);
+    return layoutsList;
   } catch (e) {
-    console.warn("Failed to load workspaces:", e);
+    console.warn("Failed to load layouts:", e);
     return [];
   }
 }
 
-export async function saveWorkspaces(list) {
+export async function saveLayouts(list) {
   try {
-    const res = await api.put("/api/workspaces", list);
-    workspacesList = res.workspaces || [];
-    emit("workspaces", workspacesList);
-    return workspacesList;
+    const res = await api.put("/api/layouts", list);
+    layoutsList = res.layouts || [];
+    emit("layouts", layoutsList);
+    return layoutsList;
   } catch (e) {
     toast(e.message, "error");
     throw e;
   }
 }
 
-export async function switchWorkspace(idOrName) {
+export async function switchLayout(idOrName) {
   const target = String(idOrName || "").toLowerCase().trim();
-  const ws = workspacesList.find((w) => w.id.toLowerCase() === target || w.name.toLowerCase() === target);
+  const ws = layoutsList.find((w) => w.id.toLowerCase() === target || w.name.toLowerCase() === target);
   if (!ws) {
-    toast(`No workspace "${idOrName}" found`, "error");
+    toast(`No layout "${idOrName}" found`, "error");
     return false;
   }
   try {
-    localStorage.setItem(WORKSPACE_ACTIVE_KEY, ws.id);
+    localStorage.setItem(LAYOUT_ACTIVE_KEY, ws.id);
   } catch {}
   applyTree(ws.tree);
-  emit("workspace:switched", { workspace: ws });
-  toast(`Switched to workspace: ${ws.name}`);
+  emit("layout:switched", { layout: ws });
+  toast(`Switched to layout: ${ws.name}`);
   return true;
 }
 
-export async function saveCurrentWorkspace(name, description = "") {
-  const wsName = String(name || "").trim() || "Workspace";
-  const wid = wsName.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+export async function saveCurrentLayout(name, description = "") {
+  const layoutName = String(name || "").trim() || "Layout";
+  const wid = layoutName.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
   const tree = getTree();
-  const newWorkspace = {
+  const newLayout = {
     id: wid || `ws_${Date.now()}`,
-    name: wsName,
-    description: description || "Saved workspace layout",
+    name: layoutName,
+    description: description || "Saved layout",
     tree,
     created_at: Date.now() / 1000,
   };
-  const nextList = [...workspacesList.filter((w) => w.id !== newWorkspace.id), newWorkspace];
-  await saveWorkspaces(nextList);
+  const nextList = [...layoutsList.filter((w) => w.id !== newLayout.id), newLayout];
+  await saveLayouts(nextList);
   try {
-    localStorage.setItem(WORKSPACE_ACTIVE_KEY, newWorkspace.id);
+    localStorage.setItem(LAYOUT_ACTIVE_KEY, newLayout.id);
   } catch {}
-  emit("workspace:switched", { workspace: newWorkspace });
-  toast(`Saved workspace "${newWorkspace.name}"`);
-  return newWorkspace;
+  emit("layout:switched", { layout: newLayout });
+  toast(`Saved layout "${newLayout.name}"`);
+  return newLayout;
 }
 
-export async function deleteWorkspace(idOrName) {
+export async function deleteLayout(idOrName) {
   const target = String(idOrName || "").toLowerCase().trim();
-  const found = workspacesList.find((w) => w.id.toLowerCase() === target || w.name.toLowerCase() === target);
+  const found = layoutsList.find((w) => w.id.toLowerCase() === target || w.name.toLowerCase() === target);
   if (!found) {
-    toast(`No workspace "${idOrName}" found`, "error");
+    toast(`No layout "${idOrName}" found`, "error");
     return false;
   }
-  const nextList = workspacesList.filter((w) => w.id !== found.id);
-  await saveWorkspaces(nextList);
-  if (getActiveWorkspaceId() === found.id) {
-    try { localStorage.removeItem(WORKSPACE_ACTIVE_KEY); } catch {}
+  const nextList = layoutsList.filter((w) => w.id !== found.id);
+  await saveLayouts(nextList);
+  if (getActiveLayoutId() === found.id) {
+    try { localStorage.removeItem(LAYOUT_ACTIVE_KEY); } catch {}
   }
-  toast(`Deleted workspace "${found.name}"`);
+  toast(`Deleted layout "${found.name}"`);
   return true;
 }
 
@@ -865,8 +865,8 @@ export function initWorkspace(host) {
   hostElement = host;
   state.getScreenContext = getScreenContext;
 
-  loadWorkspaces().then((list) => {
-    const activeId = getActiveWorkspaceId();
+  loadLayouts().then((list) => {
+    const activeId = getActiveLayoutId();
     if (activeId) {
       const match = list.find((w) => w.id === activeId);
       if (match?.tree) {
@@ -881,13 +881,13 @@ export function initWorkspace(host) {
     renderWorkspace(hostElement, tree);
   });
 
-  on("workspaces_changed", loadWorkspaces);
+  on("layouts_changed", loadLayouts);
   on("undo_layout", (ev) => {
     if (ev?.tree) applyTree(ev.tree);
     else undoLayout();
   });
-  on("switch_workspace", (ev) => {
-    if (ev?.workspace_id) switchWorkspace(ev.workspace_id);
+  on("switch_layout", (ev) => {
+    if (ev?.layout_id) switchLayout(ev.layout_id);
     else if (ev?.tree) applyTree(ev.tree);
   });
   on("custom_app_changed", async (ev) => {
@@ -915,11 +915,11 @@ export function initWorkspace(host) {
     redoLayout,
     reopenClosedTab,
     getClosedTabsHistory,
-    getWorkspaces,
-    switchWorkspace,
-    saveCurrentWorkspace,
-    deleteWorkspace,
-    getActiveWorkspaceId,
+    getLayouts,
+    switchLayout,
+    saveCurrentLayout,
+    deleteLayout,
+    getActiveLayoutId,
     getOpenTabs,
     getActiveTabId,
     getScreenContext,

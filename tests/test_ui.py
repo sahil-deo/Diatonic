@@ -300,7 +300,7 @@ def test_agent_can_save_list_run_and_delete_macros(env):
     asyncio.run(go())
 
 
-def test_agent_can_save_list_switch_and_delete_workspaces(env):
+def test_agent_can_save_list_switch_and_delete_layouts(env):
     ctx, reg, db, runs = setup(env)
     ui = reg.apps["ui"]
     events = []
@@ -308,42 +308,42 @@ def test_agent_can_save_list_switch_and_delete_workspaces(env):
 
     async def go():
         from diatonic.agent.session import RUN_CLIENT, mark_untrusted
-        from diatonic import workspaces
+        from diatonic import layouts
         RUN_CLIENT.set("tab-A")
 
-        # 1. Save workspace
-        r1 = await ui.save_workspace({
+        # 1. Save layout
+        r1 = await ui.save_layout({
             "name": "Dev",
             "description": "Coding setup",
             "apps": ["chat", "gmail"]
         })
-        assert "saved workspace 'Dev'" in r1
-        assert len(workspaces.load()) == 1
-        assert workspaces.load()[0]["name"] == "Dev"
+        assert "saved layout 'Dev'" in r1
+        assert len(layouts.load()) == 1
+        assert layouts.load()[0]["name"] == "Dev"
 
-        # 2. List workspaces
-        r2 = await ui.list_workspaces({})
-        assert len(r2["workspaces"]) == 1
-        assert r2["workspaces"][0]["name"] == "Dev"
+        # 2. List layouts
+        r2 = await ui.list_layouts({})
+        assert len(r2["layouts"]) == 1
+        assert r2["layouts"][0]["name"] == "Dev"
 
-        # 3. Switch workspace
-        r3 = await ui.switch_workspace({"name": "Dev"})
-        assert "switched to workspace 'Dev'" in r3
-        assert any(e.get("type") == "switch_workspace" and e.get("workspace_id") == "dev" for e in events)
+        # 3. Switch layout
+        r3 = await ui.switch_layout({"name": "Dev"})
+        assert "switched to layout 'Dev'" in r3
+        assert any(e.get("type") == "switch_layout" and e.get("layout_id") == "dev" for e in events)
 
         # 4. Untrusted check
         from diatonic.agent import session
         session.UNTRUSTED.set({})
         mark_untrusted("gmail")
         with pytest.raises(Exception) as exc:
-            await ui.save_workspace({"name": "Attack"})
+            await ui.save_layout({"name": "Attack"})
         assert "read email" in str(exc.value)
 
-        # 5. Delete workspace
+        # 5. Delete layout
         session.UNTRUSTED.set(None)
-        r4 = await ui.delete_workspace({"name": "Dev"})
-        assert "deleted workspace 'Dev'" in r4
-        assert len(workspaces.load()) == 0
+        r4 = await ui.delete_layout({"name": "Dev"})
+        assert "deleted layout 'Dev'" in r4
+        assert len(layouts.load()) == 0
 
     asyncio.run(go())
 
@@ -363,7 +363,7 @@ def test_agent_can_arrange_panels_and_undo(env):
         # 1. Arrange panels: mail left, calendar right
         res = await ui.arrange_panels({"left": "gmail", "right": "gcal"})
         assert "arranged layout" in res
-        assert any(e.get("type") == "switch_workspace" and e.get("tree", {}).get("root", {}).get("type") == "split" for e in events)
+        assert any(e.get("type") == "switch_layout" and e.get("tree", {}).get("root", {}).get("type") == "split" for e in events)
         assert any(e.get("type") == "mods_changed" for e in events)
         assert len(ctx.mods.data["changes"]) == initial_changes + 1
         assert ctx.mods.data["changes"][-1]["kind"] == "layout"
@@ -399,7 +399,7 @@ def test_agent_can_open_and_arrange_tiles_panel(env):
         # 2. Arrange panels with tiles and chat
         res = await ui.arrange_panels({"left": "chat", "right": "tiles"})
         assert "arranged layout" in res
-        assert any(e.get("type") == "switch_workspace" for e in events)
+        assert any(e.get("type") == "switch_layout" for e in events)
 
     asyncio.run(go())
 

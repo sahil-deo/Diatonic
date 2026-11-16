@@ -49,7 +49,7 @@ def hex_colour(v) -> str:
     return "#" + s if re.fullmatch(r"[0-9a-f]{6}", s) else str(v or "")
 
 
-NAV_TOOLS = ("open_app", "open_item", "set_layout", "pin_app", "unpin_app", "save_macro", "run_macro", "list_macros", "delete_macro", "save_workspace", "switch_workspace", "list_workspaces", "delete_workspace", "arrange_panels", "undo_layout")
+NAV_TOOLS = ("open_app", "open_item", "set_layout", "pin_app", "unpin_app", "save_macro", "run_macro", "list_macros", "delete_macro", "save_layout", "switch_layout", "list_layouts", "delete_layout", "arrange_panels", "undo_layout")
 STYLE_MAP = ("Colours are CSS variables on :root: --bg --surface --surface-2 --border --text --muted --accent --radius --font. "
              "Parts: .rail (the strip of app icons on the far left; one icon is .rail-btn[data-app=files]) .sidebar (chat list) .main (chat) "
              ".topbar .messages .msg.user .bubble .msg.assistant .composer .panel (right app panel) .dock (bottom bar) .statusbar. "
@@ -90,7 +90,7 @@ CUSTOM = re.compile(r"\b(?:theme|colou?r|accent|font|css|style|button|widget|pan
                     r"|\b(?:create|make|build|add)\b.*\b(?:app|panel|tab)\b", re.I)
 MODES = {"split": "chat and panel side by side", "focus": "one panel fills the window",
          "chat": "open the chat"}
-# Each mode is a command the workspace already has, so the agent, a key and the palette all do the same thing.
+# Each mode is a command the app already has, so the agent, a key and the palette all do the same thing.
 MODE_COMMANDS = {"split": {"command": "panel.split.right", "args": {"app": "launcher"}}, "focus": {"command": "layout.preset.single"},
                  "chat": {"command": "app.open", "args": {"id": "chat", "focus": False}}}
 
@@ -380,18 +380,18 @@ class UiApp(App):
         self.ctx.broadcast({"type": "macros_changed"})
         return self._done(f"deleted macro '{found['name']}'")
 
-    async def save_workspace(self, a: dict):
-        """Save a named workspace layout."""
+    async def save_layout(self, a: dict):
+        """Save a named layout layout."""
         self._guard_mod()
-        from ... import workspaces
+        from ... import layouts
         name = str(a.get("name") or "").strip()
         if not name:
-            raise ToolError("Provide a name for the workspace.", bad_args=True)
+            raise ToolError("Provide a name for the layout.", bad_args=True)
         wid = str(a.get("id") or "").strip()
         if not wid:
             wid = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
-        wid = wid[:workspaces.MAX_TEXT]
-        desc = str(a.get("description") or "").strip()[:workspaces.MAX_DESC]
+        wid = wid[:layouts.MAX_TEXT]
+        desc = str(a.get("description") or "").strip()[:layouts.MAX_DESC]
 
         raw_tree = a.get("tree")
         if not raw_tree:
@@ -413,55 +413,55 @@ class UiApp(App):
                 }
 
         try:
-            cleaned = workspaces.clean_workspace({"id": wid, "name": name, "description": desc, "tree": raw_tree})
-        except workspaces.WorkspaceError as e:
+            cleaned = layouts.clean_layout({"id": wid, "name": name, "description": desc, "tree": raw_tree})
+        except layouts.LayoutError as e:
             raise ToolError(str(e), bad_args=True)
 
-        all_ws = [w for w in workspaces.load() if w["id"] != wid]
+        all_ws = [w for w in layouts.load() if w["id"] != wid]
         all_ws.append(cleaned)
-        workspaces.save(all_ws)
-        self.ctx.broadcast({"type": "workspaces_changed"})
-        return self._done(f"saved workspace '{cleaned['name']}'")
+        layouts.save(all_ws)
+        self.ctx.broadcast({"type": "layouts_changed"})
+        return self._done(f"saved layout '{cleaned['name']}'")
 
-    async def switch_workspace(self, a: dict):
-        """Switch to a saved workspace by name or id."""
-        from ... import workspaces
+    async def switch_layout(self, a: dict):
+        """Switch to a saved layout by name or id."""
+        from ... import layouts
         target = str(a.get("name") or a.get("id") or "").strip().lower()
         if not target:
-            raise ToolError("Provide the name or id of the workspace to switch to.", bad_args=True)
-        all_ws = workspaces.load()
+            raise ToolError("Provide the name or id of the layout to switch to.", bad_args=True)
+        all_ws = layouts.load()
         found = next((w for w in all_ws if w["id"].lower() == target or w["name"].lower() == target), None)
         if not found:
             names = ", ".join(f"'{w['name']}'" for w in all_ws) or "none"
-            raise ToolError(f"No workspace '{target}'. Available workspaces: {names}.", bad_args=True)
-        self.ctx.broadcast({"type": "switch_workspace", "workspace_id": found["id"], "tree": found["tree"]})
-        return self._done(f"switched to workspace '{found['name']}'")
+            raise ToolError(f"No layout '{target}'. Available layouts: {names}.", bad_args=True)
+        self.ctx.broadcast({"type": "switch_layout", "layout_id": found["id"], "tree": found["tree"]})
+        return self._done(f"switched to layout '{found['name']}'")
 
-    async def list_workspaces(self, a: dict):
-        """List all saved workspaces."""
-        from ... import workspaces
-        all_ws = workspaces.load()
+    async def list_layouts(self, a: dict):
+        """List all saved layouts."""
+        from ... import layouts
+        all_ws = layouts.load()
         if not all_ws:
-            return {"workspaces": [], "summary": "No workspaces saved yet."}
+            return {"layouts": [], "summary": "No layouts saved yet."}
         res = [{"id": w["id"], "name": w["name"], "description": w["description"]} for w in all_ws]
         names = ", ".join(w["name"] for w in all_ws)
-        return {"workspaces": res, "summary": f"Found {len(res)} workspace(s): {names}"}
+        return {"layouts": res, "summary": f"Found {len(res)} layout(s): {names}"}
 
-    async def delete_workspace(self, a: dict):
-        """Delete a saved workspace by name or id."""
+    async def delete_layout(self, a: dict):
+        """Delete a saved layout by name or id."""
         self._guard_mod()
-        from ... import workspaces
+        from ... import layouts
         target = str(a.get("name") or a.get("id") or "").strip().lower()
         if not target:
-            raise ToolError("Provide the name or id of the workspace to delete.", bad_args=True)
-        all_ws = workspaces.load()
+            raise ToolError("Provide the name or id of the layout to delete.", bad_args=True)
+        all_ws = layouts.load()
         found = next((w for w in all_ws if w["id"].lower() == target or w["name"].lower() == target), None)
         if not found:
-            raise ToolError(f"No workspace '{target}' found.", bad_args=True)
+            raise ToolError(f"No layout '{target}' found.", bad_args=True)
         remaining = [w for w in all_ws if w["id"] != found["id"]]
-        workspaces.save(remaining)
-        self.ctx.broadcast({"type": "workspaces_changed"})
-        return self._done(f"deleted workspace '{found['name']}'")
+        layouts.save(remaining)
+        self.ctx.broadcast({"type": "layouts_changed"})
+        return self._done(f"deleted layout '{found['name']}'")
 
     async def arrange_panels(self, a: dict):
         """Arrange apps spatially on screen (e.g. 'mail left, calendar top-right, chat bottom-right')."""
@@ -495,7 +495,7 @@ class UiApp(App):
         summary = f"arranged layout: {', '.join(summary_items)}"
         if hasattr(self.ctx, "mods") and hasattr(self.ctx.mods, "log_layout"):
             self.ctx.mods.log_layout(before=None, after=tree, what=summary)
-        self.ctx.broadcast({"type": "switch_workspace", "tree": tree})
+        self.ctx.broadcast({"type": "switch_layout", "tree": tree})
         self._changed(summary)
         return self._done(f"{summary}. You can say 'undo' to revert.")
 
@@ -507,7 +507,7 @@ class UiApp(App):
     # ---- changing the interface itself ---------------------------------
     default_allow = ["set_home", "set_theme", "add_style", "add_button", "list_mods", "remove_mod", "revert", "add_action", "set_fields", "remove_action",
                      "pin_app", "unpin_app", "save_macro", "run_macro", "list_macros", "delete_macro",
-                     "save_workspace", "switch_workspace", "list_workspaces", "delete_workspace",
+                     "save_layout", "switch_layout", "list_layouts", "delete_layout",
                      "arrange_panels", "undo_layout",
                      "create_app", "add_list", "add_field", "remove_field", "remove_list"]   # data apps need no network and run no code, so no card
     untrusted_note = ("This run has read email, whose text anyone can write, so it can't change the interface. "
@@ -1590,7 +1590,7 @@ class UiApp(App):
                   "required": ["app"]}, self.unpin_app, title="Unpin app",
                  describe=lambda a: f"Unpin {a.get('app', 'app')} from status bar"),
             Tool("save_macro",
-                 "Save a macro (a sequence of commands/layout actions): 'save this layout as Dev', 'create a macro to open files and chat'.",
+                 "Save a macro (a sequence of commands): 'create a macro to open files and chat'.",
                  {"properties": {
                      "name": {"type": "string", "description": "Macro name, e.g. 'Dev' or 'Morning Routine'"},
                      "description": {"type": "string", "description": "Short description of what the macro does"},
@@ -1613,30 +1613,30 @@ class UiApp(App):
                      "name": {"type": "string", "description": "Name or id of the macro to delete"}},
                   "required": ["name"]}, self.delete_macro, title="Delete macro",
                  describe=lambda a: f"Delete macro '{a.get('name', 'macro')}'"),
-            Tool("save_workspace",
-                 "Save the current layout (or a set of apps) as a named workspace: 'save this workspace as Dev', 'create an Inbox Zero workspace'.",
+            Tool("save_layout",
+                 "Save the current layout (or a set of apps) under a name: 'save this layout as Dev', 'save an Inbox Zero layout'. Use this, not a macro, to remember how the screen is arranged.",
                  {"properties": {
-                     "name": {"type": "string", "description": "Workspace name, e.g. 'Dev' or 'Inbox Zero'"},
-                     "description": {"type": "string", "description": "Short description of what the workspace is for"},
+                     "name": {"type": "string", "description": "Layout name, e.g. 'Dev' or 'Inbox Zero'"},
+                     "description": {"type": "string", "description": "Short description of what the layout is for"},
                      "id": {"type": "string", "description": "Optional unique id, e.g. 'dev'"},
                      "apps": {"type": "array", "description": "Optional list of apps to include: ['chat', 'files']"}},
-                  "required": ["name"]}, self.save_workspace, title="Save workspace",
-                 describe=lambda a: f"Save workspace '{a.get('name', 'workspace')}'"),
-            Tool("switch_workspace",
-                 "Switch to a named workspace by name or id: 'switch to Dev workspace', 'open Inbox Zero'.",
+                  "required": ["name"]}, self.save_layout, title="Save layout",
+                 describe=lambda a: f"Save layout '{a.get('name', 'layout')}'"),
+            Tool("switch_layout",
+                 "Switch to a named layout by name or id: 'switch to Dev layout', 'open Inbox Zero'.",
                  {"properties": {
-                     "name": {"type": "string", "description": "Name or id of the workspace to switch to"}},
-                  "required": ["name"]}, self.switch_workspace, title="Switch workspace",
-                 describe=lambda a: f"Switch to workspace '{a.get('name', 'workspace')}'"),
-            Tool("list_workspaces",
-                 "List all saved named workspaces.",
-                 {}, self.list_workspaces, title="List workspaces"),
-            Tool("delete_workspace",
-                 "Delete a saved workspace by name or id.",
+                     "name": {"type": "string", "description": "Name or id of the layout to switch to"}},
+                  "required": ["name"]}, self.switch_layout, title="Switch layout",
+                 describe=lambda a: f"Switch to layout '{a.get('name', 'layout')}'"),
+            Tool("list_layouts",
+                 "List all saved named layouts.",
+                 {}, self.list_layouts, title="List layouts"),
+            Tool("delete_layout",
+                 "Delete a saved layout by name or id.",
                  {"properties": {
-                     "name": {"type": "string", "description": "Name or id of the workspace to delete"}},
-                  "required": ["name"]}, self.delete_workspace, title="Delete workspace",
-                 describe=lambda a: f"Delete workspace '{a.get('name', 'workspace')}'"),
+                     "name": {"type": "string", "description": "Name or id of the layout to delete"}},
+                  "required": ["name"]}, self.delete_layout, title="Delete layout",
+                 describe=lambda a: f"Delete layout '{a.get('name', 'layout')}'"),
             Tool("arrange_panels",
                  "Arrange apps on the screen: 'mail left, calendar right', 'mail left, calendar top-right, chat bottom-right', "
                  "'three columns with chat, files and terminal', 'grid with mail, calendar, notes, todos'. Free and undoable.",

@@ -136,29 +136,6 @@ export async function saveRecorded(name, description = "") {
   return newMacro;
 }
 
-export async function saveCurrentLayoutAsMacro(name, description = "") {
-  const ws = await import("./workspace.js");
-  const tree = ws.getTree();
-  if (!tree) {
-    showToast("No layout to save", "error");
-    return null;
-  }
-  const macroName = name.trim() || "Saved Layout";
-  const mid = "layout_" + macroName.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
-  const newMacro = {
-    id: mid || `layout_${Date.now()}`,
-    name: macroName,
-    description: description || "Restores workspace layout",
-    steps: [
-      { command: "workspace.applyTree", args: { tree } }
-    ]
-  };
-  const nextList = [...macrosList.filter((m) => m.id !== newMacro.id), newMacro];
-  await saveMacros(nextList);
-  showToast(`Saved layout macro "${newMacro.name}"`);
-  return newMacro;
-}
-
 export function hookRecorder() {
   if (recorderHooked) return;
   recorderHooked = true;

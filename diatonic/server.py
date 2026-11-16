@@ -22,7 +22,7 @@ from .agent.guards import collapse_repeats
 from .agent.runs import RunBusy, RunManager
 from . import keymap
 from . import macros
-from . import workspaces
+from . import layouts
 from .mods import ModError
 from . import models as M
 from . import secrets
@@ -352,17 +352,17 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
         ctx.broadcast({"type": "macros_changed"})
         return JSONResponse({"path": str(macros.path()), "macros": saved})
 
-    # ---- workspaces: named layout trees, kept in workspaces.json in the Diatonic home folder ----
-    async def workspaces_get(request):
-        return JSONResponse({"path": str(workspaces.path()), "workspaces": workspaces.load()})
+    # ---- layouts: named layout trees, kept in layouts.json in the Diatonic home folder ----
+    async def layouts_get(request):
+        return JSONResponse({"path": str(layouts.path()), "layouts": layouts.load()})
 
-    async def workspaces_put(request):
+    async def layouts_put(request):
         try:
-            saved = workspaces.save(await request.json())
-        except workspaces.WorkspaceError as e:
+            saved = layouts.save(await request.json())
+        except layouts.LayoutError as e:
             return JSONResponse({"error": str(e)}, 400)
-        ctx.broadcast({"type": "workspaces_changed"})
-        return JSONResponse({"path": str(workspaces.path()), "workspaces": saved})
+        ctx.broadcast({"type": "layouts_changed"})
+        return JSONResponse({"path": str(layouts.path()), "layouts": saved})
 
     # ---- API apps: the generic panel reads the definition and runs actions through the server -------------
     def api_app(request):
@@ -849,8 +849,8 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
         Route("/api/keymap", keymap_put, methods=["PUT"]),
         Route("/api/macros", macros_get),
         Route("/api/macros", macros_put, methods=["PUT"]),
-        Route("/api/workspaces", workspaces_get),
-        Route("/api/workspaces", workspaces_put, methods=["PUT"]),
+        Route("/api/layouts", layouts_get),
+        Route("/api/layouts", layouts_put, methods=["PUT"]),
         Route("/api/mods", mods_list),
         Route("/api/mods/revert", mods_revert, methods=["POST"]),
         Route("/api/mods/verify/{rid}", mods_verified, methods=["POST"]),

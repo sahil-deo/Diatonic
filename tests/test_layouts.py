@@ -1,9 +1,9 @@
-"""User and agent named workspace storage: stored in workspaces.json in the Diatonic home folder."""
+"""User and agent named layout storage: stored in layouts.json in the Diatonic home folder."""
 import json
 import pytest
 from starlette.testclient import TestClient
 
-from diatonic import workspaces
+from diatonic import layouts
 from diatonic.config import Config
 from diatonic.db import Database
 from diatonic.server import create_app
@@ -20,9 +20,9 @@ def client(tmp_path):
 
 
 def test_missing_or_broken_file_means_empty(home):
-    assert workspaces.load() == []
-    (home / "workspaces.json").write_text("{ not json")
-    assert workspaces.load() == []
+    assert layouts.load() == []
+    (home / "layouts.json").write_text("{ not json")
+    assert layouts.load() == []
 
 
 def test_save_cleans_and_round_trips(home):
@@ -47,7 +47,7 @@ def test_save_cleans_and_round_trips(home):
             "extra_field": "ignored"
         }
     ]
-    saved = workspaces.save(raw)
+    saved = layouts.save(raw)
     assert len(saved) == 1
     assert saved[0]["id"] == "inbox_zero"
     assert saved[0]["name"] == "Inbox Zero"
@@ -56,7 +56,7 @@ def test_save_cleans_and_round_trips(home):
     assert len(saved[0]["tree"]["root"]["children"]) == 2
 
     # Read back
-    assert workspaces.load() == saved
+    assert layouts.load() == saved
 
 
 @pytest.mark.parametrize("bad", [
@@ -76,15 +76,15 @@ def test_save_cleans_and_round_trips(home):
         {"id": "dup", "name": "D2", "tree": {"root": {"type": "stack", "tabs": []}}},
     ]
 ])
-def test_bad_workspaces_are_refused(home, bad):
-    with pytest.raises(workspaces.WorkspaceError):
-        workspaces.clean_workspaces(bad)
+def test_bad_layouts_are_refused(home, bad):
+    with pytest.raises(layouts.LayoutError):
+        layouts.clean_layouts(bad)
 
 
-def test_api_reads_and_writes_workspaces(home, tmp_path):
+def test_api_reads_and_writes_layouts(home, tmp_path):
     with client(tmp_path) as c:
-        d = c.get("/api/workspaces").json()
-        assert d["workspaces"] == [] and d["path"].endswith("workspaces.json")
+        d = c.get("/api/layouts").json()
+        assert d["layouts"] == [] and d["path"].endswith("layouts.json")
 
         payload = [
             {
@@ -97,13 +97,30 @@ def test_api_reads_and_writes_workspaces(home, tmp_path):
                 }
             }
         ]
-        r = c.put("/api/workspaces", json=payload, headers={"origin": "http://testserver"})
+        r = c.put("/api/layouts", json=payload, headers={"origin": "http://testserver"})
         assert r.status_code == 200
-        assert r.json()["workspaces"][0]["id"] == "dev"
+        assert r.json()["layouts"][0]["id"] == "dev"
 
         # Read back
-        assert c.get("/api/workspaces").json()["workspaces"][0]["name"] == "Dev"
+        assert c.get("/api/layouts").json()["layouts"][0]["name"] == "Dev"
 
         # Invalid payload
-        r_bad = c.put("/api/workspaces", json={"not": "a list"}, headers={"origin": "http://testserver"})
+        r_bad = c.put("/api/layouts", json={"not": "a list"}, headers={"origin": "http://testserver"})
         assert r_bad.status_code == 400
+
+
+def test_layouts_saved_under_the_old_workspaces_name_are_still_read(home):
+    tree = {"v": 1, "root": {"type": "stack", "id": "s", "active": 0, "tabs": [{"id": "t", "app": "chat", "params": {}}]}}
+    (home / "workspaces.json").write_text(json.dumps([{"id": "dev", "name": "Dev", "tree": tree}]))
+    assert [x["name"] for x in layouts.load()] == ["Dev"]
+    layouts.save(layouts.load())                                         # the next save writes the new file
+    assert (home / "layouts.json").exists() and [x["id"] for x in layouts.load()] == ["dev"]
+
+
+def test_the_layouts_route_saves_and_lists(home):
+    c = client(home)
+    tree = {"v": 1, "root": {"type": "stack", "id": "s", "active": 0, "tabs": [{"id": "t", "app": "files", "params": {}}]}}
+    r = c.put("/api/layouts", json=[{"id": "files", "name": "Files", "tree": tree}], headers={"X-Diatonic": "1"})
+    assert r.status_code == 200 and r.json()["layouts"][0]["name"] == "Files"
+    assert c.get("/api/layouts").json()["layouts"][0]["id"] == "files"
+    assert c.get("/api/workspaces").status_code == 404

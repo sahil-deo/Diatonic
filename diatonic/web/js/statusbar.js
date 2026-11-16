@@ -149,6 +149,7 @@ function renderPin(pin) {
   const btn = h("button", {
     type: "button",
     class: `sb-pin ${state.panelApp === pin.appId ? "active" : ""}`,
+    "aria-current": state.panelApp === pin.appId ? "true" : undefined,
     title: `${pin.label} (Click to open, ⌘Click to split side-by-side, Shift-Click to split stacked)`,
     onclick: async (ev) => {
       ev.preventDefault();

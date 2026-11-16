@@ -12,7 +12,7 @@ import { hintFor } from "./keymap.js";
 import { rankItems } from "./fuzzy.js";
 import { invoke as invokeAction } from "./actions.js";
 import { getMacros, runMacro } from "./macros.js";
-import { getWorkspaces, switchWorkspace } from "./workspace.js";
+import { getLayouts, switchLayout } from "./workspace.js";
 
 const USE_KEY = "diatonic.palette.use";
 let sel = 0, shown = [];
@@ -178,8 +178,7 @@ export function openPalette(opts = {}) {
         const verbs = [
           { id: "verb:open", group: "Commands", label: "/open <app>", hint: "open app", icon: "box", run: () => { input.value = "/open "; input.focus(); paint(); } },
           { id: "verb:split", group: "Commands", label: "/split [right|down] <app>", hint: "split", icon: "split-v", run: () => { input.value = "/split "; input.focus(); paint(); } },
-          { id: "verb:layout", group: "Commands", label: "/layout <preset>", hint: "layout", icon: "sliders", run: () => { input.value = "/layout "; input.focus(); paint(); } },
-          { id: "verb:workspace", group: "Commands", label: "/workspace <name>", hint: "switch workspace", icon: "sliders", run: () => { input.value = "/workspace "; input.focus(); paint(); } },
+          { id: "verb:layout", group: "Commands", label: "/layout <name>", hint: "preset or saved layout", icon: "sliders", run: () => { input.value = "/layout "; input.focus(); paint(); } },
           { id: "verb:run", group: "Commands", label: "/run <job|macro|script>", hint: "run", icon: "command", run: () => { input.value = "/run "; input.focus(); paint(); } },
         ];
         shown = verb ? rankItems(verbs, verb, usage()) : verbs;
@@ -225,31 +224,18 @@ export function openPalette(opts = {}) {
           { id: "three-column", label: "Three columns", icon: "chevron", run: async () => { d.close(); const ws = await import("./workspace.js"); ws.applyPreset("three-column"); } },
           { id: "grid", label: "2x2 Grid", icon: "chevron", run: async () => { d.close(); const ws = await import("./workspace.js"); ws.applyPreset("grid"); } },
         ].map((l) => ({ id: `slash:layout:${l.id}`, group: "Layout Presets", label: l.label, icon: l.icon, run: l.run }));
-        const wsItems = (getWorkspaces() || []).map((w) => ({
-          id: `slash:layout:ws:${w.id}`,
-          group: "Saved Workspaces",
+        const savedItems = (getLayouts() || []).map((w) => ({
+          id: `slash:layout:saved:${w.id}`,
+          group: "Saved Layouts",
           label: w.name,
-          hint: w.description || "Workspace",
+          hint: w.description || "Layout",
           icon: "sliders",
           run: () => {
             d.close();
-            switchWorkspace(w.id);
+            switchLayout(w.id);
           },
         }));
-        shown = rankItems([...presets, ...wsItems], subQ, usage());
-      } else if (verb === "workspace") {
-        const wsItems = (getWorkspaces() || []).map((w) => ({
-          id: `slash:ws:${w.id}`,
-          group: "Saved Workspaces",
-          label: w.name,
-          hint: w.description || "Workspace",
-          icon: "sliders",
-          run: () => {
-            d.close();
-            switchWorkspace(w.id);
-          },
-        }));
-        shown = rankItems(wsItems, subQ, usage());
+        shown = rankItems([...presets, ...savedItems], subQ, usage());
       } else if (verb === "run") {
         const jobItems = schedulerJobs.map((j) => ({
           id: `slash:run:sched:${j.id}`,

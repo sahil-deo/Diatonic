@@ -22,7 +22,7 @@ Goal: replace the agent-first shell (rail, conversation sidebar, one chat, one p
 ### 1. Layout tree
 - A node is a `split` (direction, sizes, children) or a `stack` (tabs, one active).
 - A tab is a panel instance: `{id, app, params, state}`.
-- The tree serializes to JSON: saved as named workspaces, restored on reload, editable by the agent.
+- The tree serializes to JSON: saved as named layouts, restored on reload, editable by the agent.
 - Tabs also fix the cluttered apps rail: open 30 apps without 30 permanent icons.
 
 ### 2. Everything is a panel
@@ -74,7 +74,7 @@ Goal: replace the agent-first shell (rail, conversation sidebar, one chat, one p
 - Default is arrows plus PgUp/PgDn; vim-style keys are a setting.
 
 ### More ideas
-- **Named workspaces** ("Inbox zero", "Dev"), switchable from the palette, per-window restore. Macros can set one up; the scheduler can run it at 8am.
+- **Saved layouts** ("Inbox zero", "Dev"), switchable from the palette, per-window restore. Macros can set one up; the scheduler can run it at 8am.
 - **Macros:** declarative JSON sequences of commands (optional wait/if), recordable, savable by the agent ("save this layout as Dev"), runnable from the scheduler. Script macros need approval.
 - **Linked panels:** a chat panel follows another panel ("sees that mail"), with a visible chip. Replaces the single `screenContext`.
 - **Layout undo/redo and reopen closed panel (⌘⇧T):** reuse the existing mods history.
@@ -97,5 +97,5 @@ Goal: replace the agent-first shell (rail, conversation sidebar, one chat, one p
 - [ ] **2. Layout tree,** with the existing UI as the default preset and chat as a panel.
 - [ ] **3. Multi-instance panels:** per-instance state refactor and tab stacks. Audit which panels use module-level state first.
 - [ ] **4. Launcher, status bar pins, palette modes** (search, `/`, ask).
-- [ ] **5. Macros, workspaces and agent layout tools.**
+- [ ] **5. Macros, saved layouts and agent layout tools.**
 - [ ] **Eval:** a handful of layout requests ("mail left, calendar top-right, chat bottom-right") run through the agent, checking the resulting tree.
