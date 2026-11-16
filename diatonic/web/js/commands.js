@@ -9,6 +9,12 @@
 
 const cmds = new Map();
 const providers = new Set();
+const runListeners = new Set();
+
+export function onRun(fn) {
+  runListeners.add(fn);
+  return () => runListeners.delete(fn);
+}
 
 export function register(def) {
   if (!def?.id || typeof def.run !== "function") throw new Error("A command needs an id and a run function.");
@@ -33,7 +39,11 @@ export async function run(id, args) {
   const c = cmds.get(id);
   if (!c) throw new Error(`No command "${id}".`);
   if (!available(c)) throw new Error(`"${c.title}" isn't available right now.`);
-  return c.run(args || {});
+  const res = await c.run(args || {});
+  for (const fn of runListeners) {
+    try { fn(id, args, res); } catch {}
+  }
+  return res;
 }
 
 /** Extra palette rows that aren't fixed commands (one per app, per conversation…): a function returning [{id, group, label, icon, hint, run}]. */

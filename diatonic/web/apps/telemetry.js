@@ -1,15 +1,16 @@
 // Telemetry panel: how fast and how reliable the agent is. Reads only when opened; costs the harness nothing otherwise.
 const BASE = "/api/apps/telemetry";
 export const wide = true;
-let days = 1;
 
 const sec = (ms) => (ms == null ? "–" : ms < 950 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`);
 const num = (n) => (n == null ? "–" : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 
-export async function render(el, { api, h, toast, reload, prompt }) {
+export async function render(el, ctx) {
+  const { api, h, toast, reload, prompt } = ctx;
+  const days = ctx.state.get("days", 1);              // per panel, not per module
   const s = await api.get(`${BASE}/summary?days=${days}`);
   const range = h("div", { class: "seg" }, ...[[0.25, "6h"], [1, "Today"], [7, "7 days"], [30, "30 days"]].map(([d, l]) =>
-    h("button", { type: "button", class: d === days ? "on" : "", onclick: () => { days = d; reload(); } }, l)));
+    h("button", { type: "button", class: d === days ? "on" : "", onclick: () => { ctx.state.set("days", d); reload(); } }, l)));
 
   const head = h("div", { class: "tel-head" }, range, h("div", { class: "grow" }),
     h("label", { class: "chk" }, h("input", { type: "checkbox", checked: s.cfg.enabled, onchange: async (e) => { await api.put("/api/config", { telemetry: { enabled: e.target.checked } }); toast(e.target.checked ? "Telemetry on" : "Telemetry off"); } }), "Record"));

@@ -19,6 +19,7 @@ from ...agent.session import RUN_CLIENT
 from ...dataapps import DataSpecError, check_data_manifest, parse_fields, summary as data_summary
 from ...apiapps import AppSpecError, call as api_call, check_manifest, key_paths, parse_params, summary as app_summary
 from ...mods import ModError
+from ...fileapps import FileAppError
 from ...toolapps import (FREE_TEXT, REF_PARAMS, ToolSpecError, catalog, check_tool_manifest, hint_presets, parse_fixed, plan,
                          resolve as resolve_tool, summary as tools_summary)
 from ..base import WRITE, App, Tool, ToolError
@@ -48,7 +49,7 @@ def hex_colour(v) -> str:
     return "#" + s if re.fullmatch(r"[0-9a-f]{6}", s) else str(v or "")
 
 
-NAV_TOOLS = ("open_app", "open_item", "set_layout")
+NAV_TOOLS = ("open_app", "open_item", "set_layout", "pin_app", "unpin_app", "save_macro", "run_macro", "list_macros", "delete_macro", "save_workspace", "switch_workspace", "list_workspaces", "delete_workspace", "arrange_panels", "undo_layout")
 STYLE_MAP = ("Colours are CSS variables on :root: --bg --surface --surface-2 --border --text --muted --accent --radius --font. "
              "Parts: .rail (the strip of app icons on the far left; one icon is .rail-btn[data-app=files]) .sidebar (chat list) .main (chat) "
              ".topbar .messages .msg.user .bubble .msg.assistant .composer .panel (right app panel) .dock (bottom bar) .statusbar. "
@@ -64,7 +65,8 @@ APP_PATTERNS = [r"\b(?:new|own|custom|my own) (?:app|panel|tab)\b", MAKE_A,
                 r"\b(?:update|edit|change|modify|fix|improve|extend|rename)\b.*\b(?:app|panel|tab|field|button|action)\b"]
 # Building or changing an app (API apps, panels): offered instead of the look-and-feel tools.
 BUILD = re.compile(r"\b(?:api|apis|endpoint|endpoints|integration|app|apps|panel|tab|field|fields|input|tracker|action)\b|" + MAKE_A)
-BUILD_TOOLS = ("create_app", "add_list", "add_field", "remove_field", "remove_list", "add_panel", "list_mods", "remove_mod", "revert", "open_app")
+BUILD_TOOLS = ("create_app", "add_list", "add_field", "remove_field", "remove_list", "add_panel", "list_mods", "remove_mod", "revert", "open_app",
+               "create_file_app", "write_app_file", "patch_app_file", "read_app_file", "list_app_files", "read_app_logs", "export_file_app", "import_file_app")
 API_TOOLS = ("connect_api", "add_action", "set_fields", "remove_action", "test_app", "list_mods", "remove_mod", "revert", "open_app")
 API_WORDS = re.compile(r"\b(?:api|apis|endpoint|endpoints|url|base url|integration|api key|json|open-?meteo|openweather)\b|https?://")
 EDIT_WORDS = re.compile(r"\b(?:update|edit|change|modify|fix|tweak|adjust|rename|make (?:the|it|that)|bigger|smaller|wider|colou?r|green|red|blue)\b")
@@ -86,8 +88,11 @@ CUSTOM = re.compile(r"\b(?:theme|colou?r|accent|font|css|style|button|widget|pan
                     r"narrower|compact|rounded|undo|revert|script|toggle|customi[sz]e|dark mode|light mode|text size|interface|app for|new app|mods?|"
                     r"home ?screen|home ?page|start ?screen|dashboard|widgets?|tiles?)\b"
                     r"|\b(?:create|make|build|add)\b.*\b(?:app|panel|tab)\b", re.I)
-MODES = {"split": "chat and panel side by side", "focus": "panel fills the window (the chat stays in the dock)",
-         "chat": "no panel, chat only"}
+MODES = {"split": "chat and panel side by side", "focus": "one panel fills the window",
+         "chat": "open the chat"}
+# Each mode is a command the workspace already has, so the agent, a key and the palette all do the same thing.
+MODE_COMMANDS = {"split": {"command": "panel.split.right", "args": {"app": "launcher"}}, "focus": {"command": "layout.preset.single"},
+                 "chat": {"command": "app.open", "args": {"id": "chat", "focus": False}}}
 
 
 class UiApp(App):
@@ -114,6 +119,16 @@ class UiApp(App):
         apps = self._apps()
         s = re.sub(r"[^a-z0-9 ]", "", str(spec or "").lower()).strip()
         s = re.sub(r"^(my|the)\s+", "", s)
+        if s == "chat":
+            class _Chat(App):
+                id, name, panel = "chat", "Chat", True
+                keywords = ["chat", "agent"]
+            return _Chat(self.ctx)
+        if s in ("tiles", "tile", "home", "homescreen", "home screen", "dashboard"):
+            class _Tiles(App):
+                id, name, panel = "tiles", "Home", True
+                keywords = ["tiles", "home", "dashboard"]
+            return _Tiles(self.ctx)
         stem = lambda w: w[:-1] if w.endswith("s") else w
         for a in apps.values():
             names = {a.id, a.name.lower(), *(k.lower() for k in a.keywords)}
@@ -137,6 +152,10 @@ class UiApp(App):
         if not self.ctx.send_ui(self._screen(), {"type": "ui", **ev}):
             raise ToolError("The window that asked is no longer open.")
 
+    def _open(self, app_id: str, params: dict) -> None:
+        """Show an app through the same command a key or the palette runs. focus=False leaves the keyboard where it is."""
+        self._send({"command": "app.open", "args": {"id": app_id, "params": params, "focus": False}})
+
     @staticmethod
     def _done(what: str) -> str:
         # A small model, told something is "on screen", tends to invent what it shows. Say plainly that it has seen nothing.
@@ -155,7 +174,7 @@ class UiApp(App):
         app = self._resolve(a.get("app"))
         if app.id == "files" and (a.get("path") or a.get("query")):   # 'go to Developer/Agentic': a folder, not a search
             shown, kind = self._locate_file(a.get("path") or a.get("query"))
-            self._send({"action": "open", "app": "files", "params": {"item": shown, "kind": kind}})
+            self._open("files", {"item": shown, "kind": kind})
             return self._done(f"Files now shows the {kind} {shown}. To tell the user what is in it, call files_list_files")
         ignored = [k for k in ("view", "date", "query", "account", "path") if a.get(k) and k not in ACCEPTS.get(app.id, set())]
         params, skipped = {}, ""
@@ -181,7 +200,7 @@ class UiApp(App):
                                "recent": "", "all": ""}.get(params["query"].lower().strip(), params["query"])
             if app.id != "gmail" and params["query"] in ("is:unread", "is:starred", "is:important"):
                 params.pop("query")
-        self._send({"action": "open", "app": app.id, "params": params})
+        self._open(app.id, params)
         bits = [f"{k} {v}" for k, v in params.items()]
         notes = ([f"{skipped}, so it shows the default page"] if skipped else []) + \
                 ([f"{app.name} can't use {', '.join(ignored)}, so that was NOT applied; tell the user"] if ignored else [])
@@ -243,28 +262,253 @@ class UiApp(App):
         params = {"item": ref[:500]}
         if app.id == "files":
             params["kind"] = self._locate_file(ref)[1]
-        self._send({"action": "open", "app": app.id, "params": params})
+        self._open(app.id, params)
         return self._done(f"'{label}' is open in {app.name}")
 
     async def set_layout(self, a: dict):
-        ev: dict = {"action": "layout"}
         mode = str(a.get("mode") or "").lower().strip()
-        if mode:
-            if mode not in MODES:
-                raise ToolError(f"mode must be one of: {', '.join(MODES)}.", bad_args=True)
-            ev["mode"] = mode
+        if mode and mode not in MODES:
+            raise ToolError(f"mode must be one of: {', '.join(MODES)}.", bad_args=True)
         side = str(a.get("sidebar") or "").lower().strip()
-        if side:
-            if side not in ("show", "hide"):
-                raise ToolError("sidebar must be 'show' or 'hide'.", bad_args=True)
-            ev["sidebar"] = side
-        if len(ev) == 1:
+        if side and side not in ("show", "hide"):
+            raise ToolError("sidebar must be 'show' or 'hide'.", bad_args=True)
+        if not mode and not side:
             raise ToolError("Give a mode and/or a sidebar setting.", bad_args=True)
-        self._send(ev)
-        return self._done("layout changed (" + ", ".join(f"{k} {v}" for k, v in ev.items() if k != "action") + ")")
+        if mode:
+            self._send(MODE_COMMANDS[mode])
+        if side:
+            self._send({"command": "sidebar.set", "args": {"mode": side}})
+        return self._done("layout changed (" + ", ".join(f"{k} {v}" for k, v in (("mode", mode), ("sidebar", side)) if v) + ")")
+
+    async def pin_app(self, a: dict):
+        """Pin an app to the status bar."""
+        app = self._resolve(a["app"])
+        pins = list(self.ctx.config.data["appearance"].get("statusbar_pins") or [
+            {"id": "pin:gmail", "label": "Mail", "icon": "mail", "appId": "gmail", "zone": "center"},
+            {"id": "pin:shell", "label": "Terminal", "icon": "command", "appId": "shell", "zone": "center"},
+            {"id": "pin:files", "label": "Files", "icon": "folder", "appId": "files", "zone": "center"},
+        ])
+        pin_id = f"pin:{app.id}"
+        existing = next((p for p in pins if p.get("appId") == app.id or p.get("id") == pin_id), None)
+        zone = str(a.get("zone") or "center")
+        if not existing:
+            pins.append({"id": pin_id, "label": app.name, "icon": getattr(app, "icon", "box") or "box", "appId": app.id, "zone": zone})
+            self.ctx.config.update({"appearance": {"statusbar_pins": pins}})
+        return self._done(f"pinned {app.name} to the status bar")
+
+    async def unpin_app(self, a: dict):
+        """Unpin an app from the status bar."""
+        app = self._resolve(a["app"])
+        pins = list(self.ctx.config.data["appearance"].get("statusbar_pins") or [
+            {"id": "pin:gmail", "label": "Mail", "icon": "mail", "appId": "gmail", "zone": "center"},
+            {"id": "pin:shell", "label": "Terminal", "icon": "command", "appId": "shell", "zone": "center"},
+            {"id": "pin:files", "label": "Files", "icon": "folder", "appId": "files", "zone": "center"},
+        ])
+        pins = [p for p in pins if p.get("appId") != app.id and p.get("id") != f"pin:{app.id}"]
+        self.ctx.config.update({"appearance": {"statusbar_pins": pins}})
+        return self._done(f"unpinned {app.name} from the status bar")
+
+    async def save_macro(self, a: dict):
+        """Save a declarative macro (named sequence of commands)."""
+        self._guard_mod()
+        from ... import macros
+        name = str(a.get("name") or "").strip()
+        if not name:
+            raise ToolError("Provide a name for the macro.", bad_args=True)
+        mid = str(a.get("id") or "").strip()
+        if not mid:
+            mid = "macro_" + re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+        mid = mid[:macros.MAX_TEXT]
+        desc = str(a.get("description") or "").strip()[:macros.MAX_DESC]
+
+        raw_steps = a.get("steps")
+        if not raw_steps:
+            app_id = a.get("app")
+            if app_id:
+                raw_steps = [{"command": "app.open", "args": {"id": self._resolve(app_id).id}}]
+            else:
+                raw_steps = [{"command": "layout.preset.side-by-side"}]
+
+        try:
+            cleaned = macros.clean_macro({"id": mid, "name": name, "description": desc, "steps": raw_steps})
+        except macros.MacroError as e:
+            raise ToolError(str(e), bad_args=True)
+
+        all_macros = [m for m in macros.load() if m["id"] != mid]
+        all_macros.append(cleaned)
+        macros.save(all_macros)
+        self.ctx.broadcast({"type": "macros_changed"})
+        return self._done(f"saved macro '{cleaned['name']}' with {len(cleaned['steps'])} step(s)")
+
+    async def run_macro(self, a: dict):
+        """Trigger execution of a saved macro by name or id."""
+        from ... import macros
+        target = str(a.get("name") or a.get("id") or "").strip().lower()
+        if not target:
+            raise ToolError("Provide the name or id of the macro to run.", bad_args=True)
+        all_macros = macros.load()
+        found = next((m for m in all_macros if m["id"].lower() == target or m["name"].lower() == target), None)
+        if not found:
+            names = ", ".join(f"'{m['name']}'" for m in all_macros) or "none"
+            raise ToolError(f"No macro '{target}'. Available macros: {names}.", bad_args=True)
+        self.ctx.broadcast({"type": "run_macro", "macro_id": found["id"]})
+        return self._done(f"running macro '{found['name']}'")
+
+    async def list_macros(self, a: dict):
+        """List all saved macros."""
+        from ... import macros
+        all_macros = macros.load()
+        if not all_macros:
+            return {"macros": [], "summary": "No macros saved yet."}
+        res = [{"id": m["id"], "name": m["name"], "description": m["description"], "steps_count": len(m["steps"])} for m in all_macros]
+        names = ", ".join(m["name"] for m in all_macros)
+        return {"macros": res, "summary": f"Found {len(res)} macro(s): {names}"}
+
+    async def delete_macro(self, a: dict):
+        """Delete a saved macro by name or id."""
+        self._guard_mod()
+        from ... import macros
+        target = str(a.get("name") or a.get("id") or "").strip().lower()
+        if not target:
+            raise ToolError("Provide the name or id of the macro to delete.", bad_args=True)
+        all_macros = macros.load()
+        found = next((m for m in all_macros if m["id"].lower() == target or m["name"].lower() == target), None)
+        if not found:
+            raise ToolError(f"No macro '{target}' found.", bad_args=True)
+        remaining = [m for m in all_macros if m["id"] != found["id"]]
+        macros.save(remaining)
+        self.ctx.broadcast({"type": "macros_changed"})
+        return self._done(f"deleted macro '{found['name']}'")
+
+    async def save_workspace(self, a: dict):
+        """Save a named workspace layout."""
+        self._guard_mod()
+        from ... import workspaces
+        name = str(a.get("name") or "").strip()
+        if not name:
+            raise ToolError("Provide a name for the workspace.", bad_args=True)
+        wid = str(a.get("id") or "").strip()
+        if not wid:
+            wid = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+        wid = wid[:workspaces.MAX_TEXT]
+        desc = str(a.get("description") or "").strip()[:workspaces.MAX_DESC]
+
+        raw_tree = a.get("tree")
+        if not raw_tree:
+            apps = self._app_list(a.get("apps")) if a.get("apps") else ["chat", "files"]
+            if len(apps) == 1:
+                raw_tree = {"v": 1, "root": {"type": "stack", "id": "s_main", "active": 0, "tabs": [{"id": f"t_{apps[0]}", "app": apps[0], "params": {}}]}}
+            else:
+                raw_tree = {
+                    "v": 1,
+                    "root": {
+                        "type": "split",
+                        "dir": "row",
+                        "sizes": [round(1.0 / len(apps), 2)] * len(apps),
+                        "children": [
+                            {"type": "stack", "id": f"s_{idx}", "active": 0, "tabs": [{"id": f"t_{app}", "app": app, "params": {}}]}
+                            for idx, app in enumerate(apps)
+                        ]
+                    }
+                }
+
+        try:
+            cleaned = workspaces.clean_workspace({"id": wid, "name": name, "description": desc, "tree": raw_tree})
+        except workspaces.WorkspaceError as e:
+            raise ToolError(str(e), bad_args=True)
+
+        all_ws = [w for w in workspaces.load() if w["id"] != wid]
+        all_ws.append(cleaned)
+        workspaces.save(all_ws)
+        self.ctx.broadcast({"type": "workspaces_changed"})
+        return self._done(f"saved workspace '{cleaned['name']}'")
+
+    async def switch_workspace(self, a: dict):
+        """Switch to a saved workspace by name or id."""
+        from ... import workspaces
+        target = str(a.get("name") or a.get("id") or "").strip().lower()
+        if not target:
+            raise ToolError("Provide the name or id of the workspace to switch to.", bad_args=True)
+        all_ws = workspaces.load()
+        found = next((w for w in all_ws if w["id"].lower() == target or w["name"].lower() == target), None)
+        if not found:
+            names = ", ".join(f"'{w['name']}'" for w in all_ws) or "none"
+            raise ToolError(f"No workspace '{target}'. Available workspaces: {names}.", bad_args=True)
+        self.ctx.broadcast({"type": "switch_workspace", "workspace_id": found["id"], "tree": found["tree"]})
+        return self._done(f"switched to workspace '{found['name']}'")
+
+    async def list_workspaces(self, a: dict):
+        """List all saved workspaces."""
+        from ... import workspaces
+        all_ws = workspaces.load()
+        if not all_ws:
+            return {"workspaces": [], "summary": "No workspaces saved yet."}
+        res = [{"id": w["id"], "name": w["name"], "description": w["description"]} for w in all_ws]
+        names = ", ".join(w["name"] for w in all_ws)
+        return {"workspaces": res, "summary": f"Found {len(res)} workspace(s): {names}"}
+
+    async def delete_workspace(self, a: dict):
+        """Delete a saved workspace by name or id."""
+        self._guard_mod()
+        from ... import workspaces
+        target = str(a.get("name") or a.get("id") or "").strip().lower()
+        if not target:
+            raise ToolError("Provide the name or id of the workspace to delete.", bad_args=True)
+        all_ws = workspaces.load()
+        found = next((w for w in all_ws if w["id"].lower() == target or w["name"].lower() == target), None)
+        if not found:
+            raise ToolError(f"No workspace '{target}' found.", bad_args=True)
+        remaining = [w for w in all_ws if w["id"] != found["id"]]
+        workspaces.save(remaining)
+        self.ctx.broadcast({"type": "workspaces_changed"})
+        return self._done(f"deleted workspace '{found['name']}'")
+
+    async def arrange_panels(self, a: dict):
+        """Arrange apps spatially on screen (e.g. 'mail left, calendar top-right, chat bottom-right')."""
+        from .layout_builder import build_layout_tree
+        positions = {}
+        direct_keys = ("left", "right", "top", "bottom", "top_left", "top_right", "bottom_left", "bottom_right", "center",
+                       "top-left", "top-right", "bottom-left", "bottom-right")
+        for k in direct_keys:
+            if a.get(k):
+                try:
+                    resolved = self._resolve(a[k]).id
+                    positions[k] = resolved
+                except Exception:
+                    pass
+
+        placements = a.get("placements")
+        if isinstance(placements, list):
+            for p in placements:
+                if isinstance(p, dict) and p.get("position") and p.get("app"):
+                    try:
+                        resolved = self._resolve(p["app"]).id
+                        positions[p["position"]] = resolved
+                    except Exception:
+                        pass
+
+        if not positions:
+            raise ToolError("Specify where to place apps: left, right, top, bottom, top_right, bottom_right, top_left, bottom_left, or center.", bad_args=True)
+
+        tree = build_layout_tree(positions)
+        summary_items = [f"{app} ({pos.replace('_', ' ')})" for pos, app in positions.items()]
+        summary = f"arranged layout: {', '.join(summary_items)}"
+        if hasattr(self.ctx, "mods") and hasattr(self.ctx.mods, "log_layout"):
+            self.ctx.mods.log_layout(before=None, after=tree, what=summary)
+        self.ctx.broadcast({"type": "switch_workspace", "tree": tree})
+        self._changed(summary)
+        return self._done(f"{summary}. You can say 'undo' to revert.")
+
+    async def undo_layout(self, a: dict):
+        """Undo the most recent layout arrangement."""
+        self.ctx.broadcast({"type": "undo_layout"})
+        return self._done("reverted layout change")
 
     # ---- changing the interface itself ---------------------------------
     default_allow = ["set_home", "set_theme", "add_style", "add_button", "list_mods", "remove_mod", "revert", "add_action", "set_fields", "remove_action",
+                     "pin_app", "unpin_app", "save_macro", "run_macro", "list_macros", "delete_macro",
+                     "save_workspace", "switch_workspace", "list_workspaces", "delete_workspace",
+                     "arrange_panels", "undo_layout",
                      "create_app", "add_list", "add_field", "remove_field", "remove_list"]   # data apps need no network and run no code, so no card
     untrusted_note = ("This run has read email, whose text anyone can write, so it can't change the interface. "
                       "Ask again in a new chat.")
@@ -408,6 +652,108 @@ class UiApp(App):
             raise ToolError(str(e))
         self._changed(what)
         return self._done(what)
+
+    # ---- file-based custom apps in ~/.diatonic/apps/<id>/ ----------------
+    async def create_file_app(self, a: dict):
+        self._guard_mod()
+        app_id = a.get("id") or a.get("name")
+        try:
+            manifest = self.ctx.fileapps.create_app(app_id, a.get("name", ""), a.get("description", ""), a.get("icon", "box"))
+        except (FileAppError, ValueError) as e:
+            raise ToolError(str(e), bad_args=True)
+        return self._done(f"Created custom app '{manifest['name']}' in ~/.diatonic/apps/{manifest['id']}/")
+
+    async def write_app_file(self, a: dict):
+        self._guard_mod()
+        app_id = a.get("app_id")
+        path = a.get("path")
+        content = a.get("content", "")
+        if path == "index.js":
+            await self._verify("panel", {"code": content})
+        try:
+            res = self.ctx.fileapps.write_file(app_id, path, content)
+        except (FileAppError, ValueError) as e:
+            raise ToolError(str(e), bad_args=True)
+        return self._done(f"Saved '{path}' in custom app '{app_id}' ({res['bytes']} bytes)")
+
+    async def _write_file_preview(self, a: dict) -> str:
+        app_id = a.get("app_id")
+        path = a.get("path")
+        content = a.get("content", "")
+        try:
+            old = self.ctx.fileapps.read_file(app_id, path)
+            return self._diff(old, content)
+        except Exception:
+            return "\n".join("+ " + line for line in content.splitlines())
+
+    async def patch_app_file(self, a: dict):
+        self._guard_mod()
+        app_id = a.get("app_id")
+        path = a.get("path")
+        old = a.get("old", "")
+        new = a.get("new", "")
+        try:
+            cur = self.ctx.fileapps.read_file(app_id, path)
+            updated = cur.replace(old, new, 1) if old in cur else cur
+            if path == "index.js":
+                await self._verify("panel", {"code": updated})
+            self.ctx.fileapps.patch_file(app_id, path, old, new)
+        except (FileAppError, ValueError) as e:
+            raise ToolError(str(e), bad_args=True)
+        return self._done(f"Patched '{path}' in custom app '{app_id}'")
+
+    async def _patch_file_preview(self, a: dict) -> str:
+        app_id = a.get("app_id")
+        path = a.get("path")
+        old = a.get("old", "")
+        new = a.get("new", "")
+        try:
+            cur = self.ctx.fileapps.read_file(app_id, path)
+            updated = cur.replace(old, new, 1)
+            return self._diff(cur, updated)
+        except Exception:
+            return f"- {old}\n+ {new}"
+
+    async def read_app_file(self, a: dict):
+        app_id = a.get("app_id")
+        path = a.get("path")
+        try:
+            return self.ctx.fileapps.read_file(app_id, path)
+        except (FileAppError, ValueError) as e:
+            raise ToolError(str(e), bad_args=True)
+
+    async def list_app_files(self, a: dict):
+        app_id = a.get("app_id")
+        if app_id:
+            info = self.ctx.fileapps.get_app(app_id)
+            if not info:
+                raise ToolError(f"No custom app found with id '{app_id}'.", bad_args=True)
+            return info
+        return self.ctx.fileapps.list_apps()
+
+    async def read_app_logs(self, a: dict):
+        app_id = a.get("app_id")
+        logs = self.ctx.fileapps.get_logs(app_id)
+        if not logs:
+            return f"No errors or runtime logs recorded for '{app_id}'."
+        return logs
+
+    async def export_file_app(self, a: dict):
+        app_id = a.get("app_id")
+        try:
+            return self.ctx.fileapps.export_app(app_id)
+        except (FileAppError, ValueError) as e:
+            raise ToolError(str(e), bad_args=True)
+
+    async def import_file_app(self, a: dict):
+        self._guard_mod()
+        bundle = a.get("bundle") or a
+        overwrite = bool(a.get("overwrite", False))
+        try:
+            res = self.ctx.fileapps.import_app(bundle, overwrite=overwrite)
+        except (FileAppError, ValueError) as e:
+            raise ToolError(str(e), bad_args=True)
+        return self._done(f"Imported custom app '{res['id']}' with {len(res['files'])} files")
 
     def resolve_verify(self, rid: str, result: dict) -> bool:
         """The window's answer for a pending verification (see _verify)."""
@@ -1101,11 +1447,64 @@ class UiApp(App):
                  self.remove_mod, WRITE, title="Remove change", precheck=self._blocked),
             Tool("revert", "Undo the most recent interface change (theme, style, script or panel). Use for 'undo that', 'put it back'.", {},
                  self.revert, WRITE, title="Undo change", precheck=self._blocked),
+            Tool("create_file_app", "Create a file-based app with its own directory, manifest.json, index.js, and style.css in ~/.diatonic/apps/<id>/.",
+                 {"properties": {"id": {"type": "string", "description": "App id slug, e.g. pomodoro-timer"},
+                                 "name": {"type": "string", "description": "Display name of the app"},
+                                 "description": {"type": "string", "description": "Short description of what the app does"},
+                                 "icon": {"type": "string", "description": "Icon name from icons.js (e.g. clock, box, chat)"}},
+                  "required": ["id", "name"]},
+                 self.create_file_app, WRITE, title="Create file app", precheck=self._blocked,
+                 describe=lambda a: f"Create custom app folder '{a.get('name') or a.get('id')}'"),
+            Tool("write_app_file", "Write or overwrite a file in a custom app folder (~/.diatonic/apps/<id>/). Use for index.js, style.css, tools.py, etc.",
+                 {"properties": {"app_id": {"type": "string", "description": "App id"},
+                                 "path": {"type": "string", "description": "Relative file path inside the app folder"},
+                                 "content": {"type": "string", "description": "File content"},
+                                 "summary": SUMMARY},
+                  "required": ["app_id", "path", "content"]},
+                 self.write_app_file, WRITE, title="Write app file", precheck=self._blocked,
+                 describe=lambda a: f"Write file '{a.get('path')}' in custom app '{a.get('app_id')}'",
+                 preview=self._write_file_preview),
+            Tool("patch_app_file", "Surgically edit a file in a custom app folder by replacing exact old text with new text.",
+                 {"properties": {"app_id": {"type": "string", "description": "App id"},
+                                 "path": {"type": "string", "description": "Relative file path inside the app folder"},
+                                 "old": {"type": "string", "description": "Exact text to replace"},
+                                 "new": {"type": "string", "description": "Replacement text"},
+                                 "summary": SUMMARY},
+                  "required": ["app_id", "path", "old", "new"]},
+                 self.patch_app_file, WRITE, title="Patch app file", precheck=self._blocked,
+                 describe=lambda a: f"Patch file '{a.get('path')}' in custom app '{a.get('app_id')}'",
+                 preview=self._patch_file_preview),
+            Tool("read_app_file", "Read a file from a custom app folder (~/.diatonic/apps/<id>/).",
+                 {"properties": {"app_id": {"type": "string", "description": "App id"},
+                                 "path": {"type": "string", "description": "Relative file path"}},
+                  "required": ["app_id", "path"]},
+                 self.read_app_file, title="Read app file"),
+            Tool("list_app_files", "List files in a custom app folder or all installed custom apps.",
+                 {"properties": {"app_id": {"type": "string", "description": "Optional app id"}}},
+                 self.list_app_files, title="List app files"),
+            Tool("read_app_logs", "Read client-side and server-side runtime errors and diagnostics for a custom app to debug it.",
+                 {"properties": {"app_id": {"type": "string", "description": "App id"}},
+                  "required": ["app_id"]},
+                 self.read_app_logs, title="Read app logs"),
+            Tool("export_file_app", "Export a custom app as a portable JSON bundle.",
+                 {"properties": {"app_id": {"type": "string", "description": "App id"}},
+                  "required": ["app_id"]},
+                 self.export_file_app, title="Export custom app"),
+            Tool("import_file_app", "Import a custom app from a portable JSON bundle.",
+                 {"properties": {"bundle": {"type": "object", "description": "App bundle JSON"},
+                                 "overwrite": {"type": "boolean", "description": "Whether to overwrite existing app"}},
+                  "required": ["bundle"]},
+                 self.import_file_app, WRITE, title="Import custom app", precheck=self._blocked,
+                 describe=lambda a: "Import custom app from bundle"),
         ]
 
-    def _api_names(self, kinds=("app", "panel", "data", "tools")) -> list[str]:
+    def _api_names(self, kinds=("app", "panel", "data", "tools", "file_app")) -> list[str]:
         mods = self.ctx.mods.list() if getattr(self.ctx, "mods", None) else []
-        return [w for m in mods if m["kind"] in kinds for w in (m["name"], m["title"].lower())]
+        names = [w for m in mods if m["kind"] in kinds for w in (m["name"], m["title"].lower())]
+        if "file_app" in kinds or "panel" in kinds:
+            file_apps = self.ctx.fileapps.list_apps() if getattr(self.ctx, "fileapps", None) else []
+            names.extend([w for a in file_apps for w in (a["id"], a["name"].lower())])
+        return names
 
     def tools_for(self, text: str, prior_tools: set[str] | frozenset = frozenset()) -> list[Tool]:
         """Three groups: showing (3 small tools), changing the look, building apps. Offer only what the request is about."""
@@ -1172,11 +1571,90 @@ class UiApp(App):
                   "required": ["app", "what"]}, self.open_item, title="Open item",
                  describe=lambda a: f"Open {a.get('what') or a.get('ref') or 'an item'}"),
             Tool("set_layout",
-                 "Change how the window is arranged. mode: split (chat and panel side by side: use this for 'exit full screen' or 'show the chat again'), focus (panel fills the window; the chat stays in the dock), "
-                 "chat (close the panel, chat only). sidebar: show or hide the chat list.",
+                 "Change how the window is arranged. mode: split (add a new panel beside the current one), focus (one panel fills the window: use this for 'full screen' or 'exit split'), "
+                 "chat (open the chat). sidebar: show or hide the chat list.",
                  {"properties": {"mode": {"type": "string", "enum": list(MODES)},
                                  "sidebar": {"type": "string", "enum": ["show", "hide"]}}},
                  self.set_layout, title="Change layout"),
+            Tool("pin_app",
+                 f"Pin an app to the status bar (apps: {apps}): 'pin notes to the status bar', 'pin mail'.",
+                 {"properties": {
+                     "app": {"type": "string", "description": "App id or name to pin"},
+                     "zone": {"type": "string", "enum": ["left", "center", "right"], "description": "Status bar zone (default: center)"}},
+                  "required": ["app"]}, self.pin_app, title="Pin app",
+                 describe=lambda a: f"Pin {a.get('app', 'app')} to status bar"),
+            Tool("unpin_app",
+                 f"Unpin an app from the status bar (apps: {apps}): 'unpin notes from the status bar'.",
+                 {"properties": {
+                     "app": {"type": "string", "description": "App id or name to unpin"}},
+                  "required": ["app"]}, self.unpin_app, title="Unpin app",
+                 describe=lambda a: f"Unpin {a.get('app', 'app')} from status bar"),
+            Tool("save_macro",
+                 "Save a macro (a sequence of commands/layout actions): 'save this layout as Dev', 'create a macro to open files and chat'.",
+                 {"properties": {
+                     "name": {"type": "string", "description": "Macro name, e.g. 'Dev' or 'Morning Routine'"},
+                     "description": {"type": "string", "description": "Short description of what the macro does"},
+                     "id": {"type": "string", "description": "Optional unique id, e.g. 'macro_dev'"},
+                     "steps": {"type": "array", "description": "List of step objects: [{'command': 'app.open', 'args': {'id': 'files'}}, {'wait': 100}]"}},
+                  "required": ["name"]}, self.save_macro, title="Save macro",
+                 describe=lambda a: f"Save macro '{a.get('name', 'macro')}'"),
+            Tool("run_macro",
+                 "Run a saved macro by name or id: 'run the Dev macro', 'start morning routine'.",
+                 {"properties": {
+                     "name": {"type": "string", "description": "Name or id of the macro to run"}},
+                  "required": ["name"]}, self.run_macro, title="Run macro",
+                 describe=lambda a: f"Run macro '{a.get('name', 'macro')}'"),
+            Tool("list_macros",
+                 "List all saved macros.",
+                 {}, self.list_macros, title="List macros"),
+            Tool("delete_macro",
+                 "Delete a saved macro by name or id.",
+                 {"properties": {
+                     "name": {"type": "string", "description": "Name or id of the macro to delete"}},
+                  "required": ["name"]}, self.delete_macro, title="Delete macro",
+                 describe=lambda a: f"Delete macro '{a.get('name', 'macro')}'"),
+            Tool("save_workspace",
+                 "Save the current layout (or a set of apps) as a named workspace: 'save this workspace as Dev', 'create an Inbox Zero workspace'.",
+                 {"properties": {
+                     "name": {"type": "string", "description": "Workspace name, e.g. 'Dev' or 'Inbox Zero'"},
+                     "description": {"type": "string", "description": "Short description of what the workspace is for"},
+                     "id": {"type": "string", "description": "Optional unique id, e.g. 'dev'"},
+                     "apps": {"type": "array", "description": "Optional list of apps to include: ['chat', 'files']"}},
+                  "required": ["name"]}, self.save_workspace, title="Save workspace",
+                 describe=lambda a: f"Save workspace '{a.get('name', 'workspace')}'"),
+            Tool("switch_workspace",
+                 "Switch to a named workspace by name or id: 'switch to Dev workspace', 'open Inbox Zero'.",
+                 {"properties": {
+                     "name": {"type": "string", "description": "Name or id of the workspace to switch to"}},
+                  "required": ["name"]}, self.switch_workspace, title="Switch workspace",
+                 describe=lambda a: f"Switch to workspace '{a.get('name', 'workspace')}'"),
+            Tool("list_workspaces",
+                 "List all saved named workspaces.",
+                 {}, self.list_workspaces, title="List workspaces"),
+            Tool("delete_workspace",
+                 "Delete a saved workspace by name or id.",
+                 {"properties": {
+                     "name": {"type": "string", "description": "Name or id of the workspace to delete"}},
+                  "required": ["name"]}, self.delete_workspace, title="Delete workspace",
+                 describe=lambda a: f"Delete workspace '{a.get('name', 'workspace')}'"),
+            Tool("arrange_panels",
+                 "Arrange apps on the screen: 'mail left, calendar right', 'mail left, calendar top-right, chat bottom-right', "
+                 "'three columns with chat, files and terminal', 'grid with mail, calendar, notes, todos'. Free and undoable.",
+                 {"properties": {
+                     "left": {"type": "string", "description": "App for the left pane"},
+                     "right": {"type": "string", "description": "App for the right pane"},
+                     "top": {"type": "string", "description": "App for the top pane"},
+                     "bottom": {"type": "string", "description": "App for the bottom pane"},
+                     "top_left": {"type": "string", "description": "App for the top-left pane"},
+                     "top_right": {"type": "string", "description": "App for the top-right pane"},
+                     "bottom_left": {"type": "string", "description": "App for the bottom-left pane"},
+                     "bottom_right": {"type": "string", "description": "App for the bottom-right pane"},
+                     "center": {"type": "string", "description": "App for the center column in a 3-column layout"}}},
+                 self.arrange_panels, title="Arrange panels",
+                 describe=lambda a: "Arrange screen panels"),
+            Tool("undo_layout",
+                 "Undo the most recent spatial panel arrangement. Use for 'undo that layout', 'put panels back'.",
+                 {}, self.undo_layout, title="Undo layout"),
         ]
 
 

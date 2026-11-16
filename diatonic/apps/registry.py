@@ -47,6 +47,34 @@ class Registry:
                 except Exception as e:   # one bad manifest must not break the others
                     self.errors[m["name"]] = str(e)
 
+    def sync_file_apps(self) -> None:
+        """Turn file-based custom apps in ~/.diatonic/apps/<id> into apps: added, changed or removed."""
+        if not getattr(self.ctx, "fileapps", None):
+            return
+        from ..fileapps import FileApp
+        import json
+
+        # Remove previously synced file apps
+        for k in [k for k, a in self.apps.items() if getattr(a, "file_app", False)]:
+            del self.apps[k]
+
+        # Discover all apps from FileAppStore
+        for app_meta in self.ctx.fileapps.list_apps():
+            app_id = app_meta["id"]
+            if app_meta.get("error") or app_id in self.apps:
+                continue
+            app_dir = self.ctx.fileapps.app_dir(app_id)
+            try:
+                manifest_path = app_dir / "manifest.json"
+                if not manifest_path.is_file():
+                    continue
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                tools = self.ctx.fileapps.load_tools(app_id, self.ctx)
+                self.apps[app_id] = FileApp(self.ctx, app_dir, manifest, tools)
+            except Exception as e:
+                log.exception("failed to load file app %s", app_id)
+                self.errors[app_id] = str(e)
+
     def register(self, app: App) -> None:
         self.apps[app.id] = app
 

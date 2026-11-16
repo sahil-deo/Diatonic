@@ -145,6 +145,10 @@ class Scheduler:
                 output = text
             elif s["kind"] == "prompt":
                 status, output, conv = await self._run_prompt(s)
+            elif s["kind"] == "macro":
+                macro_id = s["payload"].get("macro_id") or s["payload"].get("id") or s["name"]
+                self.ctx.broadcast({"type": "run_macro", "macro_id": macro_id, "schedule_id": s["id"]})
+                output = f"Triggered macro {macro_id}"
             elif s["kind"] == "script":
                 status, output = await run_script(self.ctx, s)
                 mode = s["payload"].get("notify_on", "failure")

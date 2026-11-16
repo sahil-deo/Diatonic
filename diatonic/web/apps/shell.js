@@ -6,11 +6,26 @@ import { emit } from "/js/store.js";
 export const full = true;
 export const flush = true;
 
-const B = "/api/apps/shell";
-const T = new Map();          // session id -> {term, fit, host, es, title, exited}
-let active = null, tab = "term", ui = null;
-let autoId = null;            // the tab opened automatically on first open (dropped if a specific folder was asked for)
-const typed = new Set();      // tabs someone has typed into
+const instances = new WeakMap(); // state-ok: keyed by this panel's ctx
+
+export async function navigate(p, ctx) { return instances.get(ctx)?.navigate(p); }
+
+export async function render(el, ctx) {
+  let inst = instances.get(ctx);
+  if (!inst) {
+    inst = mount(el, ctx);
+    instances.set(ctx, inst);
+  }
+  return inst.render(el, ctx);
+}
+
+function mount(initialEl, initialCtx) {
+  const B = "/api/apps/shell";
+  const T = new Map();          // session id -> {term, fit, host, es, title, exited}
+  let active = null, tab = "term", ui = null;
+  let autoId = null;            // the tab opened automatically on first open (dropped if a specific folder was asked for)
+  const typed = new Set();      // tabs someone has typed into
+  let ro = null;
 
 function loadXterm() {
   if (window.Terminal && window.FitAddon) return Promise.resolve();
@@ -75,12 +90,15 @@ async function newSession(cwd) {
   const r = await fetch(`${B}/term`, { method: "POST", headers: { "Content-Type": "application/json", "X-Diatonic": "1" }, body: JSON.stringify({ cwd: cwd || "~", cols: 100, rows: 30 }) });
   const info = await r.json();
   if (info.error) throw new Error(info.error);
-  active = attach(info).id; tab = "term"; show();
+  active = attach(info).id; tab = "term";
+  initialCtx.state.set("sessions", [...T.keys()]);
+  show();
 }
 
 async function closeSession(id) {
   const t = T.get(id); if (!t) return;
   t.es?.close(); t.term.dispose(); T.delete(id);
+  initialCtx.state.set("sessions", [...T.keys()]);
   fetch(`${B}/term/${id}`, { method: "DELETE", headers: { "X-Diatonic": "1" } });
   if (active === id) active = [...T.keys()].pop() || null;
   if (!T.size && ui?.el.isConnected) return newSession();
@@ -88,8 +106,16 @@ async function closeSession(id) {
 }
 
 /* ------------------------------------------------------------ panel */
-export async function render(el, ctx) {
+async function render(el, ctx) {
   const { h } = ctx;
+  ctx.onClose(() => {
+    ro?.disconnect();
+    for (const t of T.values()) {
+      t.es?.close();
+      t.term.dispose();
+    }
+    T.clear();
+  });
   ui = { el, ctx, tabs: h("div", { class: "term-tabs", role: "tablist" }), body: h("div", { class: "term-body" }) };
   el.replaceChildren(h("div", { class: "term-wrap" },
     h("div", { class: "term-bar" }, ui.tabs, h("div", { class: "grow" }),
@@ -98,7 +124,8 @@ export async function render(el, ctx) {
     ui.body));
   try { await loadXterm(); } catch (e) { ui.body.replaceChildren(h("div", { class: "err", style: "margin:16px" }, e.message)); return; }
   const list = await ctx.api.get(`${B}/term`).catch(() => []);
-  for (const s of list) if (!T.has(s.id)) attach(s);
+  const mySessionIds = new Set(ctx.state.get("sessions", []));
+  for (const s of list) if (mySessionIds.has(s.id) && !T.has(s.id)) attach(s);
   for (const id of [...T.keys()]) if (!list.some((s) => s.id === id)) { T.get(id).es?.close(); T.get(id).term.dispose(); T.delete(id); }   // server restarted
   if (!T.size) return newSession().then(() => { autoId = active; }).catch((e) => ui.body.replaceChildren(h("div", { class: "err", style: "margin:16px" }, e.message)));
   if (!T.has(active)) active = [...T.keys()].pop();
@@ -114,9 +141,13 @@ function paintTabs() {
     h("button", { type: "button", class: "icon-btn sm", title: "New tab", "aria-label": "New tab", onclick: () => newSession(), html: icon("plus", 15) }));
 }
 
-let ro = null;
 function show() {
-  if (!ui?.el.isConnected) return;
+  if (!ui?.el.isConnected) {
+    requestAnimationFrame(() => {
+      if (ui?.el.isConnected) show();
+    });
+    return;
+  }
   paintTabs();
   ui.el.querySelector(".term-bar .btn.on")?.classList.remove("on");
   if (tab === "history") { ui.el.querySelectorAll(".term-bar .btn")[1]?.classList.add("on"); return history(); }
@@ -132,7 +163,7 @@ function show() {
       body: JSON.stringify({ cols: t.term.cols, rows: t.term.rows }) }), 80);
   };
   ro = new ResizeObserver(refit); ro.observe(t.host);
-  requestAnimationFrame(() => { refit(); t.term.focus(); });
+  requestAnimationFrame(() => { refit(); if (document.activeElement && ui.el.contains(document.activeElement)) t.term.focus(); });
 }
 
 function askAgent() {
@@ -163,10 +194,13 @@ async function history() {
 }
 
 /** The agent (or a link) can open a terminal in a folder. */
-export async function navigate(p) {
+async function navigate(p) {
   if (!(p.item || p.path)) return;
   const spare = autoId && T.has(autoId) && !typed.has(autoId) ? autoId : null;
   autoId = null;
   await newSession(p.item || p.path);
   if (spare) closeSession(spare);   // the empty home-folder tab made on first open isn't wanted
+}
+
+return { render, navigate };
 }

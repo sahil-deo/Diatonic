@@ -550,11 +550,11 @@ def test_open_app_goes_to_a_folder_and_never_claims_what_it_ignored(fx):
         r = await ui.open_app({"app": "file explorer", "query": "Project/src"})
         assert "shows the folder src" in r
         ev = q.get_nowait()
-        assert ev["params"] == {"item": "src", "kind": "folder"}
+        assert ev["args"]["params"] == {"item": "src", "kind": "folder"}
         r = await ui.open_app({"app": "files", "view": "week"})
         assert "NOT applied" in r and "view" in r                      # told, so it can't claim the week view
         await ui.open_item({"app": "files", "what": "app.py"})
-        assert [e for e in [q.get_nowait(), q.get_nowait()] if e["params"].get("kind") == "file"][0]["params"]["item"] == "src/app.py"
+        assert [e for e in [q.get_nowait(), q.get_nowait()] if e["args"]["params"].get("kind") == "file"][0]["args"]["params"]["item"] == "src/app.py"
 
     asyncio.run(go())
 

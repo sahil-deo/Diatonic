@@ -6,7 +6,22 @@ const B = "/api/apps/gmail";
 export const full = true;
 export const flush = true;
 
-const M = { account: "all", label: "INBOX", q: "", threads: [], next: "", sel: new Set(), open: null, labels: { accounts: [] }, accounts: [], ctx: null, el: null, showImages: new Set(), busy: false };
+const instances = new WeakMap(); // state-ok: keyed by this panel's ctx
+
+export const current = (ctx) => instances.get(ctx)?.current();
+export async function navigate(p, ctx) { return instances.get(ctx)?.navigate(p); }
+
+export async function render(el, ctx) {
+  let inst = instances.get(ctx);
+  if (!inst) {
+    inst = mount(el, ctx);
+    instances.set(ctx, inst);
+  }
+  return inst.render(el, ctx);
+}
+
+function mount(initialEl, initialCtx) {
+  const M = { account: "all", label: "INBOX", q: "", threads: [], next: "", sel: new Set(), open: null, labels: { accounts: [] }, accounts: [], ctx: null, el: null, showImages: new Set(), busy: false };
 const FOLDERS = [["INBOX", "Inbox", "inbox"], ["STARRED", "Starred", "star"], ["SENT", "Sent", "forward"], ["DRAFT", "Drafts", "edit"], ["SPAM", "Spam", "spam"], ["TRASH", "Trash", "trash"]];
 const enc = encodeURIComponent;
 
@@ -22,7 +37,7 @@ const hue = (s) => { let h = 0; for (const c of s || "") h = (h * 31 + c.charCod
 const acctOf = (email) => M.accounts.find((a) => a.email === email);
 const canManage = (a) => a && (a.level === "manage" || a.level === "send");
 
-export async function render(el, ctx) {
+async function render(el, ctx) {
   const { api, h } = ctx;
   M.ctx = ctx; M.el = el;
   ctx.list({ items: () => [...el.querySelectorAll(".mrow")] });   // ↑/↓ and Enter in the thread list
@@ -35,18 +50,6 @@ export async function render(el, ctx) {
   if (M.account !== "all" && !acctOf(M.account)) M.account = "all";
   shell();
   await Promise.all([loadLabels(), loadThreads(true)]);
-  document.removeEventListener("keydown", keys); document.addEventListener("keydown", keys);
-}
-
-function keys(e) {
-  if (!M.el?.isConnected) return document.removeEventListener("keydown", keys);
-  if (/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName) || e.metaKey || e.ctrlKey || e.altKey || document.querySelector("dialog[open]")) return;
-  const idx = M.threads.findIndex((t) => t.ref === M.open?.ref), k = e.key;
-  if (k === "c") compose({}); else if (k === "/") M.el.querySelector(".mail-search").focus();
-  else if (k === "j" || k === "k") { const n = M.threads[Math.max(0, Math.min(M.threads.length - 1, idx + (k === "j" ? 1 : -1)))]; if (n) openThread(n); }
-  else if (k === "e" && M.open) act("archive", [M.open.ref], true); else if (k === "#" && M.open) act("trash", [M.open.ref], true);
-  else if (k === "u" || k === "Escape") closeReader(); else return;
-  e.preventDefault();
 }
 
 /* ------------------------------------------------------------ shell */
@@ -101,7 +104,19 @@ function paintRows() {
   if (!M.threads.length) return rows.replaceChildren(h("div", { class: "p-empty", style: "padding:40px" }, M.q ? "No conversations match." : "Nothing here."));
   rows.replaceChildren(...M.threads.map((t) => {
     const who = t.from_me ? "me" : (t.from.name || t.from.email), a = acctOf(t.account);
-    return h("div", { class: `mrow ${t.unread ? "unread" : ""} ${M.open?.ref === t.ref ? "open" : ""} ${M.sel.has(t.ref) ? "sel" : ""}`, role: "button", tabindex: 0, onclick: () => openThread(t), onkeydown: (e) => e.key === "Enter" && openThread(t) },
+    return h("div", {
+      class: `mrow ${t.unread ? "unread" : ""} ${M.open?.ref === t.ref ? "open" : ""} ${M.sel.has(t.ref) ? "sel" : ""}`,
+      role: "button",
+      tabindex: 0,
+      draggable: "true",
+      ondragstart: (e) => {
+        e.dataTransfer.setData("text/plain", t.subject);
+        e.dataTransfer.setData("text/diatonic-email", JSON.stringify({ ref: t.ref, subject: t.subject, from: who }));
+        e.dataTransfer.effectAllowed = "copyMove";
+      },
+      onclick: () => openThread(t),
+      onkeydown: (e) => e.key === "Enter" && openThread(t)
+    },
       h("input", { type: "checkbox", checked: M.sel.has(t.ref), "aria-label": "Select", onclick: (e) => e.stopPropagation(), onchange: (e) => { e.target.checked ? M.sel.add(t.ref) : M.sel.delete(t.ref); paintRows(); paintBulk(); } }),
       h("button", { type: "button", class: `mstar ${t.starred ? "on" : ""}`, "aria-label": t.starred ? "Unstar" : "Star", onclick: (e) => { e.stopPropagation(); t.starred = !t.starred; paintRows(); M.ctx.api.post(`${B}/action`, { refs: [t.ref], action: t.starred ? "star" : "unstar" }); }, html: icon("star", 15) }),
       h("div", { class: "mbody" },
@@ -137,7 +152,7 @@ async function act(action, refs, closeAfter = false) {
 /* ------------------------------------------------------------ reader */
 function closeReader() { M.open = null; M.el.querySelector(".mail")?.classList.remove("reading"); paintReader(); paintRows(); emit("screen"); }
 /** The open conversation, for "summarize this". */
-export const current = () => (M.open && M.el?.isConnected ? { kind: "email", ref: M.open.ref, title: M.open.data?.subject || M.threads.find((t) => t.ref === M.open.ref)?.subject || "" } : null);
+const current = () => (M.open && M.el?.isConnected ? { kind: "email", ref: M.open.ref, title: M.open.data?.subject || M.threads.find((t) => t.ref === M.open.ref)?.subject || "" } : null);
 
 async function openThread(t) {
   const { api, h } = M.ctx;
@@ -180,7 +195,8 @@ function messageCard(m, d, expanded) {
     frame.srcdoc = `<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${allow ? "https: http: data:" : "data:"}; style-src 'unsafe-inline'; font-src data:">`
       + `<base target="_blank"><style>html,body{margin:0;background:#fff;color:#202124;font:14px/1.5 -apple-system,system-ui,sans-serif;word-wrap:break-word}body{padding:12px 14px}img{max-width:100%;height:auto}a{color:#1a73e8}pre{white-space:pre-wrap}table{max-width:100%}</style>${m.body_html}`;
     frame.addEventListener("load", () => { try { const doc = frame.contentDocument; frame.style.height = Math.max(80, doc.documentElement.scrollHeight + 4) + "px"; } catch {} });
-    body.append(hasRemote && !allow ? h("div", { class: "mc-img" }, "Images are hidden to protect your privacy. ", h("button", { type: "button", class: "btn sm", onclick: () => { M.showImages.add(m.id); paintReader(); } }, "Show images")) : null, frame);
+    if (hasRemote && !allow) body.append(h("div", { class: "mc-img" }, "Images are hidden to protect your privacy. ", h("button", { type: "button", class: "btn sm", onclick: () => { M.showImages.add(m.id); paintReader(); } }, "Show images")));
+    body.append(frame);
   } else body.append(h("pre", { class: "mc-text" }, m.body_text || m.snippet));
   const atts = (m.attachments || []).length ? h("div", { class: "mc-atts" }, ...m.attachments.map((x) => h("a", { class: "attach", href: `${B}/attachment?account=${enc(d.account)}&message=${enc(m.id)}&id=${enc(x.id)}&name=${enc(x.name)}`, download: x.name, title: `${x.type}, ${(x.size / 1024).toFixed(1)} KB` },
     h("span", { html: icon("paperclip", 14) }), x.name))) : null;
@@ -225,11 +241,14 @@ function compose(init) {
 
 /** Called by the agent to show a folder, a search, one account, or one conversation. */
 const FOLDER_OF = Object.fromEntries(FOLDERS.map(([id, label]) => [label.toLowerCase(), id]));
-export async function navigate(p) {
+async function navigate(p) {
   let reload = false;
   if (p.account) { const a = M.accounts.find((x) => [x.email, x.label].some((v) => v && v.toLowerCase() === p.account.toLowerCase())); M.account = a ? a.email : "all"; reload = true; }
   if (p.view && FOLDER_OF[p.view]) { M.label = FOLDER_OF[p.view]; reload = true; }
   if (p.query != null) { M.q = p.query; reload = true; } else if (reload) M.q = "";
   if (reload) { const box = M.el.querySelector(".mail-search"); if (box) box.value = M.q; paintNav(); await loadThreads(true); }
   if (p.item) await openThread({ ref: p.item });
+}
+
+return { render, navigate, current };
 }

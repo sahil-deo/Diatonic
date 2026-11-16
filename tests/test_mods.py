@@ -30,6 +30,22 @@ def test_store_versions_history_and_revert(tmp_path, env):
     assert ModStore(tmp_path).list() == []                                                          # persisted
 
 
+def test_store_logs_and_reverts_layout_change(tmp_path, env):
+    ctx = env[0]
+    s = ModStore(tmp_path)
+    reverted_layouts = []
+    s.on_layout_revert = reverted_layouts.append
+    old_tree = {"v": 1, "root": {"type": "stack", "id": "s_1", "active": 0, "tabs": [{"id": "t_1", "app": "chat"}]}}
+    new_tree = {"v": 1, "root": {"type": "split", "dir": "row", "sizes": [0.5, 0.5], "children": []}}
+    s.log_layout(before=old_tree, after=new_tree, what="arranged layout: files (left), notes (right)")
+    assert len(s.data["changes"]) == 1
+    assert s.data["changes"][0]["kind"] == "layout"
+    msg = s.revert(ctx.config)
+    assert "undid: arranged layout" in msg
+    assert reverted_layouts == [old_tree]
+    assert len(s.data["changes"]) == 0
+
+
 def test_store_rejects_unsafe_css_and_bad_names(tmp_path):
     s = ModStore(tmp_path)
     for css in ["@import 'x.css';", "a { background: url(http://evil/x.png) }", ".approval { display: none }", ".a-btns .btn { opacity: 0 }"]:

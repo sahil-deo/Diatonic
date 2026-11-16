@@ -5,24 +5,53 @@ import { state, emit } from "./store.js";
 import { runPanel } from "./mods.js";
 import { register } from "./commands.js";
 import { registerList } from "./nav.js";
+import { contributeStatus } from "./statusbar.js";
 
 let seq = 0;
 let current = null;   // {id, mod, ctx} of the panel on screen, so it can be navigated without a reload
 let cleanups = [];    // what the panel on screen registered (commands, lists, observers): undone when it is replaced or closed
-const unload = () => cleanups.splice(0).forEach((f) => { try { f(); } catch {} });
+const unload = () => {
+  if (current?.ctx?.dispose) { try { current.ctx.dispose(); } catch {} }
+  cleanups.splice(0).forEach((f) => { try { f(); } catch {} });
+};
 const own = (off) => { cleanups.push(off); return off; };
 
 /** What a panel gets as `ctx` (the contract in docs/panels.md): keep per-panel data on `ctx`, not in module variables. */
-function panelContext(app, body, nav) {
-  const store = `panelstate:${app.id}`;
-  const read = () => { try { return JSON.parse(localStorage.getItem(store)) || {}; } catch { return {}; } };
+export function panelContext(app, body, nav) {
+  const instanceId = app.instanceId || (body?.dataset ? (body.dataset.panelInstance ||= `inst_${++seq}`) : app.id);
+  const store = `panelstate:${instanceId}`;
+  const oldStore = `panelstate:${app.id}`;
+  const read = () => {
+    try {
+      const v = localStorage.getItem(store);
+      if (v !== null) return JSON.parse(v) || {};
+      const old = localStorage.getItem(oldStore);
+      if (old !== null) return JSON.parse(old) || {};
+      return {};
+    } catch { return {}; }
+  };
+  const myCleanups = [];
+  const myOwn = (off) => { myCleanups.push(off); return off; };
   return {
-    api, h, esc, toast, reload: () => load(), prompt: (t) => emit("prefill", t),
-    id: app.id, app: app.id, params: nav || {}, el: body,
-    state: { get: (k, d) => (k in read() ? read()[k] : d), set: (k, v) => { try { localStorage.setItem(store, JSON.stringify({ ...read(), [k]: v })); } catch {} } },
-    onResize: (fn) => { const ro = new ResizeObserver(() => fn(body.clientWidth, body.clientHeight)); ro.observe(body); return own(() => ro.disconnect()); },
-    command: (def) => own(register({ group: app.name, ...def, id: `${app.id}.${def.id}` })),
-    list: (spec) => own(registerList("panel", spec)),
+    api, h, esc, toast,
+    reload: () => (app.reload ? app.reload() : load(nav)),
+    replaceTab: (newAppId, params = {}) => (app.replaceTab ? app.replaceTab(newAppId, params) : null),
+    prompt: (t) => emit("prefill", t),
+    id: instanceId,
+    app: app.id,
+    params: nav || {},
+    el: body,
+    dispose: () => myCleanups.splice(0).forEach((f) => { try { f(); } catch {} }),
+    state: {
+      get: (k, d) => (k in read() ? read()[k] : d),
+      set: (k, v) => { try { localStorage.setItem(store, JSON.stringify({ ...read(), [k]: v })); } catch {} }
+    },
+    onResize: (fn) => { const ro = new ResizeObserver(() => fn(body.clientWidth, body.clientHeight)); ro.observe(body); return myOwn(() => ro.disconnect()); },
+    command: (def) => myOwn(register({ group: app.name, ...def, id: `${app.id}.${def.id}` })),
+    status: (spec) => myOwn(contributeStatus({ id: `${app.id}:${spec.id || "status"}`, ...spec })),
+    list: (spec) => myOwn(registerList("panel", spec)),
+    // Run `fn` when this panel is replaced or closed: remove document-level listeners, timers and other things the panel started.
+    onClose: (fn) => myOwn(fn),
     // Read through an app's read-only tools: ctx.tool("gcal_list_events", {…}) -> the tool's result.
     tool: (name, args = {}) => { const [a, ...t] = String(name).split("_"); return api.post(`/api/panel/tools/${a}/${t.join("_")}`, args).then((r) => r.result); },
     // The user's own tracker apps: ctx.data("exam-tracker").get(), .add(list, {field: value}), .update(id, {field: value}).
@@ -53,68 +82,38 @@ async function load(nav = null) {
   } catch (e) { body.replaceChildren(h("div", { class: "p-empty" }, `Couldn't load ${app.name}: ${e.message}`)); }
 }
 
-const SHELL = () => $("#shell");
-function applyFull(appId, def) {
-  let v = null; try { v = localStorage.getItem(`panelfull:${appId}`); } catch {}
-  const on = v === null ? !!def : v === "1";
-  SHELL().classList.toggle("panel-full", on);
-  setIcon($("#panel-full"), on ? "minimize" : "maximize", 16);
-  $("#panel-full").title = on ? "Show the chat beside this" : "Expand over the chat";
-}
-export function toggleFull() {
-  const on = !SHELL().classList.contains("panel-full");
-  try { localStorage.setItem(`panelfull:${state.panelApp}`, on ? "1" : "0"); } catch {}
-  applyFull(state.panelApp, on);
-}
-function applyWidth(appId, def) {
-  let w = null; try { w = localStorage.getItem(`panelw:${appId}`); } catch {}
-  const px = Math.min(Number(w) || def || 0, Math.floor(innerWidth * 0.6)) || 0;   // never crush the chat on a small window
-  px ? SHELL().style.setProperty("--panel-w", `${px}px`) : SHELL().style.removeProperty("--panel-w");
-}
-function initResize() {
-  const grip = $("#panel-resize");
-  grip.addEventListener("mousedown", (e) => {
-    e.preventDefault(); document.body.classList.add("resizing");
-    const move = (ev) => { const w = Math.max(320, Math.min(innerWidth - 420, innerWidth - ev.clientX)); SHELL().style.setProperty("--panel-w", `${w}px`); };
-    const up = () => {
-      removeEventListener("mousemove", move); removeEventListener("mouseup", up); document.body.classList.remove("resizing");
-      const w = parseInt(getComputedStyle(SHELL()).getPropertyValue("--panel-w")); try { if (w && state.panelApp) localStorage.setItem(`panelw:${state.panelApp}`, String(w)); } catch {}
-    };
-    addEventListener("mousemove", move); addEventListener("mouseup", up);
-  });
+export async function openPanel(appId, nav = null) {
+  state.panelApp = appId;
+  emit("panel");
+  const ws = await import("./workspace.js");
+  return ws.openPanel(appId, nav || {});
 }
 
-export async function openPanel(appId, nav = null) {
-  if (nav && state.panelApp === appId && current?.id === appId && current.mod.navigate) {   // already open: just move within it
-    try { await current.mod.navigate(nav, current.ctx); } catch (e) { toast(`Couldn't show that: ${e.message}`, "error"); }
-    return;
-  }
-  state.panelApp = appId;
-  $("#shell").classList.add("panel-open"); $("#panel").classList.remove("hidden");
-  emit("panel"); return load(nav);
-}
 export function closePanel() {
-  state.panelApp = null; current = null; seq++; unload();
-  $("#shell").classList.remove("panel-open", "panel-wide", "panel-full"); SHELL().style.removeProperty("--panel-w"); $("#panel").classList.add("hidden"); emit("panel");
+  import("./workspace.js").then((ws) => ws.closeActive());
+  state.panelApp = null;
+  emit("panel");
 }
+
 export function initPanel() {
   state.screenContext = screenContext;
-  initResize();
-  $("#panel-full").onclick = toggleFull; setIcon($("#panel-full"), "maximize", 16);
-  setIcon($("#panel-refresh"), "refresh", 16); setIcon($("#panel-close"), "x", 16);
-  $("#panel-refresh").onclick = () => load(); $("#panel-close").onclick = closePanel;
 }
-export const refreshPanel = () => load();
+
+export const refreshPanel = () => {
+  import("./workspace.js").then((ws) => ws.renderWorkspace());
+};
+
 /** What the user is looking at, so "summarize this" can mean the open email. */
 export function screenContext() {
-  if (!current || current.id !== state.panelApp) return null;
-  const item = current.mod.current?.();
-  const app = [...state.apps, ...(state.modApps || [])].find((a) => a.id === current.id);
-  return { app: current.id, kind: "app", title: app?.name || current.id, ...(item || {}) };   // the app itself counts, even with nothing selected
+  try {
+    const wsContext = state.getScreenContext?.();
+    if (wsContext) return wsContext;
+    const activeApp = state.panelApp;
+    if (!activeApp) return null;
+    const app = [...state.apps, ...(state.modApps || [])].find((a) => a.id === activeApp);
+    return { app: activeApp, kind: "app", title: app?.name || activeApp };
+  } catch { return null; }
 }
-/** Panel beside the chat (false) or filling the window (true); remembered per app like the expand button. */
-export function setFull(on) {
-  if (!state.panelApp) return;
-  try { localStorage.setItem(`panelfull:${state.panelApp}`, on ? "1" : "0"); } catch {}
-  applyFull(state.panelApp, on);
-}
+
+export function setFull(on) {}
+export function toggleFull() {}

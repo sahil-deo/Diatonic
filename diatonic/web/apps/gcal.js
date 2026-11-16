@@ -6,10 +6,24 @@ const B = "/api/apps/gcal";
 export const full = true;
 export const flush = true;
 
-const HOUR = 48;                       // px per hour in the time grid
-const SNAP = 15;                       // minutes
-const S = { view: "week", cursor: new Date(), cals: [], accounts: [], events: [], errors: [], side: true, lastAccount: null, defaultAccount: "", mini: null, ctx: null, el: null, token: 0 };
-try { S.view = localStorage.getItem("cal:view") || "week"; } catch {}
+const instances = new WeakMap(); // state-ok: keyed by this panel's ctx
+
+export async function navigate(p, ctx) { return instances.get(ctx)?.navigate(p); }
+
+export async function render(el, ctx) {
+  let inst = instances.get(ctx);
+  if (!inst) {
+    inst = mount(el, ctx);
+    instances.set(ctx, inst);
+  }
+  return inst.render(el, ctx);
+}
+
+function mount(initialEl, initialCtx) {
+  const HOUR = 48;                       // px per hour in the time grid
+  const SNAP = 15;                       // minutes
+  const S = { view: "week", cursor: new Date(), cals: [], accounts: [], events: [], errors: [], side: true, lastAccount: null, defaultAccount: "", mini: null, ctx: null, el: null, token: 0 };
+  try { S.view = localStorage.getItem("cal:view") || "week"; } catch {}
 
 /* ------------------------------------------------------------------ dates */
 const FIRST = (() => { try { const l = new Intl.Locale(navigator.language), w = l.weekInfo || l.getWeekInfo?.(); return (w?.firstDay ?? 1) % 7; } catch { return 1; } })();
@@ -60,9 +74,10 @@ function defaultCal() {
 }
 
 /* ------------------------------------------------------------------ entry */
-export async function render(el, ctx) {
+async function render(el, ctx) {
   const { api, h } = ctx;
   S.ctx = ctx; S.el = el;
+  ctx.onClose(() => { clearInterval(S.timer); document.removeEventListener("keydown", keys); });
   const info = await api.get(`${B}/calendars`);
   S.cals = info.calendars; S.accounts = info.accounts; S.defaultAccount = info.default_account || ""; S.errors = info.errors || [];
   if (!info.accounts.length) {
@@ -74,17 +89,6 @@ export async function render(el, ctx) {
   await load();
   clearInterval(S.timer);
   S.timer = setInterval(() => { if (!el.isConnected) return clearInterval(S.timer); const n = el.querySelector(".nowline"); if (n) positionNow(); }, 60000);
-  document.removeEventListener("keydown", keys); document.addEventListener("keydown", keys);
-}
-
-function keys(e) {
-  if (!S.el?.isConnected) return document.removeEventListener("keydown", keys);
-  if (/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName) || e.metaKey || e.ctrlKey || e.altKey || document.querySelector("dialog[open]")) return;
-  const k = e.key.toLowerCase();
-  if (k === "t") { S.cursor = new Date(); nav(0); } else if (k === "arrowleft" || k === "p") nav(-1); else if (k === "arrowright" || k === "n") nav(1);
-  else if ("dwma".includes(k) && k.length === 1) setView({ d: "day", w: "week", m: "month", a: "agenda" }[k]);
-  else if (k === "c") openEditor({}); else return;
-  e.preventDefault();
 }
 
 /* ------------------------------------------------------------------ shell */
@@ -418,7 +422,7 @@ function openEditor({ event, start, end, allDay }) {
 }
 
 /** Called by the agent (or anything else) to land on a view, a date or one event. */
-export async function navigate(p) {
+async function navigate(p) {
   const { api } = S.ctx;
   let ev = null;
   if (p.item) { try { ev = parse(await api.get(`${B}/event?ref=${encodeURIComponent(p.item)}`)); } catch { throw new Error("I couldn't find that event."); } }
@@ -428,4 +432,7 @@ export async function navigate(p) {
   S.el.querySelectorAll(".cal-bar .seg button").forEach((b) => b.classList.toggle("on", b.dataset.v === S.view));
   paintSide(); await load();
   if (ev) openEditor({ event: ev });
+}
+
+return { render, navigate };
 }

@@ -7,7 +7,7 @@ const remember = (k, v) => { try { v === undefined ? (v = JSON.parse(localStorag
 
 export async function render(el, ctx) {
   const { api, h, toast } = ctx;
-  const id = state.panelApp;
+  const id = ctx.app || state.panelApp || ctx.id;
   const info = await api.get(`/api/xapps/${enc(id)}`);
   const m = info.manifest, host = new URL(m.base_url).hostname;
 

@@ -26,7 +26,7 @@
     <div class="conv-list" id="conv-list" role="list"></div>
   </aside>
 
-  <main class="main">
+  <main class="main hidden" id="main">
     <header class="topbar">
       <button class="icon-btn" id="toggle-sidebar" aria-label="Toggle sidebar" title="Toggle sidebar (⌘B)" data-cmd="sidebar.toggle" data-title="Toggle sidebar"></button>
       <div class="title" id="chat-title">New chat</div>
@@ -64,14 +64,20 @@
     <div class="panel-body" id="panel-body"></div>
   </aside>
 
+  <div class="workspace-host" id="workspace-host" aria-label="Workspace"></div>
+
   <div class="dock" id="dock" aria-label="Agent"></div>
 
   <footer class="statusbar" id="statusbar">
-    <span class="status" id="st-agent"><i class="dot"></i><span>Connecting…</span></span>
-    <span class="status" id="st-voice"></span>
-    <span class="status" id="st-runs"></span>
-    <div class="grow"></div>
-    <span class="status muted" id="st-hint">⌘K commands · ⌘, settings</span>
+    <div class="sb-zone sb-left" id="sb-left">
+      <span class="status" id="st-agent"><i class="dot"></i><span>Connecting…</span></span>
+      <span class="status" id="st-voice"></span>
+      <span class="status" id="st-runs"></span>
+    </div>
+    <div class="sb-zone sb-center" id="sb-center"></div>
+    <div class="sb-zone sb-right" id="sb-right">
+      <span class="status muted" id="st-hint">⌘K commands · ⌘, settings</span>
+    </div>
   </footer>
 </div>
 

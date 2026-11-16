@@ -35,6 +35,15 @@ export function interfacePane() {
     field("Chat width", segmented(a.width, [["narrow", "Narrow"], ["default", "Default"], ["wide", "Wide"], ["full", "Full"]], (v) => set({ width: v }))),
 
     h("div", { style: "height:12px" }), h("div", { class: "p-section" }, "Layout"),
+    toggle("Tree layout workspace (preview)", "Multi-panel workspace with tab stacks, split panes, and layout tree.", localStorage.getItem("diatonic:layout") === "tree", (v) => {
+      if (v) {
+        localStorage.setItem("diatonic:layout", "tree");
+      } else {
+        localStorage.removeItem("diatonic:layout");
+      }
+      toast(v ? "Tree layout enabled. Reloading..." : "Classic layout enabled. Reloading...");
+      setTimeout(() => location.reload(), 600);
+    }),
     toggle("Sidebar", "Conversation list. Toggle anytime with ⌘B.", a.sidebar === "show", (v) => set({ sidebar: v ? "show" : "hide" })),
     toggle("Quick-action bar", "Your saved prompts and script buttons above the message box.", a.show_quick_actions, (v) => set({ show_quick_actions: v })),
     toggle("Status bar", null, a.show_status_bar, (v) => set({ show_status_bar: v })),
@@ -68,7 +77,7 @@ export function interfacePane() {
 
     h("div", { style: "height:22px" }), h("div", { class: "p-section" }, "Backup and reset"),
     h("div", { class: "row" },
-      h("a", { class: "btn", style: "text-decoration:none", href: "/api/customization/export", download: "diatonic-customization.json" }, "Export appearance + actions"),
+      h("a", { class: "btn", style: "text-decoration:none", href: "/api/customization/export", download: "diatonic-customization.json" }, "Export customizations"),
       h("button", { class: "btn", onclick: () => pickFile() }, "Import…"),
       h("button", { class: "btn danger", onclick: async () => {
         if (!confirm("Reset the interface to defaults? Your actions are kept.")) return;

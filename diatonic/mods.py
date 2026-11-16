@@ -48,6 +48,7 @@ class ModStore:
         self._lock = threading.Lock()
         self.data = {"mods": {}, "changes": []}
         self.on_change = lambda: None   # set by the server: API apps become real apps when their manifest changes
+        self.on_layout_revert = None
         try:
             self.data.update(json.loads(self.path.read_text()))
         except (OSError, ValueError):
@@ -143,13 +144,20 @@ class ModStore:
         self._log({"kind": "theme", "before": before, "after": after, "what": "changed the theme (" + ", ".join(after) + ")"})
         self._save()
 
+    def log_layout(self, before: dict | None, after: dict, what: str = "arranged layout") -> None:
+        self._log({"kind": "layout", "before": before, "after": after, "what": what})
+        self._save()
+
     def revert(self, config) -> str:
-        """Undo the latest change (a mod or a theme change). Returns what was undone."""
+        """Undo the latest change (a mod, theme change or layout arrangement). Returns what was undone."""
         if not self.data["changes"]:
             raise ModError("Nothing to undo.")
         ch = self.data["changes"].pop()
         if ch["kind"] == "theme":
             config.update({"appearance": ch["before"]})
+        elif ch["kind"] == "layout":
+            if getattr(self, "on_layout_revert", None):
+                self.on_layout_revert(ch.get("before"))
         elif ch["before"] is None:
             self.data["mods"].pop(ch["name"], None)
         else:

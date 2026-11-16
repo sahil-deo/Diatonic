@@ -4,14 +4,22 @@ import { emit } from "/js/store.js";
 const BASE = "/api/apps/notes";
 export const wide = true;
 
-let nav = null, open = null;
-export const current = () => (open ? { kind: "note", ref: open, title: open } : null);
+const instances = new WeakMap(); // state-ok: keyed by this panel's ctx
+export const current = (ctx) => {
+  const open = instances.get(ctx)?.getOpen?.();
+  return open ? { kind: "note", ref: open, title: open } : null;
+};
 /** Called by the agent: open a note by title, or show a search. */
-export async function navigate(p) { if (nav) return p.item ? nav.edit(p.item) : nav.list(p.query || ""); }
+export async function navigate(p, ctx) {
+  const nav = instances.get(ctx)?.nav;
+  if (nav) return p.item ? nav.edit(p.item) : nav.list(p.query || "");
+}
 
 export async function render(el, ctx) {
   const { api, h, toast, reload } = ctx;
-  nav = { list, edit };
+  let open = null;
+  const nav = { list, edit };
+  instances.set(ctx, { nav, getOpen: () => open });
   ctx.list({ items: () => [...el.querySelectorAll(".p-item")] });   // ↑/↓ and Enter in the note list
   await list("");
 

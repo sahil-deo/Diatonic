@@ -6,11 +6,15 @@ import { emit, state } from "/js/store.js";
 const BASE = "/api/apps/presentations";
 export const wide = true;
 
-let nav = null, open = null;
-export const current = () => (open ? { kind: "presentation", ref: open, title: open } : null);
+const instances = new WeakMap(); // state-ok: keyed by this panel's ctx
+export const current = (ctx) => {
+  const open = instances.get(ctx)?.getOpen?.();
+  return open ? { kind: "presentation", ref: open, title: open } : null;
+};
 
 /** Called by agent or navigation: open deck by slug/title, or present a file. */
-export async function navigate(p) {
+export async function navigate(p, ctx) {
+  const nav = instances.get(ctx)?.nav;
   if (!nav) return;
   if (p.file || p.path) return nav.presentFile(p.file || p.path);
   if (p.item || p.deck) return nav.edit(p.item || p.deck, p.present);
@@ -19,7 +23,9 @@ export async function navigate(p) {
 
 export async function render(el, ctx) {
   const { api, h, toast } = ctx;
-  nav = { list, edit, present, presentFile };
+  let open = null;
+  const nav = { list, edit, present, presentFile };
+  instances.set(ctx, { nav, getOpen: () => open });
 
   if (state.openPresentation) {
     const slug = state.openPresentation;
@@ -86,7 +92,9 @@ export async function render(el, ctx) {
       q ? "No presentations match your search." : "No presentations yet. Click “+ New deck” or ask the agent to create one."
     ) : null;
 
-    el.append(head, countInfo, h("div", { class: "pres-grid" }, ...cards), empty);
+    const kids = [head, countInfo, h("div", { class: "pres-grid" }, ...cards)];
+    if (empty) kids.push(empty);
+    el.append(...kids);
   }
 
   /* ---------------------------------------------------------------- Editor */

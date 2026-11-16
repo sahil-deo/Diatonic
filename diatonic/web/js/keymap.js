@@ -44,7 +44,8 @@ export function flags() {
   if (km.vim) f.add("vim");
   f.add(state.panelApp ? "panel" : "no-panel");
   if (state.panelApp) f.add(`panel:${state.panelApp}`);
-  for (const x of [...state.apps, ...(state.modApps || [])]) if (x.enabled && x.panel) f.add(`app:${x.id}`);
+  f.add("app:chat");
+  for (const x of [...state.apps, ...(state.modApps || [])]) if (x.enabled !== false) f.add(`app:${x.id}`);
   f.add(document.body.querySelector(".region-focus")?.id === "panel" ? "focus:panel" : "focus:chat");
   if (hasList()) f.add("list");
   return f;

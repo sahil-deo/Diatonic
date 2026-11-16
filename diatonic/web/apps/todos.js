@@ -1,9 +1,10 @@
 const BASE = "/api/apps/todos";
-let showDone = false;
 /** Called by the agent: show the open or the completed list. */
-export async function navigate(p, ctx) { if (p.view) { showDone = p.view === "done"; await ctx.reload(); } }
+export async function navigate(p, ctx) { if (p.view) { ctx.state.set("showDone", p.view === "done"); await ctx.reload(); } }
 
-export async function render(el, { api, h, reload }) {
+export async function render(el, ctx) {
+  const { api, h, reload } = ctx;
+  const showDone = ctx.state.get("showDone", false);      // per panel, not per module: two To-dos panels can show different lists
   const d = await api.get(`${BASE}/panel${showDone ? "?done=1" : ""}`);
   const err = h("div", { class: "form-err" });
 
@@ -38,7 +39,44 @@ export async function render(el, { api, h, reload }) {
   el.append(h("div", { class: "quick-add" }, title, due, h("button", { class: "btn primary sm", onclick: add }, "Add")), err,
     h("div", { class: "p-section" }, `${showDone ? "All" : "Open"} (${d.todos.length})`),
     ...(d.todos.length ? d.todos.map(row) : [h("div", { class: "p-empty" }, "Nothing to do. Nice.")]),
-    h("label", { class: "chk", style: "margin-top:14px" }, h("input", { type: "checkbox", checked: showDone, onchange: (e) => { showDone = e.target.checked; reload(); } }), "Show completed"),
-    h("div", { class: "p-s", style: "margin-top:10px" }, "Double-click a title to edit it."));
+    h("label", { class: "chk", style: "margin-top:14px" }, h("input", { type: "checkbox", checked: showDone, onchange: (e) => { ctx.state.set("showDone", e.target.checked); reload(); } }), "Show completed"),
+    h("div", { class: "p-s", style: "margin-top:10px" }, "Double-click a title to edit it. Drag files or emails here to create to-dos."));
+
+  el.ondragover = (e) => {
+    if (e.dataTransfer.types.includes("text/diatonic-file") || e.dataTransfer.types.includes("text/diatonic-email") || e.dataTransfer.types.includes("text/plain")) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+      el.classList.add("drop-target");
+    }
+  };
+  el.ondragleave = () => el.classList.remove("drop-target");
+  el.ondrop = async (e) => {
+    e.preventDefault();
+    el.classList.remove("drop-target");
+    let todoText = "";
+    try {
+      const fileRaw = e.dataTransfer.getData("text/diatonic-file");
+      const emailRaw = e.dataTransfer.getData("text/diatonic-email");
+      if (fileRaw) {
+        const f = JSON.parse(fileRaw);
+        todoText = `Review file: ${f.name}`;
+      } else if (emailRaw) {
+        const em = JSON.parse(emailRaw);
+        todoText = `Follow up on email: ${em.subject}`;
+      } else {
+        todoText = e.dataTransfer.getData("text/plain");
+      }
+    } catch {
+      todoText = e.dataTransfer.getData("text/plain");
+    }
+    if (todoText && todoText.trim()) {
+      try {
+        await api.post(`${B}/todos`, { title: todoText.trim() });
+        reload();
+      } catch (err) {
+        toast(err.message, "error");
+      }
+    }
+  };
   title.focus();
 }

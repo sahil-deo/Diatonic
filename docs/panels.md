@@ -5,7 +5,7 @@ An app panel is a JS module in `diatonic/web/apps/<id>.js` (or a panel the agent
 ```js
 export async function render(el, ctx) { … }        // required: fill `el`
 export async function navigate(params, ctx) { … }  // optional: move within the open panel (the agent uses it)
-export const current = () => ({kind, ref, title})  // optional: what "this" means for "summarize this"
+export const current = (ctx) => ({kind, ref, title})  // optional: what "this" means for "summarize this" (ctx is this panel's)
 export const wide = true; export const width = 560; export const full = false; export const flush = false;
 ```
 
@@ -19,6 +19,7 @@ export const wide = true; export const width = 560; export const full = false; e
 | `onResize((w, h) => …)` | called when the panel's size changes; returns an unsubscribe |
 | `command({id, title, run, when?})` | add a command (palette, keys); removed when the panel closes |
 | `list({items, open?})` | arrow keys, Home/End and Enter step through the panel's rows |
+| `onClose(fn)` | run `fn` when the panel is replaced or closed: remove document-level listeners, clear timers |
 | `tool("gcal_list_events", args)` | run any app's read-only tool; resolves to its result (tools that change things are refused: only the agent does those, with approval) |
 | `data("app-id")` | the user's own tracker apps: `.get()`, `.add(list, {field: value})`, `.update(id, {field: value})` |
 
@@ -28,19 +29,12 @@ Everything registered through `ctx` is undone when the panel is replaced or clos
 
 Today only one panel is open at a time, so a module can keep its state in `let` variables. The workspace described in `todo.md` (Phase 2) opens several panels at once, two of the same app included, and that only works if each panel keeps its state on `ctx` (or inside `render`), not in the module. New panels should follow this now.
 
-Audit of the built-in panels (2026-11-15): these keep module-level state and need moving before multi-instance panels.
+Audit: all clean (2026-11-16). Every built-in panel keeps its state per instance (on `ctx`, inside `render`, or in a WeakMap keyed by `ctx`). Checked by `node scripts/check_module_state.mjs` (0 lines found).
 
-| Panel | Module-level state |
-|---|---|
-| gcal | `S` (view, cursor, events, accounts, element, token) |
-| gmail | `M` (account, label, threads, selection, open thread, element) |
-| files | `st` (path, file, filters, scroll), `host` |
-| shell | `T` (terminal sessions), `active`, `tab`, `ui`, `autoId`, `typed`, `ro` |
-| notes | `nav`, `open` |
-| presentations | `nav`, `open` |
-| todos | `showDone` |
-| telemetry | `days` |
-| generic data and tool panels (`_data`, `_tools`) | `open` (set of expanded items), `refreshList` |
-| github, scheduler | none found |
+## Chat panels
 
-The terminal is the hard one: its sessions live on the server, so the module state is only the connection to them.
+The first chat panel adopts the main chat (`#main`: streaming, approval cards, tool output, the home tiles). Any further chat panel is self-contained: it keeps its own conversation id in `ctx.state` (`cid`), sends with its own id, shows "Working…" while its run is active and loads the finished reply. It does not stream, show approval cards or tool output; use the main chat for those. It never touches `state.convId`, which belongs to the main chat. Full streaming in every chat needs `js/chat.js` split away from its single message list (still open, see `todo.md`).
+
+## Styling a panel
+
+A panel body is wrapped in `.panel-body`, whose generic form rules (border, background, padding on every `input`/`textarea`, and `input + input { margin-top: 8px }`) reach everything inside it, including the main chat's composer. When a control inside a panel must look different, give your rule a `.panel-body` prefix or a higher specificity, then check the control's size in the browser. An icon next to a label goes in a span that holds only the icon: the app styles that span so the icon is centred on the text.

@@ -4,19 +4,23 @@
 export const DEFAULT_LEADER = "Mod+;";
 
 // Letters after "<leader> a" that open an app.
-const APP_KEYS = { f: "files", m: "gmail", c: "gcal", n: "notes", t: "todos", g: "github", s: "shell", p: "presentations", j: "scheduler", y: "telemetry" };
+const APP_KEYS = { a: "chat", f: "files", m: "gmail", c: "gcal", n: "notes", t: "todos", g: "github", s: "shell", p: "presentations", j: "scheduler", y: "telemetry", h: "tiles" };
 
 export const DEFAULTS = [
   { key: "Mod+k", command: "palette.open" },
+  { key: "Mod+j", command: "chat.ask" },
   { key: "Mod+,", command: "settings.open" },
   { key: "Mod+b", command: "sidebar.toggle" },
   { key: "Mod+Shift+o", command: "chat.new" },
+  { key: "Mod+Shift+t", command: "tab.reopen" },
+  { key: "Mod+\\", command: "scratchpad.toggle" },
   { key: "/", command: "composer.focus", when: "idle" },
   { key: "Escape", command: "focus.release", when: "composer && !dialog" },
 
   // Leader: ⌘; then a key. The which-key popup lists what can follow.
   { key: "<leader> <leader>", command: "palette.open" },
   { key: "<leader> n", command: "chat.new" },
+  { key: "<leader> p", command: "scratchpad.toggle" },
   { key: "<leader> s", command: "settings.open" },
   { key: "<leader> k", command: "settings.open", args: { tab: "keyboard" } },
   { key: "<leader> b", command: "sidebar.toggle" },
@@ -25,8 +29,15 @@ export const DEFAULTS = [
   { key: "<leader> x", command: "panel.close", when: "panel" },
   { key: "<leader> z", command: "panel.toggleFull", when: "panel" },
   { key: "<leader> r", command: "panel.refresh", when: "panel" },
+  { key: "<leader> u", command: "layout.undo" },
+  { key: "<leader> U", command: "layout.redo" },
   { key: "<leader> h", command: "focus.left" },
   { key: "<leader> l", command: "focus.right" },
+  { key: "<leader> w s", command: "panel.split.down" },
+  { key: "<leader> w v", command: "panel.split.right" },
+  { key: "<leader> w t", command: "tab.reopen" },
+  { key: "<leader> [", command: "tab.prev" },
+  { key: "<leader> ]", command: "tab.next" },
   ...Object.entries(APP_KEYS).map(([k, id]) => ({ key: `<leader> a ${k}`, command: "app.open", args: { id }, when: `app:${id}` })),
 
   // Moving around without a mouse, when you are not typing.

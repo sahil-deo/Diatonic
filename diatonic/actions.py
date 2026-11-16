@@ -124,16 +124,25 @@ def clean_appearance(patch) -> dict:
             if not isinstance(v, list) or not all(isinstance(x, str) and len(x) < 40 for x in v) or len(v) > 50:
                 raise ValueError(f"{k} must be a list of app ids.")
             out[k] = v
+        elif k == "statusbar_pins":
+            if not isinstance(v, list) or len(v) > 50:
+                raise ValueError("statusbar_pins must be a list of pin objects.")
+            out[k] = v
         else:
             raise ValueError(f"Unknown appearance setting '{k}'.")
     return out
 
 
-def export_bundle(config) -> dict:
-    return {"diatonic": 1, "appearance": config.data["appearance"], "actions": config.data["actions"]}
+def export_bundle(config, mods=None, fileapps=None) -> dict:
+    data = {"diatonic": 1, "appearance": config.data["appearance"], "actions": config.data["actions"]}
+    if mods:
+        data["mods"] = mods.list()
+    if fileapps:
+        data["apps"] = [fileapps.export_app(a["id"]) for a in fileapps.list_apps() if not a.get("error")]
+    return data
 
 
-def import_bundle(config, bundle) -> dict:
+def import_bundle(config, bundle, mods=None, fileapps=None) -> dict:
     """Validate everything first, then apply, so a bad file changes nothing."""
     if not isinstance(bundle, dict) or bundle.get("diatonic") != 1:
         raise ValueError("That doesn't look like a Diatonic customization file.")
@@ -142,7 +151,33 @@ def import_bundle(config, bundle) -> dict:
     config.data["appearance"] = appearance
     config.data["actions"] = actions
     config.save()
-    return {"appearance": appearance, "actions": actions}
+
+    imported_mods = []
+    if mods and isinstance(bundle.get("mods"), list):
+        for m in bundle["mods"]:
+            if isinstance(m, dict) and m.get("name") and m.get("kind"):
+                try:
+                    mods.put(m["kind"], m["name"], m.get("code", ""), title=m.get("title", ""), enabled=m.get("enabled", True))
+                    imported_mods.append(m["name"])
+                except Exception:
+                    pass
+
+    imported_apps = []
+    if fileapps and isinstance(bundle.get("apps"), list):
+        for app_bundle in bundle["apps"]:
+            if isinstance(app_bundle, dict) and app_bundle.get("diatonic_app") == 1:
+                try:
+                    fileapps.import_app(app_bundle, overwrite=True)
+                    imported_apps.append(app_bundle.get("id"))
+                except Exception:
+                    pass
+
+    res = {"appearance": appearance, "actions": actions}
+    if imported_mods:
+        res["mods"] = imported_mods
+    if imported_apps:
+        res["apps"] = imported_apps
+    return res
 
 
 class ActionRunner:

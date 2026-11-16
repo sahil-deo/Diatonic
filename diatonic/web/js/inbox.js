@@ -70,7 +70,10 @@ export function initInbox({ onOpenChat }) {
     const p = pop(); p.classList.toggle("hidden");
     if (!p.classList.contains("hidden")) { renderList(); loadInbox(); }
   });
-  document.addEventListener("click", (e) => { if (!pop().contains(e.target) && !$("#bell").contains(e.target)) pop().classList.add("hidden"); });
+  document.addEventListener("click", (e) => {
+    const p = pop(), b = $("#bell");
+    if (p && b && !p.contains(e.target) && !b.contains(e.target)) p.classList.add("hidden");
+  });
   addEventListener("keydown", (e) => { if (e.key === "Escape") pop().classList.add("hidden"); });
   return { onNotification };
 }

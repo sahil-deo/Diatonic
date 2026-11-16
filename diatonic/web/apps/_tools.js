@@ -7,11 +7,10 @@ import { icon } from "/js/icons.js";
 const enc = encodeURIComponent;
 const nice = (s) => s.replace(/[_.-]+/g, " ").replace(/^\w/, (c) => c.toUpperCase());
 const LABEL = (x) => x.title || x.summary || x.subject || x.name || x.ref || "";
-let refreshList = null;
 
 export async function render(el, ctx) {
   const { api, h } = ctx;
-  const id = state.panelApp;
+  const id = ctx.app || state.panelApp || ctx.id;
   const info = await api.get(`/api/tapps/${enc(id)}`);
   const acts = Object.entries(info.actions);
   const broken = acts.filter(([, a]) => a.error);
@@ -20,6 +19,7 @@ export async function render(el, ctx) {
   const perItem = ok.filter(([, a]) => a.ref);
   const forms = ok.filter(([n, a]) => !a.ref && !lists.some(([m]) => m === n));
   const box = h("div", { class: "tapp-list" });
+  const refreshList = () => (lists.length ? listInto(ctx, id, lists[0][0], box, perItem, refreshList) : null);
   // With a list to look at, forms (Schedule...) open from a button; without one they're the app, so they stay open.
   const formCards = forms.map(([n, a]) => {
     const card = formCard(ctx, id, n, a, {}, () => { refreshList?.(); if (lists.length) card.hidden = true; });
@@ -40,11 +40,10 @@ export async function render(el, ctx) {
         h("button", { class: "icon-btn sm", title: "Refresh", "aria-label": "Refresh", onclick: () => refreshList?.(), html: icon("refresh", 13) })),
       box) : null));
 
-  refreshList = lists.length ? () => listInto(ctx, id, lists[0][0], box, perItem) : null;
   refreshList?.();
 }
 
-async function listInto(ctx, id, action, box, perItem) {
+async function listInto(ctx, id, action, box, perItem, onDone) {
   const { api, h } = ctx;
   if (!box.childElementCount) box.replaceChildren(h("div", { class: "skeleton" }), h("div", { class: "skeleton" }));
   let r;
@@ -56,10 +55,10 @@ async function listInto(ctx, id, action, box, perItem) {
     rows = rows.filter((x) => !x.repeats || !seen.has(LABEL(x)) && seen.add(LABEL(x)));
   }
   if (!rows) return box.replaceChildren(h("div", { class: "p-empty" }, typeof r === "string" ? r : Object.values(r || {}).find((v) => typeof v === "string") || "Nothing here."));
-  box.replaceChildren(...rows.map((x) => row(ctx, id, x, perItem)));
+  box.replaceChildren(...rows.map((x) => row(ctx, id, x, perItem, onDone)));
 }
 
-function row(ctx, id, x, perItem) {
+function row(ctx, id, x, perItem, onDone) {
   const { h } = ctx;
   const extra = h("div", { class: "tapp-extra" });
   const when = [x.start && fmt(x.start), x.end && fmt(x.end, x.start)].filter(Boolean).join(" – ");
@@ -72,20 +71,20 @@ function row(ctx, id, x, perItem) {
     h("div", { class: "tapp-btns" },
       x.meet && h("a", { class: "btn sm primary", href: x.meet, target: "_blank", rel: "noopener" }, "Join"),
       x.url && !x.meet && h("a", { class: "btn sm", href: x.url, target: "_blank", rel: "noopener" }, "Open"),
-      ...perItem.map(([n, a]) => h("button", { class: `btn sm ${a.risk === "destructive" ? "danger" : ""}`, onclick: () => itemAction(ctx, id, n, a, x, extra) }, a.title))),
+      ...perItem.map(([n, a]) => h("button", { class: `btn sm ${a.risk === "destructive" ? "danger" : ""}`, onclick: () => itemAction(ctx, id, n, a, x, extra, onDone) }, a.title))),
     extra);
 }
 
-function itemAction(ctx, id, name, a, item, extra) {
+function itemAction(ctx, id, name, a, item, extra, onDone) {
   const rest = Object.keys(a.schema.properties).filter((p) => p !== a.ref);
   const args = { [a.ref]: item.ref };
   if (!rest.length || a.risk === "destructive" && !a.schema.required.some((p) => p !== a.ref)) {
     if (a.risk === "destructive" && !confirm(`${a.title}: “${LABEL(item)}”? This can't be undone.`)) return;
-    return run(ctx, id, name, a, args, () => refreshList?.());
+    return run(ctx, id, name, a, args, () => onDone?.());
   }
   if (extra.firstChild?.dataset?.action === name) return extra.replaceChildren();   // the same button again closes it
   const prefill = { summary: item.title, start: item.start, end: item.end, location: item.where, attendees: item.guests?.join(", ") };
-  extra.replaceChildren(formCard(ctx, id, name, a, { fixed: args, prefill, only: rest }, () => { extra.replaceChildren(); refreshList?.(); }));
+  extra.replaceChildren(formCard(ctx, id, name, a, { fixed: args, prefill, only: rest }, () => { extra.replaceChildren(); onDone?.(); }));
 }
 
 function formCard(ctx, id, name, a, { fixed = {}, prefill = {}, only = null } = {}, after) {

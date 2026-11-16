@@ -1,5 +1,6 @@
 """The agent can move the screen: open apps and items, change the layout. Only the asking window is moved."""
 import asyncio
+import pytest
 
 from conftest import ScriptedProvider
 
@@ -75,8 +76,8 @@ def test_open_app_moves_only_the_window_that_asked(env, monkeypatch):
     a, b = run_chat(env, monkeypatch, [[call("ui_open_app", app="calendar", view="month", date="2026-11-16")], [{"content": "Done."}]])
     assert [e for e in a if e["type"] == "ui"] == []                    # the other tab is untouched
     (ev,) = [e for e in b if e["type"] == "ui"]
-    assert ev["action"] == "open" and ev["app"] == "gcal" and ev["target"] == "tab-B"
-    assert ev["params"] == {"view": "month", "date": "2026-11-16"}
+    assert ev["command"] == "app.open" and ev["args"]["id"] == "gcal" and ev["target"] == "tab-B"
+    assert ev["args"]["params"] == {"view": "month", "date": "2026-11-16"}
     card = [e for e in b if e["type"] == "tool_call"][0]
     assert card["needs_approval"] is False                              # navigation never asks
 
@@ -84,10 +85,10 @@ def test_open_app_moves_only_the_window_that_asked(env, monkeypatch):
 def test_open_item_and_loose_app_names(env, monkeypatch):
     _, b = run_chat(env, monkeypatch, [[call("ui_open_item", app="my email", what="latest")], [{"content": "Opened."}]])
     (ev,) = [e for e in b if e["type"] == "ui"]
-    assert ev["app"] == "gmail" and ev["params"] == {"item": "me@x.com|t9|m9"}      # the tool found the newest mail itself
+    assert ev["args"]["id"] == "gmail" and ev["args"]["params"] == {"item": "me@x.com|t9|m9"}      # the tool found the newest mail itself
     _, b = run_chat(env, monkeypatch, [[call("ui_open_item", app="notes", what="the diatonic apps note")], [{"content": "Opened."}]])
     (ev,) = [e for e in b if e["type"] == "ui"]
-    assert ev["params"] == {"item": "Diatonic Apps"}
+    assert ev["args"]["params"] == {"item": "Diatonic Apps"}
     _, b = run_chat(env, monkeypatch, [[call("ui_open_item", app="notes", what="grocery")], [{"content": "None."}]])
     res = [e for e in b if e["type"] == "tool_result"][0]
     assert not [e for e in b if e["type"] == "ui"] and not res["ok"] and "No note matches" in res["preview"]
@@ -95,8 +96,14 @@ def test_open_item_and_loose_app_names(env, monkeypatch):
 
 def test_layout(env, monkeypatch):
     _, b = run_chat(env, monkeypatch, [[call("ui_set_layout", mode="focus", sidebar="hide")], [{"content": "ok"}]])
+    evs = [e for e in b if e["type"] == "ui"]
+    assert [(e["command"], e.get("args")) for e in evs] == [("layout.preset.single", None), ("sidebar.set", {"mode": "hide"})]
+
+
+def test_split_layout_opens_a_launcher_instead_of_asking_the_user_to_pick(env, monkeypatch):
+    _, b = run_chat(env, monkeypatch, [[call("ui_set_layout", mode="split")], [{"content": "ok"}]])
     (ev,) = [e for e in b if e["type"] == "ui"]
-    assert ev["action"] == "layout" and ev["mode"] == "focus" and ev["sidebar"] == "hide"
+    assert ev["command"] == "panel.split.right" and ev["args"] == {"app": "launcher"}
 
 
 def test_background_runs_cannot_move_a_screen(env, monkeypatch):
@@ -217,3 +224,183 @@ def test_buttons_and_rail_icons(env, tmp_path):
     import json as _json
     b = ctx.mods.get("btn-files")
     assert b["kind"] == "button" and _json.loads(b["code"]) == {"label": "Files", "app": "gmail"}
+
+
+def test_agent_can_pin_and_unpin_apps(env):
+    ctx, reg, db, runs = setup(env)
+    ui = reg.apps["ui"]
+
+    async def go():
+        from diatonic.agent.session import RUN_CLIENT
+        RUN_CLIENT.set("tab-A")
+
+        res1 = await ui.pin_app({"app": "notes"})
+        assert "pinned Notes to the status bar" in res1
+        pins = ctx.config.data["appearance"]["statusbar_pins"]
+        assert any(p.get("appId") == "notes" for p in pins)
+
+        res2 = await ui.unpin_app({"app": "notes"})
+        assert "unpinned Notes from the status bar" in res2
+        pins = ctx.config.data["appearance"]["statusbar_pins"]
+        assert not any(p.get("appId") == "notes" for p in pins)
+
+    asyncio.run(go())
+
+
+def test_agent_can_save_list_run_and_delete_macros(env):
+    ctx, reg, db, runs = setup(env)
+    ui = reg.apps["ui"]
+    events = []
+    ctx.broadcast = lambda ev: events.append(ev)
+
+    async def go():
+        from diatonic.agent.session import RUN_CLIENT, mark_untrusted
+        from diatonic import macros
+        RUN_CLIENT.set("tab-A")
+
+        # 1. Save macro
+        r1 = await ui.save_macro({
+            "name": "Dev",
+            "description": "Code and chat",
+            "steps": [
+                {"command": "layout.preset.side-by-side"},
+                {"command": "app.open", "args": {"id": "chat"}},
+                {"wait": 50},
+                {"command": "app.open", "args": {"id": "files"}}
+            ]
+        })
+        assert "saved macro 'Dev'" in r1
+        assert len(macros.load()) == 1
+        assert macros.load()[0]["name"] == "Dev"
+
+        # 2. List macros
+        r2 = await ui.list_macros({})
+        assert len(r2["macros"]) == 1
+        assert r2["macros"][0]["name"] == "Dev"
+
+        # 3. Run macro
+        r3 = await ui.run_macro({"name": "Dev"})
+        assert "running macro 'Dev'" in r3
+        assert any(e.get("type") == "run_macro" and e.get("macro_id") == "macro_dev" for e in events)
+
+        # 4. Untrusted check
+        from diatonic.agent import session
+        session.UNTRUSTED.set({})
+        mark_untrusted("gmail")
+        with pytest.raises(Exception) as exc:
+            await ui.save_macro({"name": "Attack", "steps": [{"command": "panel.close"}]})
+        assert "read email" in str(exc.value)
+
+        # 5. Delete macro (after clearing untrusted session)
+        session.UNTRUSTED.set(None)
+        r4 = await ui.delete_macro({"name": "Dev"})
+        assert "deleted macro 'Dev'" in r4
+        assert len(macros.load()) == 0
+
+    asyncio.run(go())
+
+
+def test_agent_can_save_list_switch_and_delete_workspaces(env):
+    ctx, reg, db, runs = setup(env)
+    ui = reg.apps["ui"]
+    events = []
+    ctx.broadcast = lambda ev: events.append(ev)
+
+    async def go():
+        from diatonic.agent.session import RUN_CLIENT, mark_untrusted
+        from diatonic import workspaces
+        RUN_CLIENT.set("tab-A")
+
+        # 1. Save workspace
+        r1 = await ui.save_workspace({
+            "name": "Dev",
+            "description": "Coding setup",
+            "apps": ["chat", "gmail"]
+        })
+        assert "saved workspace 'Dev'" in r1
+        assert len(workspaces.load()) == 1
+        assert workspaces.load()[0]["name"] == "Dev"
+
+        # 2. List workspaces
+        r2 = await ui.list_workspaces({})
+        assert len(r2["workspaces"]) == 1
+        assert r2["workspaces"][0]["name"] == "Dev"
+
+        # 3. Switch workspace
+        r3 = await ui.switch_workspace({"name": "Dev"})
+        assert "switched to workspace 'Dev'" in r3
+        assert any(e.get("type") == "switch_workspace" and e.get("workspace_id") == "dev" for e in events)
+
+        # 4. Untrusted check
+        from diatonic.agent import session
+        session.UNTRUSTED.set({})
+        mark_untrusted("gmail")
+        with pytest.raises(Exception) as exc:
+            await ui.save_workspace({"name": "Attack"})
+        assert "read email" in str(exc.value)
+
+        # 5. Delete workspace
+        session.UNTRUSTED.set(None)
+        r4 = await ui.delete_workspace({"name": "Dev"})
+        assert "deleted workspace 'Dev'" in r4
+        assert len(workspaces.load()) == 0
+
+    asyncio.run(go())
+
+
+def test_agent_can_arrange_panels_and_undo(env):
+    ctx, reg, db, runs = setup(env)
+    ui = reg.apps["ui"]
+    events = []
+    ctx.broadcast = lambda ev: events.append(ev)
+
+    async def go():
+        from diatonic.agent.session import RUN_CLIENT
+        RUN_CLIENT.set("tab-A")
+
+        initial_changes = len(ctx.mods.data["changes"])
+
+        # 1. Arrange panels: mail left, calendar right
+        res = await ui.arrange_panels({"left": "gmail", "right": "gcal"})
+        assert "arranged layout" in res
+        assert any(e.get("type") == "switch_workspace" and e.get("tree", {}).get("root", {}).get("type") == "split" for e in events)
+        assert any(e.get("type") == "mods_changed" for e in events)
+        assert len(ctx.mods.data["changes"]) == initial_changes + 1
+        assert ctx.mods.data["changes"][-1]["kind"] == "layout"
+
+        # 2. Undo via mods revert
+        revert_res = await ui.revert({})
+        assert "undid: arranged layout" in revert_res
+        assert len(ctx.mods.data["changes"]) == initial_changes
+
+        # 3. Direct undo_layout tool
+        undo_res = await ui.undo_layout({})
+        assert "reverted layout change" in undo_res
+        assert any(e.get("type") == "undo_layout" for e in events)
+
+    asyncio.run(go())
+
+
+def test_agent_can_open_and_arrange_tiles_panel(env):
+    ctx, reg, db, runs = setup(env)
+    ui = reg.apps["ui"]
+    events = []
+    ctx.broadcast = lambda ev: events.append(ev)
+
+    async def go():
+        from diatonic.agent.session import RUN_CLIENT
+        RUN_CLIENT.set("tab-A")
+
+        # 1. Resolve tiles / home
+        resolved = ui._resolve("home")
+        assert resolved.id == "tiles"
+        assert resolved.name == "Home"
+
+        # 2. Arrange panels with tiles and chat
+        res = await ui.arrange_panels({"left": "chat", "right": "tiles"})
+        assert "arranged layout" in res
+        assert any(e.get("type") == "switch_workspace" for e in events)
+
+    asyncio.run(go())
+
+

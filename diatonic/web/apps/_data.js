@@ -4,15 +4,17 @@ import { icon } from "/js/icons.js";
 import { state } from "/js/store.js";
 
 export const wide = true;
-const open = new Set();          // items whose details are expanded (kept across re-renders)
+const instances = new WeakMap(); // state-ok: keyed by this panel's ctx
 const enc = encodeURIComponent;
 const nice = (s) => s.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
 
 export async function render(el, ctx) {
-  const id = state.panelApp;
+  const id = ctx.app || state.panelApp || ctx.id;
   const d = await ctx.api.get(`/api/dapps/${enc(id)}`);
   const m = d.manifest, lists = m.lists;
-  const P = { el, ctx, id, m, items: d.items };
+  let open = instances.get(ctx);
+  if (!open) { open = new Set(); instances.set(ctx, open); }
+  const P = { el, ctx, id, m, items: d.items, open };
   const top = Object.keys(lists).filter((n) => !lists[n].parent);
   const scroll = el.scrollTop;
   el.replaceChildren(ctx.h("div", { class: "dapp" },
@@ -54,13 +56,13 @@ function card(P, r) {
   const prog = kids.map((k) => { const ck = checkField(P.m.lists[k]), rs = rowsOf(P, k, r.id); return ck && rs.length ? progress(h, rs.filter((x) => x.data[ck.name]).length, rs.length) : null; }).find(Boolean);
   return h("article", { class: "dcard" },
     head(P, r, l, prog),
-    open.has(r.id) && details(P, r, l),
+    P.open.has(r.id) && details(P, r, l),
     ...kids.map((k) => section(P, k, r.id, false)));
 }
 
 function row(P, r) {
   const l = P.m.lists[r.list], kids = kidsOf(P, r.list);
-  return P.ctx.h("div", { class: `drow ${open.has(r.id) ? "open" : ""}` }, head(P, r, l, null), open.has(r.id) && details(P, r, l),
+  return P.ctx.h("div", { class: `drow ${P.open.has(r.id) ? "open" : ""}` }, head(P, r, l, null), P.open.has(r.id) && details(P, r, l),
     ...kids.map((k) => section(P, k, r.id, false)));
 }
 
@@ -72,7 +74,7 @@ function head(P, r, l, prog) {
   const hasNotes = l.fields.some((f) => f.type === "notes" && r.data[f.name]);
   return h("div", { class: "dhead" },
     ck && h("input", { type: "checkbox", checked: !!r.data[ck.name], "aria-label": `Mark ${r.data[name]} done`, onchange: (e) => patch({ [ck.name]: e.target.checked }) }),
-    h("button", { type: "button", class: `dname ${ck && r.data[ck.name] ? "done" : ""}`, title: "Details", onclick: () => { open.has(r.id) ? open.delete(r.id) : open.add(r.id); render(P.el, P.ctx); } },
+    h("button", { type: "button", class: `dname ${ck && r.data[ck.name] ? "done" : ""}`, title: "Details", onclick: () => { P.open.has(r.id) ? P.open.delete(r.id) : P.open.add(r.id); render(P.el, P.ctx); } },
       r.data[name] || "(untitled)", hasNotes ? h("span", { class: "dnote", html: icon("file-text", 12), title: "Has notes" }) : null),
     ...chips, prog, h("div", { class: "grow" }),
     h("button", { type: "button", class: "icon-btn sm ddel", "aria-label": "Delete", title: "Delete", html: icon("trash", 14), onclick: () => {

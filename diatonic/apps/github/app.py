@@ -91,7 +91,7 @@ class GitHubApp(App):
         try:
             me = await self._req("GET", "/user")
             return {"connected": True, "detail": f"Signed in as {me['login']}"}
-        except ToolError as e:
+        except (ToolError, Exception) as e:
             return {"connected": False, "detail": str(e)}
 
     async def snapshot(self, n: int) -> dict:

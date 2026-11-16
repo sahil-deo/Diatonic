@@ -18,7 +18,9 @@ import { requestEdit } from "./settings-actions.js";
 import { initDock, dockVisible, focusDock, setDockInput } from "./dock.js";
 import { initMods } from "./mods.js";
 import { verify } from "./verify.js";
+import { initStatusBar } from "./statusbar.js";
 import { loadModels } from "./settings-models.js";
+import { initMacros } from "./macros.js";
 
 /* ---------- theme ---------- */
 const mq = matchMedia("(prefers-color-scheme: light)");
@@ -29,13 +31,18 @@ function applyTheme() {
 mq.addEventListener("change", applyTheme);
 
 /* ---------- rail ---------- */
+let workspace = null;
+
 function renderRail() {
   setIcon($("#rail-chat"), "chat", 20); setIcon($("#rail-settings"), "sliders", 20);
-  $("#rail-chat").classList.toggle("active", !state.panelApp);
+  const isChatActive = state.panelApp === "chat";
+  $("#rail-chat").classList.toggle("active", isChatActive);
   const box = $("#rail-apps");
   box.replaceChildren(...railApps(state.apps).map((a) => {
     const b = h("button", { class: `rail-btn ${state.panelApp === a.id ? "active" : ""}`, title: a.name, "aria-label": a.name, "data-app": a.id,
-      onclick: () => (state.panelApp === a.id ? closePanel() : a.panel ? openPanel(a.id) : openSettings("apps")), html: icon(a.icon, 20) });
+      onclick: () => {
+        a.panel ? openPanel(a.id) : openSettings("apps");
+      }, html: icon(a.icon, 20) });
     if (a.status && !a.status.connected) b.append(h("i", { class: "badge", title: a.status.detail }));
     return b;
   }));
@@ -194,18 +201,32 @@ async function boot() {
   initVoiceUI({ setInput, send: (t) => chat.send(t), openSettings });
   initActions({ newChat: () => chat.newChat(), openSettings, setTheme, setSpeak, openPanel, closePanel, toggleSidebar,
     editAction: (id) => { requestEdit(id); openSettings("actions"); } });
-  registerCore({ toggleSidebar, setTheme, setSpeak, openModelMenu, focusComposer: () => (dockVisible() ? focusDock() : input.focus()) });
+  registerCore({ toggleSidebar, setSidebar, setTheme, setSpeak, openModelMenu, focusComposer: () => (dockVisible() ? focusDock() : input.focus()) });
   initKeymap();
+  initMacros();
   $("#new-chat").onclick = () => chat.newChat();
-  $("#rail-chat").onclick = () => { closePanel(); input.focus(); };
+  $("#rail-chat").onclick = () => {
+    openPanel("chat");
+    setTimeout(() => input.focus(), 50);
+  };
   $("#rail-settings").onclick = () => openSettings();
   $("#palette-btn").onclick = () => openPalette();
   $("#toggle-sidebar").onclick = toggleSidebar;
   $("#speak-toggle").onclick = () => setSpeak(!state.config.voice.speak_summary);
 
   const inbox = initInbox({ onOpenChat: (id) => chat.openConversation(id) });
+  window.addEventListener("error", (e) => {
+    const fn = e.filename || "";
+    const m = fn.match(/\/custom-apps\/([a-z0-9-]+)\//);
+    if (m) {
+      api.post(`/api/custom-apps/${m[1]}/logs`, {
+        error: `${e.message} (${fn}:${e.lineno}:${e.colno})`,
+        source: "window_error",
+      }).catch(() => {});
+    }
+  });
   on("notification", inbox.onNotification);
-  on("app_changed", (ev) => { if (state.panelApp === ev.app && !$("#panel-body").dataset.dirty) refreshPanel(); });
+  on("app_changed", (ev) => { if (state.panelApp === ev.app && !$("#panel-body")?.dataset?.dirty) refreshPanel(); });
   on("runs-changed", paintRuns);
   on("conversations-changed", loadConvs);
   on("apps", () => { renderRail(); if (!document.querySelector("#messages .msg")) chat.renderEmpty?.(); });   // never wipe a chat in view
@@ -221,21 +242,26 @@ async function boot() {
   on("screen", paintScreenChip); on("panel", () => setTimeout(paintScreenChip));
   on("ui", async (ev) => {   // the agent moving the screen (only the window whose run asked receives these)
     try {
-      if (ev.action === "open" && ev.reload && state.panelApp === ev.app) refreshPanel();
-      else if (ev.action === "open") await openPanel(ev.app, Object.keys(ev.params || {}).length ? ev.params : null);
-      else if (ev.action === "close") closePanel();
-      else if (ev.action === "verify") await verify(ev);
-      else if (ev.action === "layout") {
-        if (ev.mode === "chat") closePanel(); else if (ev.mode) setFull(ev.mode === "focus");
-        if (ev.sidebar) setSidebar(ev.sidebar);
+      if (ev.command) {
+        const { run } = await import("./commands.js");
+        await run(ev.command, ev.args || {});
+      } else if (ev.action === "verify") {
+        await verify(ev);
       }
     } catch (e) { toast(`Couldn't show that: ${e.message}`, "error"); }
   });
 
   const reportFocus = () => { if (document.visibilityState === "visible" && document.hasFocus()) api.focus(); };
   addEventListener("focus", reportFocus); document.addEventListener("visibilitychange", reportFocus); setTimeout(reportFocus, 1500);
-  initMods(); renderRail(); chat.renderEmpty(); updateHint(); loadConvs(); refreshHealth(); loadInbox(); chat.startEventStream();
+  initMods(); initStatusBar(); renderRail(); chat.renderEmpty(); updateHint(); loadConvs(); refreshHealth(); loadInbox(); chat.startEventStream();
   setInterval(refreshHealth, 20000);
+
+  const { initWorkspace } = await import("./workspace.js");
+  $("#main")?.classList.add("hidden");
+  $("#panel")?.classList.add("hidden");
+  $("#workspace-host")?.classList.remove("hidden");
+  $("#shell")?.classList.add("shell-tree");
+  workspace = initWorkspace($("#workspace-host"));
 
   const q = new URLSearchParams(location.search);
   if (q.get("settings")) { history.replaceState({}, "", "/"); openSettings(q.get("settings")); if (q.get("connected")) toast(`Connected ${q.get("connected")}`); if (q.get("error")) toast(`Google sign-in: ${q.get("error")}`, "error"); }

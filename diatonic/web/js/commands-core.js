@@ -8,26 +8,36 @@ import { openPanel, closePanel, refreshPanel, toggleFull } from "./panel.js";
 import { openSettings } from "./settings.js";
 import { openPalette } from "./palette.js";
 import { invoke as invokeAction } from "./actions.js";
+import { getMacros, runMacro, startRecording, isRecording, saveCurrentLayoutAsMacro } from "./macros.js";
+import { applyTree, getWorkspaces, switchWorkspace, saveCurrentWorkspace, deleteWorkspace, undoLayout, redoLayout } from "./workspace.js";
 import { hintFor, keymap, userKeymap, saveKeymap } from "./keymap.js";
 import { registerNav, setRegion, markKeyboard } from "./nav.js";
+import { getOpenTabs, focusTab, applyPreset } from "./workspace.js";
 
-const panelApps = () => [...state.apps, ...(state.modApps || [])].filter((a) => a.enabled && a.panel);
+const panelApps = () => [
+  { id: "tiles", name: "Home", icon: "layout", enabled: true, panel: true },
+  ...[...state.apps, ...(state.modApps || [])].filter((a) => a.enabled && a.panel)
+];
 const SETTINGS = [["voice", "Voice settings", "mic"], ["memory", "Memory: what the agent remembers", "brain"], ["interface", "Customize the interface", "sliders"],
   ["actions", "Edit saved prompts and buttons", "command"], ["keyboard", "Keyboard shortcuts", "command"]];
 
-/** h: functions that live in main.js ({toggleSidebar, setTheme, setSpeak, openModelMenu, focusComposer}). */
+/** h: functions that live in main.js ({toggleSidebar, setSidebar, setTheme, setSpeak, openModelMenu, focusComposer}). */
 export function registerCore(h) {
   registerNav();
   const panelOpen = () => !!state.panelApp;
   const light = () => document.documentElement.dataset.theme === "light";
   [
     { id: "palette.open", title: "Command palette", hidden: true, run: () => openPalette() },
+    { id: "chat.ask", title: "Ask the agent", group: "Actions", icon: "chat", run: () => openPalette({ mode: "agent" }) },
     { id: "chat.new", title: "New chat", group: "Actions", icon: "plus", run: () => chat.newChat() },
     { id: "chat.stop", title: "Stop the current chat", group: "Actions", icon: "stop", when: () => chat.busy(), run: () => chat.stop() },
+    { id: "scratchpad.toggle", title: "Toggle Scratchpad drawer", group: "Actions", icon: "edit", run: () => { import("./scratchpad.js").then((m) => m.toggleScratchpad()); } },
     { id: "speak.toggle", group: "Actions", icon: "volume", title: () => (state.config.voice.speak_summary ? "Turn off spoken summaries" : "Turn on spoken summaries"),
       run: () => h.setSpeak(!state.config.voice.speak_summary) },
     { id: "settings.open", title: "Settings", group: "Actions", icon: "sliders", run: (a) => openSettings(a.tab || undefined),
       titleFor: (a) => (a.tab ? `Settings: ${a.tab}` : "Settings") },
+    { id: "customization.export", title: "Export customizations", group: "Settings", icon: "download", run: () => { window.location.href = "/api/customization/export"; } },
+    { id: "sidebar.set", title: "Show or hide the sidebar", group: "Actions", hidden: true, run: (a) => h.setSidebar(a.mode) },
     { id: "sidebar.toggle", title: "Toggle sidebar", group: "Actions", icon: "menu", run: () => h.toggleSidebar() },
     { id: "theme.dark", title: "Theme: dark", group: "Actions", icon: "chevron", run: () => h.setTheme("dark") },
     { id: "theme.light", title: "Theme: light", group: "Actions", icon: "chevron", run: () => h.setTheme("light") },
@@ -35,22 +45,141 @@ export function registerCore(h) {
     { id: "model.menu", title: "Switch model", group: "Actions", icon: "brain", run: () => h.openModelMenu() },
     { id: "composer.focus", title: "Write a message", group: "Navigate", hidden: true, run: () => { setRegion("chat"); h.focusComposer(); } },
     { id: "app.open", title: "Open an app", group: "Apps", hidden: true, run: (a) => {
-      const app = panelApps().find((x) => x.id === a.id);
+      const all = [{ id: "chat", name: "Chat", icon: "chat", enabled: true, panel: true }, ...panelApps()];
+      const app = all.find((x) => x.id === a.id);
       if (!app) return false;
-      if (state.panelApp === app.id) { setRegion("panel"); markKeyboard(); return; }
-      return openPanel(app.id).then(() => setRegion("panel"));
+      return openPanel(app.id, a.params || {}).then(() => {
+        if (a.focus === false) return;   // the agent opened it: leave the keyboard where it is
+        setRegion("panel");
+        markKeyboard();
+      });
     }, titleFor: (a) => `Open ${panelApps().find((x) => x.id === a.id)?.name || a.id}` },
     { id: "panel.close", title: "Close app panel", group: "Apps", icon: "x", when: panelOpen, run: () => closePanel() },
+    { id: "panel.detach", title: "Detach panel to own window", group: "Apps", icon: "popout", when: panelOpen, run: async () => {
+      const ws = await import("./workspace.js");
+      const currentTab = ws.getActiveTabId?.();
+      if (currentTab) {
+        const tabs = ws.getOpenTabs?.() || [];
+        const found = tabs.find((t) => t.tabId === currentTab);
+        if (found) {
+          window.open(`/?app=${encodeURIComponent(found.appId)}`, "_blank", "width=850,height=650");
+          ws.closePanel(currentTab);
+        }
+      }
+    } },
     { id: "panel.toggleFull", title: "Expand or shrink the app panel", group: "Apps", icon: "maximize", when: panelOpen, run: () => toggleFull() },
     { id: "panel.refresh", title: "Refresh the app panel", group: "Apps", icon: "refresh", when: panelOpen, run: () => refreshPanel() },
+    { id: "focus.left", title: "Focus left panel", group: "Navigate", icon: "chevleft", run: () => { import("./workspace.js").then((m) => m.focusNeighbor("left")); setRegion("chat"); } },
+    { id: "focus.right", title: "Focus right panel", group: "Navigate", icon: "chevright", run: () => { import("./workspace.js").then((m) => m.focusNeighbor("right")); setRegion("panel"); } },
+    { id: "focus.up", title: "Focus upper panel", group: "Navigate", icon: "chevron", run: () => { import("./workspace.js").then((m) => m.focusNeighbor("up")); setRegion("panel"); } },
+    { id: "focus.down", title: "Focus lower panel", group: "Navigate", icon: "chevron", run: () => { import("./workspace.js").then((m) => m.focusNeighbor("down")); setRegion("panel"); } },
+    { id: "panel.split.right", title: "Split panel side-by-side", group: "Workspace", icon: "chevron", run: (a) => { import("./workspace.js").then((m) => m.splitActive("row", a?.app)); } },
+    { id: "panel.split.down", title: "Split panel stacked", group: "Workspace", icon: "chevron", run: (a) => { import("./workspace.js").then((m) => m.splitActive("col", a?.app)); } },
+    { id: "layout.preset.single", title: "Layout: Single panel", group: "Workspace", icon: "box", run: () => applyPreset("single") },
+    { id: "layout.preset.side_by_side", title: "Layout: Side-by-side", group: "Workspace", icon: "split-v", run: () => applyPreset("side-by-side") },
+    { id: "layout.preset.stacked", title: "Layout: Stacked", group: "Workspace", icon: "split-h", run: () => applyPreset("stacked") },
+    { id: "layout.preset.three_column", title: "Layout: Three columns", group: "Workspace", icon: "chevron", run: () => applyPreset("three-column") },
+    { id: "layout.preset.grid", title: "Layout: 2x2 Grid", group: "Workspace", icon: "chevron", run: () => applyPreset("grid") },
+    { id: "tab.next", title: "Next panel tab", group: "Workspace", icon: "chevron", run: () => { import("./workspace.js").then((m) => m.focusNeighbor("right")); } },
+    { id: "tab.prev", title: "Previous panel tab", group: "Workspace", icon: "chevron", run: () => { import("./workspace.js").then((m) => m.focusNeighbor("left")); } },
+    { id: "tab.reopen", title: "Reopen closed panel tab", group: "Workspace", icon: "plus", run: () => { import("./workspace.js").then((m) => m.reopenClosedTab()); } },
+    { id: "statusbar.pin", title: "Pin app to status bar", group: "Workspace", icon: "command", run: async () => {
+      const { pickApp } = await import("./palette.js");
+      const { addPin } = await import("./statusbar.js");
+      const appId = await pickApp("Pin app to status bar…");
+      if (appId) {
+        const app = panelApps().find((a) => a.id === appId) || { id: appId, name: appId, icon: "box" };
+        addPin({ appId: app.id, label: app.name, icon: app.icon });
+      }
+    } },
     { id: "keys.vim.toggle", group: "Navigate", icon: "command", title: () => (keymap().vim ? "Turn off vim-style keys (j k g G)" : "Turn on vim-style keys (j k g G)"),
       run: () => saveKeymap({ ...userKeymap(), vim: !keymap().vim }) },
+    { id: "workspace.applyTree", title: "Apply workspace layout tree", group: "Workspace", hidden: true,
+      run: (a) => { if (a?.tree) applyTree(a.tree); } },
+    { id: "macro.record.start", title: "Start recording macro", group: "Macros", icon: "activity",
+      when: () => !isRecording(),
+      run: () => {
+        const name = prompt("Macro name:") || "New Macro";
+        startRecording(name);
+      } },
+    { id: "macro.record.stop", title: "Stop recording macro", group: "Macros", icon: "stop",
+      when: () => isRecording(),
+      run: async () => {
+        const { saveRecorded } = await import("./macros.js");
+        saveRecorded();
+      } },
+    { id: "macro.save_layout", title: "Save current layout as macro", group: "Macros", icon: "sliders",
+      run: () => {
+        const name = prompt("Name this layout macro:") || "Saved Layout";
+        saveCurrentLayoutAsMacro(name);
+      } },
+    { id: "workspace.save", title: "Save current workspace", group: "Workspace", icon: "sliders",
+      run: (a) => {
+        const name = a?.name || prompt("Workspace name:") || "Workspace";
+        return saveCurrentWorkspace(name);
+      } },
+    { id: "workspace.switch", title: "Switch workspace", group: "Workspace", icon: "sliders",
+      run: (a) => {
+        if (!a?.id && !a?.name) return false;
+        return switchWorkspace(a.id || a.name);
+      } },
+    { id: "workspace.delete", title: "Delete workspace", group: "Workspace", icon: "x",
+      run: (a) => {
+        if (!a?.id && !a?.name) return false;
+        return deleteWorkspace(a.id || a.name);
+      } },
+    { id: "layout.undo", title: "Undo layout change", group: "Layouts", icon: "refresh", run: () => undoLayout() },
+    { id: "layout.redo", title: "Redo layout change", group: "Layouts", icon: "refresh", run: () => redoLayout() },
   ].forEach(register);
 
   for (const [tab, title, ic] of SETTINGS) register({ id: `settings.${tab}`, title, group: "Actions", icon: ic, run: () => openSettings(tab) });
 
-  addProvider(() => panelApps().map((a) => ({ id: `app.open:${a.id}`, group: "Apps", label: `Open ${a.name}`, icon: a.icon, hint: hintFor("app.open", { id: a.id }), run: () => get("app.open").run({ id: a.id }) })));
+  addProvider(() => panelApps().map((a) => ({ id: `app.open:${a.id}`, appId: a.id, group: "Apps", label: `Open ${a.name}`, icon: a.icon, hint: hintFor("app.open", { id: a.id }), run: () => get("app.open").run({ id: a.id }) })));
+  addProvider(() => panelApps().map((a) => ({ id: `app.split.row:${a.id}`, appId: a.id, group: "Workspace", label: `Split side-by-side with ${a.name}`, icon: "chevright", run: () => { import("./workspace.js").then((m) => m.splitActive("row", a.id)); } })));
+  addProvider(() => panelApps().map((a) => ({ id: `app.split.col:${a.id}`, appId: a.id, group: "Workspace", label: `Split stacked with ${a.name}`, icon: "chevron", run: () => { import("./workspace.js").then((m) => m.splitActive("col", a.id)); } })));
+  addProvider(() => panelApps().map((a) => ({ id: `statusbar.pin:${a.id}`, group: "Status Bar", label: `Pin ${a.name} to status bar`, icon: a.icon, run: () => { import("./statusbar.js").then((m) => m.addPin({ appId: a.id, label: a.name, icon: a.icon })); } })));
   addProvider(() => (state.config.actions || []).map((a) => ({ id: `action:${a.id}`, group: "Your actions", label: a.label, icon: a.kind === "script" ? "command" : "chat",
     hint: a.name ? "/" + a.name : "", run: () => invokeAction(a) })));
   addProvider(() => state.conversations.slice(0, 15).map((c) => ({ id: `conv:${c.id}`, group: "Conversations", label: c.title, icon: "chat", run: () => chat.openConversation(c.id) })));
+
+  const LAYOUT_PRESETS = [
+    ["single", "Single panel"],
+    ["side-by-side", "Side-by-side"],
+    ["stacked", "Stacked"],
+    ["three-column", "Three columns"],
+    ["grid", "2x2 Grid"],
+  ];
+  addProvider(() => LAYOUT_PRESETS.map(([id, label]) => ({
+    id: `layout.preset:${id}`,
+    group: "Layouts",
+    label: `Layout: ${label}`,
+    icon: id === "stacked" ? "split-h" : id === "side-by-side" ? "split-v" : "box",
+    run: () => applyPreset(id),
+  })));
+
+  addProvider(() => (typeof getOpenTabs === "function" ? getOpenTabs() : []).map((t) => ({
+    id: `tab.focus:${t.tabId}`,
+    group: "Open panels",
+    label: `Switch to ${t.title} tab`,
+    icon: t.icon || "box",
+    run: () => focusTab(t.tabId),
+  })));
+
+  addProvider(() => getMacros().map((m) => ({
+    id: `macro.run:${m.id}`,
+    group: "Macros",
+    label: `Run macro: ${m.name}`,
+    icon: "command",
+    hint: `${m.steps?.length || 0} steps`,
+    run: () => runMacro(m),
+  })));
+
+  addProvider(() => getWorkspaces().map((w) => ({
+    id: `workspace.switch:${w.id}`,
+    group: "Workspaces",
+    label: `Switch to workspace: ${w.name}`,
+    icon: "sliders",
+    hint: w.description || "Workspace",
+    run: () => switchWorkspace(w.id),
+  })));
 }

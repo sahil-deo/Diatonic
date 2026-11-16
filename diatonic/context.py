@@ -10,6 +10,7 @@ import httpx
 from . import secrets
 from .config import Config, home
 from .mods import ModStore
+from .fileapps import FileAppStore
 from .db import Database
 from .memory import MemoryStore
 from .telemetry import Telemetry
@@ -36,6 +37,7 @@ class Context:
         self.telemetry = Telemetry(db, config)
         self.google = GoogleAccounts(self)
         self.mods = ModStore(home() / "ui")
+        self.fileapps = FileAppStore(home() / "apps")
         self.scheduler = None   # set by the server once the engine exists
         self.notifier = None
         self.broadcast = lambda ev: None   # pushes an event to every connected UI

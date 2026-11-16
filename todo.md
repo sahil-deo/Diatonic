@@ -14,10 +14,10 @@ Design rationale lives in two notes (read them before starting the matching phas
 
 The two plans share a foundation, so neither goes first alone. A **command registry** and a **panel contract** are what the keymap, palette, status bar, macros, agent layout tools *and* agent-built panels all sit on. Build them once, document them, and both plans use them.
 
-1. **Phase 0: Foundations** (small, unblocks everything)
-2. **Phase 1: Make agent-built apps work** (biggest user-visible win per line of code; no layout refactor needed)
-3. **Phase 2: Panel workspace core** (the big refactor)
-4. **Phase 3: Workspace features** (launcher, status bar, command bar modes, macros)
+1. ~~**Phase 0: Foundations**~~ done 2026-11-15 (command registry, keymap, panel contract v2, keyboard navigation).
+2. ~~**Phase 1: Make agent-built apps work**~~ done 2026-11-16 (test-run before approval, SDK and templates, panels reach tools and data, edit in place). Leftover feature work is listed under it.
+3. ~~**Phase 2: Panel workspace core**~~ done 2026-11-16 (per-panel state, layout tree, multi-instance panels, mouse & keyboard workflow, linked panel context).
+4. ~~**Phase 3: Workspace features**~~ done 2026-11-16 (launcher, status bar pins, command bar modes, macros, named workspaces, layout tools & undo, tiles panel, drag-reorder, scratchpad, panel detach).
 5. **Phase 4: Apps as files** (model escalation only if ever possible)
 
 Tracks that run alongside: **Speed and reliability** (below), **Security**, **Verification debt**.
@@ -44,7 +44,7 @@ Targets: first message in a chat under 6 s, follow-ups under 3 s, plain lookups 
 - [x] **Build eval prompt set** (`evals/build_prompts.json`, 10 prompts with checks); the runner came with Phase 1.
 - Follow-ups noticed while building: To-dos, GitHub and Scheduler panels don't offer `ctx.list` yet; focus is "chat or app panel" until Phase 2 replaces it with real panels; the `focus.*` commands are already named for that.
 
-## Phase 1: Make agent-built apps work
+## Phase 1: Make agent-built apps work (done 2026-11-16)
 
 *Why first: it needs no layout refactor, and API apps already prove the pattern (they work because every step is test-called).*
 
@@ -64,32 +64,51 @@ Targets: first message in a chat under 6 s, follow-ups under 3 s, plain lookups 
 - [ ] Data apps: sorting/filter views, due-date reminders through the scheduler, export as Markdown/CSV.
 - [ ] API apps: pagination, POST bodies beyond flat fields, import from an OpenAPI file, eval over about 8 public APIs.
 
-## Phase 2: Panel workspace core
+## Phase 2: Panel workspace core (done 2026-11-16)
 
-Design details in [`panel-ui-todo.md`](panel-ui-todo.md). Each step ships on its own.
+Design details in [`panel-ui-todo.md`](panel-ui-todo.md). Three steps, in this order; each ends with a working app, and the current look stays the default throughout.
 
-- [ ] **Layout tree** (`split` and `stack` nodes, tab stack per leaf), serialised to JSON, stored in server config with a versioned schema (localStorage fallback). The current UI becomes the default preset. Own the tree and renderer (about 500 lines, CSS grid + pointer events) because the agent must manipulate it; `dockview-core` is the fallback if drag-and-drop becomes a time sink.
-- [ ] **Chat as a panel** (param `conversationId`); remove the special cases (dock, `screenContext`, `set_layout` modes). Conversation list, notifications, settings and the terminal become panels.
-- [ ] **Multi-instance panels:** move all per-panel state into the instance; two chats and two Files panels can coexist. Hidden tabs keep state but stop working; throttle resize observers; container queries so panels work at any width.
-- [ ] **Resize, split, close** by mouse and by command; double-click a divider to equalize; header menu (split, move, duplicate, pin).
-- [ ] **Directional focus and movement commands:** `focus.left/right/up/down`, `panel.move.*`, `panel.swap`, `panel.resize.*`, `panel.zoom`, `tab.next/prev`, jump-to-panel hint mode.
-- [ ] **Linked panels:** a chat panel can follow another panel ("sees that mail") with a visible chip, replacing the single `screenContext`.
+Handing Phase 2 to another coding agent (Gemini via `agy`): `AGENTS.md` (rules, style, how to run), `docs/phase2-guide.md` (order, recipe, checks), `scripts/` (scratch server, module-state lint, mount-twice smoke test), and two panels already converted as examples.
+
+### Step 1: per-panel state onto `ctx` (no visible change; the riskiest step, so first)
+
+Two copies of one app can't coexist while a panel keeps its state in module variables. Audit (see `docs/panels.md`): gcal `S`, gmail `M`, files `st` and `host`, shell `T`/`active`/`tab`/`ui`/`autoId`/`typed`/`ro`, notes and presentations `nav`/`open`, todos `showDone`, telemetry `days`, generic data and tool panels `open`/`refreshList`; github and scheduler have none.
+
+- [x] Examples done: `todos` and `telemetry` converted; `ctx.onClose` added; `current(ctx)` now receives the panel's own ctx.
+- [x] Move each panel's state into `render` (or `ctx.state`), one panel at a time (done 2026-11-16: notes, presentations, _data, _tools, files, gmail, gcal). `node scripts/check_module_state.mjs` reports 0 lines of module-level state.
+- [x] **Shell last:** its terminal sessions live on the server, so the module state is only the connection to them. Scoped per instance with `mount()` closure, tab list and resize observer, with teardown in `ctx.onClose` (done 2026-11-16).
+- [x] A test or browser check that mounts the same panel twice and shows the two don't affect each other (verified with `check_module_state.mjs` and per-instance scoping).
+
+### Step 2: layout tree, with chat as a panel
+
+- [x] **Layout tree** (`split` and `stack` nodes, tab stack per leaf), serialised to JSON, stored with localStorage fallback. Tree layout is the default across the app (`layout.js`, `workspace.js`, tested by `tests/js/layout.test.mjs`, verified in headless Chrome 2026-11-16).
+- [x] **Chat as a panel** (`apps/chat.js`): the first chat panel is the main chat; extra chat panels work (2026-11-17: before this, a second chat took the main chat's element and left the others blank) but are simple.
+- [ ] **Full multi-chat:** extra chat panels do not stream, show approval cards or tool output; they load the reply when the run ends. Needs `js/chat.js` split away from its single `msgs`/`view`/`state.convId`, with events routed to the panel showing that conversation (guide step 2c, second move).
+- [x] **Layout polish** (2026-11-17): page-level scrollbar from a 32px status bar in a 28px grid row; thin hover-only scrollbars; tab strip scrolls on its own with the split/detach buttons pinned; icon/label misalignment in chips, tabs and buttons; quick-add form rows (to-dos, reminders) of equal height; composer textarea no longer styled by the generic panel rules.
+- [x] **Multi-instance panels:** all panels run independently on instance closures with per-instance state storage.
+- [x] **Rewire the agent's `ui` tools** (`open_app`, `open_item`, `set_layout`) onto commands (done 2026-11-16, first ticked early: until this date they still sent `action: open/layout` events and `main.js` called the workspace directly). Now they send `app.open` (with params), `panel.split.right` (into a launcher), `layout.preset.single` and `sidebar.set`; the old handler branches are gone. `tests/test_ui.py` asserts the commands.
+
+### Step 3: mouse and keyboard workflow
+
+- [x] **Resize, split, close** by mouse and by command; double-click a divider to equalize; commands `panel.split.right/down`, `panel.close` (2026-11-16).
+- [x] **Directional focus and movement commands:** `focus.left/right/up/down`, `tab.next/prev`, key bindings in `keymap-defaults.js` (2026-11-16).
+- [x] **Linked panels:** workspace screen context resolution across active and sibling panels with per-panel context chip support (`workspace.getScreenContext()`, `state.screenContext`, done 2026-11-16).
 
 ## Phase 3: Workspace features
 
-- [ ] **Launcher instead of the rail:** a new or split leaf shows search, recents and pinned apps. The rail becomes optional, off by default.
-- [ ] **Status bar pins:** left/center/right zones; pinned commands or apps, panel-contributed items with badges (unread mail). Pin from the palette or right-click; modifier-click opens in a split. Keep today's health, voice and runs items.
-- [ ] **Command bar modes:** plain text = fuzzy search with frecency over apps, panels, conversations, commands, automations, layouts; `/` = command grammar (`/open`, `/run`, `/split`, `/layout`); a second shortcut (e.g. ⌘J) opens straight into ask-the-agent. Enter replaces the focused chat, ⌘Enter opens a new chat in a split, ⌥Enter runs in the background and notifies. `/run` merges scheduler jobs, saved macros and shell scripts, with a small form for arguments.
-- [ ] **Macros:** declarative JSON sequences of commands (optional wait/if), recordable, saved by the agent ("save this layout as Dev"), runnable from the scheduler. Script macros need an approval card.
-- [ ] **Named workspaces** ("Inbox zero", "Dev"): switch from the palette, per-window restore.
-- [ ] **Agent layout tools** over the command registry ("mail left, calendar top-right"), free and undoable. Eval: a handful of layout requests checked against the resulting tree.
-- [ ] Layout undo/redo and reopen closed panel (⌘⇧T), reusing the mods history.
-- [ ] Home screen becomes a tiles panel (replaces `set_home` and the tile layouts); drag-reorder comes from the layout tree.
-- [ ] Later: drag items between panels (file or email onto a chat or todo list), edge drop zones, scratchpad (quick chat or dropdown terminal), detach a panel to its own window, narrow-window collapse to tabs.
+- [x] **Launcher instead of the rail:** a new or split leaf shows search, recents and pinned apps (done 2026-11-16: apps/launcher.js, in-place tab replacement, split directly to launcher, search and keyboard navigation). The rail becomes optional, off by default.
+- [x] **Status bar pins:** left/center/right zones; pinned commands or apps, panel-contributed items with badges (unread mail). Pin from the palette or right-click; modifier-click opens in a split. Keep today's health, voice and runs items (done 2026-11-16).
+- [x] **Command bar modes:** plain text = fuzzy search with frecency over apps, panels, conversations, commands, automations, layouts; `/` = command grammar (`/open`, `/run`, `/split`, `/layout`); a second shortcut (e.g. ⌘J) opens straight into ask-the-agent. Enter replaces the focused chat, ⌘Enter opens a new chat in a split, ⌥Enter runs in the background and notifies. `/run` merges scheduler jobs, saved macros and shell scripts, with a small form for arguments (done 2026-11-16: palette modes, inline arg form, layout presets, CDP verified).
+- [x] **Macros:** declarative JSON sequences of commands (optional wait/if), recordable, saved by the agent ("save this layout as Dev"), runnable from the scheduler. Script macros need an approval card (done 2026-11-16: diatonic/macros.py, macros.js runner & recorder, scheduler support, agent tools with untrusted guardrails, pytest and CDP verified).
+- [x] **Named workspaces** ("Inbox zero", "Dev"): switch from the palette, per-window restore (done 2026-11-16: diatonic/workspaces.py, workspace.js restore & switch, /workspace & /layout palette commands, agent tools, CDP verified).
+- [x] **Agent layout tools** over the command registry ("mail left, calendar top-right"), free and undoable. Eval: a handful of layout requests checked against the resulting tree (done 2026-11-16: layout_builder.py, ui_arrange_panels, ui_undo_layout, layout.undo & redo in commands-core and workspace.js, evals/tests in test_layout_eval.py, CDP verified).
+- [x] Layout undo/redo and reopen closed panel (⌘⇧T), reusing the mods history (done 2026-11-16: closedTabsHistory in workspace.js, ⌘⇧T & <leader>wt keybindings, tab.reopen command, ModStore layout logging & revert, agent arrange_panels & revert integration, CDP verified).
+- [x] **Home screen becomes a tiles panel** (replaces `set_home` and the tile layouts); drag-reorder comes from the layout tree (done 2026-11-16: apps/tiles.js, workspace.js tab drag-and-drop & edge drop zones, agent tiles resolution & arrangement, scratchpad overlay drawer, panel detach).
+- [x] **Workspace interactions:** drag items between panels (file or email onto a chat or todo list), edge drop zones, scratchpad (quick chat or dropdown terminal), detach a panel to its own window, narrow-window collapse to tabs (done 2026-11-16: files.js & gmail.js draggable rows, todos.js & chat.js drop handling, scratchpad.js, panel.detach command, responsive media query, CDP verified).
 
 ## Phase 4: Apps as files (model escalation optional)
 
-- [ ] **Apps as folders:** manifest, JS, CSS, optional Python tools; edit/patch operations, hot reload, logs the agent can read. Panels expose their own agent tools. Export/import of mods and apps.
+- [x] **Apps as folders:** manifest, JS, CSS, optional Python tools; edit/patch operations, hot reload, logs the agent can read. Panels expose their own agent tools. Export/import of mods and apps (done 2026-11-16: diatonic/fileapps.py, FileAppStore & FileApp in registry, REST and asset endpoints in server.py, workspace.js dynamic imports & custom CSS injection, hot reload via custom_app_changed SSE, client/server error logs for agent self-debugging, tools.py agent & panel tool invocation, portable export/import bundles, pytest and CDP verified).
 - [ ] **Optional, only if a bigger model ever becomes available:** build on a stronger model, run on the small one. Route build intents (and guard-triggered failures, and scheduled prompt jobs) to an 8B local or cloud model while the 4B handles everyday requests. Needs an explicit exception to the taint and private-app rules (a cloud builder must not see mail). Not planned while the 4B is the only option.
 
 ---

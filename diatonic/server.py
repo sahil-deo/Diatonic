@@ -21,6 +21,8 @@ from .actions import ActionRunner, clean_actions, clean_appearance, export_bundl
 from .agent.guards import collapse_repeats
 from .agent.runs import RunBusy, RunManager
 from . import keymap
+from . import macros
+from . import workspaces
 from .mods import ModError
 from . import models as M
 from . import secrets
@@ -87,7 +89,10 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
     registry = registry or Registry(ctx).discover()
     ctx.registry = registry
     ctx.mods.on_change = registry.sync_api_apps   # API apps the agent makes become real apps (tools, panel) at once
+    ctx.mods.on_layout_revert = lambda layout: ctx.broadcast({"type": "undo_layout", "tree": layout})
     registry.sync_api_apps()
+    ctx.fileapps.on_change = lambda app_id: (registry.sync_file_apps(), ctx.broadcast({"type": "custom_app_changed", "id": app_id}))
+    registry.sync_file_apps()
     ctx.scheduler = Scheduler(ctx, registry, runs, ctx.notifier, store)
     action_runner = ActionRunner(ctx)
     stt, tts = STT(), TTS()
@@ -110,6 +115,7 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
         fields = [{**f, "set": bool(a.secret(f["key"])) if f.get("secret") else None,
                    "value": None if f.get("secret") else cfg["settings"].get(f["key"], "")} for f in a.settings]
         return {"id": a.id, "name": a.name, "icon": a.icon, "description": a.description, "panel": a.panel, "module": getattr(a, "module", None),
+                "file_app": bool(getattr(a, "file_app", False)), "styles": getattr(a, "styles", None),
                 "private": registry.is_private(a),
                 "enabled": cfg["enabled"], "fields": fields, "status": await a.status() if cfg["enabled"] else None,
                 "tools": [{"name": t.name, "title": t.title, "risk": t.risk, "description": t.description,
@@ -203,6 +209,125 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
         ok = registry.apps["ui"].resolve_verify(request.path_params["rid"], await request.json())
         return JSONResponse({"ok": ok})
 
+    # ---- custom file apps: apps as folders in ~/.diatonic/apps/<id>/ ---------------------
+    async def custom_app_file(request):
+        app_id = request.path_params["app_id"]
+        rel_path = request.path_params.get("path", "index.js")
+        try:
+            target = ctx.fileapps._safe_path(app_id, rel_path)
+            if not target.is_file():
+                return Response("File not found", status_code=404)
+            ext = target.suffix.lower()
+            media = "text/javascript" if ext == ".js" else "text/css" if ext == ".css" else "application/json" if ext == ".json" else "text/plain"
+            return Response(target.read_bytes(), media_type=media, headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
+        except Exception as e:
+            return Response(str(e), status_code=400)
+
+    async def custom_apps_list(request):
+        return JSONResponse(ctx.fileapps.list_apps())
+
+    async def custom_apps_create(request):
+        body = await request.json()
+        try:
+            manifest = ctx.fileapps.create_app(body.get("id"), body.get("name"), body.get("description", ""), body.get("icon", "box"))
+            return JSONResponse(manifest, status_code=201)
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, 400)
+
+    async def custom_apps_get(request):
+        app_id = request.path_params["app_id"]
+        app_data = ctx.fileapps.get_app(app_id)
+        if not app_data:
+            return JSONResponse({"error": "App not found"}, 404)
+        return JSONResponse(app_data)
+
+    async def custom_apps_delete(request):
+        app_id = request.path_params["app_id"]
+        try:
+            ctx.fileapps.delete_app(app_id)
+            return JSONResponse({"ok": True})
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, 400)
+
+    async def custom_apps_get_file(request):
+        app_id = request.path_params["app_id"]
+        path = request.query_params.get("path", "")
+        if not path:
+            return JSONResponse({"error": "Missing path parameter"}, 400)
+        try:
+            content = ctx.fileapps.read_file(app_id, path)
+            return JSONResponse({"content": content, "path": path})
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, 404 if "not found" in str(e).lower() else 400)
+
+    async def custom_apps_put_file(request):
+        app_id = request.path_params["app_id"]
+        body = await request.json()
+        path = body.get("path")
+        content = body.get("content")
+        if not path or content is None:
+            return JSONResponse({"error": "Path and content are required"}, 400)
+        try:
+            res = ctx.fileapps.write_file(app_id, path, content)
+            return JSONResponse(res)
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, 400)
+
+    async def custom_apps_patch_file(request):
+        app_id = request.path_params["app_id"]
+        body = await request.json()
+        path = body.get("path")
+        old = body.get("old")
+        new = body.get("new")
+        if not path or old is None or new is None:
+            return JSONResponse({"error": "path, old, and new are required"}, 400)
+        try:
+            res = ctx.fileapps.patch_file(app_id, path, old, new)
+            return JSONResponse(res)
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, 400)
+
+    async def custom_apps_delete_file(request):
+        app_id = request.path_params["app_id"]
+        path = request.query_params.get("path", "")
+        if not path:
+            return JSONResponse({"error": "Missing path parameter"}, 400)
+        try:
+            ctx.fileapps.delete_file(app_id, path)
+            return JSONResponse({"ok": True})
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, 400)
+
+    async def custom_apps_get_logs(request):
+        app_id = request.path_params["app_id"]
+        return JSONResponse(ctx.fileapps.get_logs(app_id))
+
+    async def custom_apps_post_logs(request):
+        app_id = request.path_params["app_id"]
+        body = await request.json()
+        error = body.get("error", "")
+        source = body.get("source", "client_runtime")
+        ctx.fileapps.log_error(app_id, error, source)
+        return JSONResponse({"ok": True})
+
+    async def custom_apps_export(request):
+        app_id = request.path_params["app_id"]
+        try:
+            bundle = ctx.fileapps.export_app(app_id)
+            return JSONResponse(bundle, headers={"Content-Disposition": f"attachment; filename={app_id}.diatonic-app.json"})
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, 400)
+
+    async def custom_apps_import(request):
+        body = await request.json()
+        bundle = body.get("bundle", body)
+        overwrite = bool(body.get("overwrite", False))
+        try:
+            res = ctx.fileapps.import_app(bundle, overwrite=overwrite)
+            return JSONResponse(res)
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, 400)
+
     # ---- keymap: the user's key bindings, kept in keymap.json in the Diatonic home folder ----------------------
     async def keymap_get(request):
         return JSONResponse({"path": str(keymap.path()), "keymap": keymap.load()})
@@ -214,6 +339,30 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
             return JSONResponse({"error": str(e)}, 400)
         ctx.broadcast({"type": "keymap_changed"})
         return JSONResponse({"path": str(keymap.path()), "keymap": saved})
+
+    # ---- macros: declarative sequences of commands, kept in macros.json in the Diatonic home folder ----
+    async def macros_get(request):
+        return JSONResponse({"path": str(macros.path()), "macros": macros.load()})
+
+    async def macros_put(request):
+        try:
+            saved = macros.save(await request.json())
+        except macros.MacroError as e:
+            return JSONResponse({"error": str(e)}, 400)
+        ctx.broadcast({"type": "macros_changed"})
+        return JSONResponse({"path": str(macros.path()), "macros": saved})
+
+    # ---- workspaces: named layout trees, kept in workspaces.json in the Diatonic home folder ----
+    async def workspaces_get(request):
+        return JSONResponse({"path": str(workspaces.path()), "workspaces": workspaces.load()})
+
+    async def workspaces_put(request):
+        try:
+            saved = workspaces.save(await request.json())
+        except workspaces.WorkspaceError as e:
+            return JSONResponse({"error": str(e)}, 400)
+        ctx.broadcast({"type": "workspaces_changed"})
+        return JSONResponse({"path": str(workspaces.path()), "workspaces": saved})
 
     # ---- API apps: the generic panel reads the definition and runs actions through the server -------------
     def api_app(request):
@@ -431,11 +580,11 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
         return JSONResponse({"ok": action_runner.cancel(request.path_params["rid"])})
 
     async def export_custom(request):
-        return JSONResponse(export_bundle(config), headers={"Content-Disposition": "attachment; filename=diatonic-customization.json"})
+        return JSONResponse(export_bundle(config, ctx.mods, ctx.fileapps), headers={"Content-Disposition": "attachment; filename=diatonic-customization.json"})
 
     async def import_custom(request):
         try:
-            return JSONResponse(import_bundle(config, await request.json()))
+            return JSONResponse(import_bundle(config, await request.json(), ctx.mods, ctx.fileapps))
         except (ValueError, TypeError) as e:
             return JSONResponse({"error": str(e)}, 400)
 
@@ -698,12 +847,29 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
         Route("/api/models/{mid}", models_delete, methods=["DELETE"]),
         Route("/api/keymap", keymap_get),
         Route("/api/keymap", keymap_put, methods=["PUT"]),
+        Route("/api/macros", macros_get),
+        Route("/api/macros", macros_put, methods=["PUT"]),
+        Route("/api/workspaces", workspaces_get),
+        Route("/api/workspaces", workspaces_put, methods=["PUT"]),
         Route("/api/mods", mods_list),
         Route("/api/mods/revert", mods_revert, methods=["POST"]),
         Route("/api/mods/verify/{rid}", mods_verified, methods=["POST"]),
         Route("/api/panel/tools/{app_id}/{tool}", panel_tool, methods=["POST"]),
         Route("/api/mods/{name}", mods_set, methods=["PUT"]),
         Route("/api/mods/{name}", mods_delete, methods=["DELETE"]),
+        Route("/custom-apps/{app_id}/{path:path}", custom_app_file),
+        Route("/api/custom-apps", custom_apps_list),
+        Route("/api/custom-apps", custom_apps_create, methods=["POST"]),
+        Route("/api/custom-apps/import", custom_apps_import, methods=["POST"]),
+        Route("/api/custom-apps/{app_id}", custom_apps_get),
+        Route("/api/custom-apps/{app_id}", custom_apps_delete, methods=["DELETE"]),
+        Route("/api/custom-apps/{app_id}/file", custom_apps_get_file),
+        Route("/api/custom-apps/{app_id}/file", custom_apps_put_file, methods=["PUT"]),
+        Route("/api/custom-apps/{app_id}/file", custom_apps_delete_file, methods=["DELETE"]),
+        Route("/api/custom-apps/{app_id}/patch", custom_apps_patch_file, methods=["POST"]),
+        Route("/api/custom-apps/{app_id}/logs", custom_apps_get_logs),
+        Route("/api/custom-apps/{app_id}/logs", custom_apps_post_logs, methods=["POST"]),
+        Route("/api/custom-apps/{app_id}/export", custom_apps_export),
         Route("/api/apps", get_apps),
         Route("/api/apps/{app_id}/config", put_app, methods=["PUT"]),
         Route("/api/apps/{app_id}/secrets/{key}", clear_secret, methods=["DELETE"]),

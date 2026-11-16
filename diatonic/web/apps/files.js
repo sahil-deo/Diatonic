@@ -8,34 +8,47 @@ const B = "/api/apps/files";
 export const wide = true;
 export const width = 760;
 
-const st = { path: "", file: null, hidden: false, q: "", wrap: false, source: false, scroll: 0 };
+const instances = new WeakMap(); // state-ok: keyed by this panel's ctx
 const enc = encodeURIComponent;
 const rawUrl = (p) => `${B}/raw?path=${enc(p)}`;
 const size = (n) => (n == null ? "" : n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`);
 const ago = (t) => new Date(t * 1000).toLocaleDateString([], { month: "short", day: "numeric", year: t * 1000 < Date.now() - 3e10 ? "numeric" : undefined });
 const KIND_ICON = { folder: "folder", markdown: "file-text", pdf: "file-text", image: "image", text: "code", binary: "file" };
 
-let host = null;
-export const current = () => (st.file ? { kind: "file", ref: st.file, title: st.file.split("/").pop() }
-  : host?.el?.isConnected ? { kind: "folder", ref: st.path || ".", title: st.path || "the shared folders" } : null);
+export const current = (ctx) => {
+  const inst = instances.get(ctx);
+  const st = inst?.st;
+  return st?.file ? { kind: "file", ref: st.file, title: st.file.split("/").pop() }
+    : inst?.el?.isConnected ? { kind: "folder", ref: st?.path || ".", title: st?.path || "the shared folders" } : null;
+};
+
 /** Called by the agent: open a file in the viewer, or a folder in the browser. */
-export async function navigate(p) {
-  if (!p.item || !host) return;
+export async function navigate(p, ctx) {
+  const inst = instances.get(ctx);
+  if (!p.item || !inst) return;
   const path = p.item.replace(/^@/, "");
   const isFile = p.kind ? p.kind === "file" : /\.[A-Za-z0-9]{1,8}$/.test(path.split("/").pop());
-  if (isFile) { st.file = path; st.path = path.replace(/\/[^/]*$/, ""); } else { st.file = null; st.path = path; }
-  await render(host.el, host.ctx);
+  if (isFile) { inst.st.file = path; inst.st.path = path.replace(/\/[^/]*$/, ""); } else { inst.st.file = null; inst.st.path = path; }
+  await render(inst.el, inst.ctx);
 }
 
 export async function render(el, ctx) {
   const { api, h, toast, reload, prompt } = ctx;
-  host = { el, ctx };
+  let inst = instances.get(ctx);
+  if (!inst) {
+    inst = { st: { path: "", file: null, hidden: false, q: "", wrap: false, source: false, scroll: 0 }, el, ctx };
+    instances.set(ctx, inst);
+  } else {
+    inst.el = el;
+    inst.ctx = ctx;
+  }
+  const st = inst.st;
   const info = await api.get(`${B}/state`);
   if (state.openFile) { st.file = state.openFile; st.path = state.openFile.replace(/\/[^/]*$/, ""); state.openFile = null; }
   if (!info.roots.length) return onboarding(el, ctx, info);
   queueMicrotask(() => emit("screen"));
-  if (st.file) return viewer(el, ctx, info);
-  return browser(el, ctx, info);
+  if (st.file) return viewer(el, ctx, info, st);
+  return browser(el, ctx, info, st);
 }
 
 /* ---------------------------------------------------------------- onboarding / folders */
@@ -71,10 +84,17 @@ function picker(ctx) {
   d.addEventListener("close", () => d.remove());
   document.body.append(d); d.showModal(); go("");
 }
-function manageRoots(el, ctx, info) {
+function manageRoots(el, ctx, info, st) {
   const { h, api, reload } = ctx;
   return h("details", { class: "newjob" }, h("summary", {}, `Shared folders (${info.roots.length})`),
-    ...info.roots.map((r) => h("div", { class: "p-row" }, h("div", { class: "grow p-s", style: "word-break:break-all" }, r.path),
+    ...info.roots.map((r) => h("div", { class: "p-row" },
+      h("button", {
+        type: "button",
+        class: "btn sm grow",
+        style: "text-align:left;word-break:break-all",
+        title: `Explore ${r.path}`,
+        onclick: () => { st.path = r.path; st.file = null; reload(); }
+      }, r.path),
       h("button", { class: "btn sm danger", onclick: async () => { await api.del(`${B}/roots?path=${enc(r.path)}`); st.path = ""; st.file = null; reload(); } }, "Stop sharing"))),
     h("div", { class: "quick-add", style: "margin-top:8px" }, pathInput(ctx), h("button", { class: "btn", onclick: () => picker(ctx) }, "Browse…")),
     h("label", { class: "chk", style: "margin-top:8px" }, h("input", { type: "checkbox", checked: info.allow_sensitive, onchange: async (e) => {
@@ -83,12 +103,19 @@ function manageRoots(el, ctx, info) {
 }
 
 /* ---------------------------------------------------------------- browser */
-async function browser(el, ctx, info) {
+async function browser(el, ctx, info, st) {
   const { h, api, reload, prompt } = ctx;
   ctx.list({ items: () => [...el.querySelectorAll(".frow")] });   // ↑/↓ and Enter in the file list
   const listing = await api.get(`${B}/ls?path=${enc(st.path)}${st.hidden ? "&hidden=1" : ""}`).catch(() => { st.path = ""; return api.get(`${B}/ls?path=`); });
   const body = h("div", { class: "files-list" });
   const rows = (entries) => entries.map((e) => h("div", { class: "frow", tabindex: 0, role: "button",
+    draggable: "true",
+    ondragstart: (ev) => {
+      const ref = q(e.path, info);
+      ev.dataTransfer.setData("text/plain", `@${ref}`);
+      ev.dataTransfer.setData("text/diatonic-file", JSON.stringify({ path: e.path, name: e.name, ref }));
+      ev.dataTransfer.effectAllowed = "copyMove";
+    },
     onclick: () => { if (e.dir) { st.path = e.path; st.q = ""; reload(); } else { st.file = e.path; st.scroll = 0; reload(); } },
     onkeydown: (ev) => ev.key === "Enter" && ev.currentTarget.click() },
     h("span", { class: `fi ${e.kind}`, html: icon(KIND_ICON[e.kind] || "file", 16) }), h("span", { class: "fn" }, e.name),
@@ -108,7 +135,19 @@ async function browser(el, ctx, info) {
       st.q = search.value.trim();
       if (!st.q) return body.replaceChildren(...rows(listing.entries));
       const found = await api.get(`${B}/find?q=${enc(st.q)}&limit=30`);
-      body.replaceChildren(...(found.length ? found.map((f) => h("div", { class: "frow", tabindex: 0, role: "button", onclick: () => { if (f.dir) { st.path = f.path; st.q = ""; } else { st.file = f.path; } reload(); } },
+      body.replaceChildren(...(found.length ? found.map((f) => h("div", {
+        class: "frow",
+        tabindex: 0,
+        role: "button",
+        draggable: "true",
+        ondragstart: (ev) => {
+          const ref = q(f.path, info);
+          ev.dataTransfer.setData("text/plain", `@${ref}`);
+          ev.dataTransfer.setData("text/diatonic-file", JSON.stringify({ path: f.path, name: f.name || f.rel, ref }));
+          ev.dataTransfer.effectAllowed = "copyMove";
+        },
+        onclick: () => { if (f.dir) { st.path = f.path; st.q = ""; } else { st.file = f.path; } reload(); }
+      },
         h("span", { class: "fi", html: icon(f.dir ? "folder" : "file", 16) }), h("span", { class: "fn" }, f.rel), h("span", {}, ""), h("span", {}, ""),
         h("button", { class: "icon-btn sm fref", title: "Reference in chat", html: icon("at", 14), onclick: (ev) => { ev.stopPropagation(); prompt(`@${q(f.path, info)} `); } })))
         : [h("div", { class: "p-empty" }, "No matches.")]));
@@ -116,7 +155,7 @@ async function browser(el, ctx, info) {
   });
   el.replaceChildren(crumbs, h("div", { class: "files-tools" }, search, st.path && openIn(ctx, st.path, true),
     h("label", { class: "chk", style: "margin:0;white-space:nowrap" }, h("input", { type: "checkbox", checked: st.hidden, onchange: (e) => { st.hidden = e.target.checked; reload(); } }), "hidden")),
-    body, manageRoots(el, ctx, info), h("div", { class: "p-s", style: "margin-top:12px" }, "Click @ on a file (or type @ in the chat box) to reference it. Ask the agent to edit, create or delete files in the chat."));
+    body, manageRoots(el, ctx, info, st), h("div", { class: "p-s", style: "margin-top:12px" }, "Click @ on a file (or type @ in the chat box) to reference it. Ask the agent to edit, create or delete files in the chat."));
   if (st.q) search.dispatchEvent(new Event("input"));
 }
 
@@ -148,7 +187,7 @@ function q(abs, info) {
 }
 
 /* ---------------------------------------------------------------- viewer */
-async function viewer(el, ctx, info) {
+async function viewer(el, ctx, info, st) {
   const { h, api, toast, reload, prompt } = ctx;
   let f;
   try { f = await api.get(`${B}/file?path=${enc(st.file)}`); }

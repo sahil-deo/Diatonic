@@ -42,7 +42,7 @@ The changes are saved in `keymap.json` in the Diatonic folder (`~/.diatonic`). Y
 
 - `key`: modifiers `Mod` (⌘ on a Mac, Ctrl elsewhere), `Ctrl`, `Alt`, `Meta`, `Shift` joined with `+`, then the key (`k`, `,`, `ArrowDown`, `Enter`, `Escape`, `Space`, `F5`). Spaces separate the steps of a sequence; `<leader>` stands for the leader key. An upper-case letter on its own means Shift (`G`).
 - `command`: a command id, or `null` to remove that key from the built-in keymap.
-- `args`: for commands that take some (`app.open` takes `id`, `settings.open` takes `tab`).
+- `args`: for commands that take some (`app.open` takes `id`, and optionally `params` such as `{ "view": "month" }` and `focus: false` to leave the keyboard where it is; `panel.split.right` and `panel.split.down` take an optional `app` to open without asking; `sidebar.set` takes `mode`: `show` or `hide`; `settings.open` takes `tab`).
 - `when`: optional condition from these names, combined with `!`, `&&`, `||` and parentheses: `input` (typing in a text box), `composer` (the chat box), `terminal`, `dialog` (a window is open), `idle` (not typing), `plain` (idle and not on a button or link), `vim`, `panel`, `panel:files`, `app:gmail`, `focus:chat`, `focus:panel`, `list`. Keys with no modifier only fire while you aren't typing, whatever `when` says.
 - Your entries win over the built-in ones. A bad entry is reported and skipped; the rest still work.
 

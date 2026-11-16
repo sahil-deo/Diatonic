@@ -267,7 +267,7 @@ function onEvent(ev) {
     return;
   }
   if (ev.type === "ui") return ev.target === CLIENT_ID ? emit("ui", ev) : undefined;   // screen control from a run this window started
-  if (["notification", "app_changed", "mods_changed", "keymap_changed", "model_changed", "script_output", "script_done"].includes(ev.type)) return emit(ev.type, ev); // not tied to a chat
+  if (["notification", "app_changed", "custom_app_changed", "mods_changed", "keymap_changed", "model_changed", "script_output", "script_done"].includes(ev.type)) return emit(ev.type, ev); // not tied to a chat
   const cid = ev.conversation_id;
   const title = ev.type === "run_start" ? ev.title : titleOf(cid); // other events' `title` is a tool title
 
@@ -317,7 +317,11 @@ export function startEventStream() {
 /* ---------- conversations ---------- */
 export function newChat() {
   state.convId = null; $("#chat-title").textContent = "New chat";
-  renderEmpty(); emit("runs-changed"); emit("conversations-changed"); $("#input").focus();
+  renderEmpty(); emit("runs-changed"); emit("conversations-changed");
+  import("./panel.js").then((m) => {
+    m.openPanel("chat");
+    setTimeout(() => $("#input")?.focus(), 50);
+  });
 }
 
 export async function openConversation(id) {
@@ -341,6 +345,10 @@ export async function openConversation(id) {
   if (c.run) { const v = newView(id); replay(v, c.run.events); }
   else if (!c.messages.length) renderEmpty();
   scroll(true); emit("runs-changed"); emit("conversations-changed");
+  import("./panel.js").then((m) => {
+    m.openPanel("chat");
+    setTimeout(() => $("#input")?.focus(), 50);
+  });
 }
 
 export async function removeConversation(id) {
