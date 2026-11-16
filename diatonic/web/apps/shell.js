@@ -37,10 +37,14 @@ function loadXterm() {
 function theme() {
   const v = (n, d) => getComputedStyle(document.documentElement).getPropertyValue(n).trim() || d;
   const light = document.documentElement.dataset.theme === "light";
+  const accent = v("--accent", "#7c9cff");
+  // A transparent background lets the glass panel show through; the text colours follow the app theme.
   return {
-    background: light ? "#fbfbfc" : "#0b0c10", foreground: light ? "#1f2328" : "#d7dae0", cursor: v("--accent", "#7c9cff"), cursorAccent: light ? "#fff" : "#0b0c10",
-    selectionBackground: light ? "#b9cdfb" : "#33415e",
-    ...(light ? {} : { black: "#1d1f24", brightBlack: "#5c6370", blue: "#61afef", brightBlue: "#82c1ff", cyan: "#56b6c2", green: "#98c379", magenta: "#c678dd", red: "#e06c75", yellow: "#e5c07b", white: "#d7dae0" }),
+    background: "rgba(0,0,0,0)", foreground: light ? "#1b2233" : "#dfe3ee", cursor: accent, cursorAccent: light ? "#ffffff" : "#0b0c10",
+    selectionBackground: light ? "rgba(69,96,230,.28)" : "rgba(124,156,255,.30)",
+    ...(light
+      ? { black: "#2a3144", brightBlack: "#6b7388", blue: "#3b5bdb", brightBlue: "#4c6ef5", cyan: "#0c8599", green: "#2b8a3e", magenta: "#9c36b5", red: "#c92a2a", yellow: "#b5700a", white: "#5b6275", brightWhite: "#1b2233" }
+      : { black: "#1d1f24", brightBlack: "#6a7287", blue: "#74a0ff", brightBlue: "#9bbcff", cyan: "#5fd0d6", green: "#8fd6a1", magenta: "#c79bff", red: "#ff8a95", yellow: "#f0cf8a", white: "#dfe3ee", brightWhite: "#ffffff" }),
   };
 }
 
@@ -59,7 +63,7 @@ function sender(id) {
 function attach(info) {
   const host = document.createElement("div"); host.className = "term-host";
   const term = new window.Terminal({ fontFamily: getComputedStyle(document.documentElement).getPropertyValue("--mono").trim() || "Menlo, monospace",
-    fontSize: 13, lineHeight: 1.15, cursorBlink: true, scrollback: 10000, allowProposedApi: false, macOptionIsMeta: true, theme: theme() });
+    fontSize: 13, lineHeight: 1.15, cursorBlink: true, allowTransparency: true, scrollback: 10000, allowProposedApi: false, macOptionIsMeta: true, theme: theme() });
   const fit = new window.FitAddon.FitAddon(); term.loadAddon(fit);
   const t = { id: info.id, term, fit, host, title: `zsh ${T.size + 1}`, exited: info.exited != null };
   const send = sender(info.id);
@@ -108,7 +112,10 @@ async function closeSession(id) {
 /* ------------------------------------------------------------ panel */
 async function render(el, ctx) {
   const { h } = ctx;
+  const retheme = new MutationObserver(() => { for (const t of T.values()) t.term.options.theme = theme(); });   // light/dark and accent changes
+  retheme.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "style"] });
   ctx.onClose(() => {
+    retheme.disconnect();
     ro?.disconnect();
     for (const t of T.values()) {
       t.es?.close();

@@ -43,10 +43,15 @@ A panel body is wrapped in `.panel-body`, whose generic form rules (border, back
 
 A **layout** is how the panels are arranged: the tree of splits and tabs and the app in each. There is one word and one way to keep one:
 
+- **By mouse:** the layout button at the bottom right of the window opens the Layouts menu: presets as thumbnails, a name box to save the current layout, your saved layouts (click to switch, trash icon to delete, asked in place), undo, redo and reopen a closed tab. Settings → Layouts shows the same. Everything below also has a command.
 - Arrange it with presets (`layout.preset.*`), splits, drag and drop, or the agent (`ui_arrange_panels`); `layout.undo` and `layout.redo` step through changes.
 - **Save** the current arrangement under a name with `layout.save` (or ask the agent: "save this layout as Dev"). **Switch** with `layout.switch` or `/layout <name>` in the command bar, which lists the presets and your saved layouts together. To delete one, open the command bar and type `delete layout`: each saved layout has its own row, and you are asked to confirm. (`layout.delete` with no name opens that list.)
 - Saved layouts live in `layouts.json` in the Diatonic home folder (`GET`/`PUT /api/layouts`). A `workspaces.json` from an earlier version is read until the next save.
 - A **macro** is a different thing: a list of commands to run. Do not save a layout as a macro.
 
 In the code, "workspace" only names the area of the window that shows the layout (`js/workspace.js`, `.workspace-*` classes).
+
+## Mouse and keyboard: both, always
+
+Every command should have a place to click, so nothing depends on knowing a key. The places are the status bar (Layouts, Scratchpad, command bar and Settings buttons on the right; a **+** after the pinned apps to pin or unpin any app), Settings (Layouts and Macros pages next to Keyboard), and the tab bar (split, add tab, and the **⋯ panel menu**: split, zoom, duplicate, move and swap towards a neighbour, pin, reload, open in its own window, close tab or close the others; right-click a tab for the same menu). Zoom only changes what is shown, never the saved layout. A command that needs a name, such as `layout.save` or `macro.record.start`, opens the page that has a name box and does not use a browser `prompt()`; a test checks the core commands for that. When you add a command, add its button or menu in the same change.
 

@@ -18,7 +18,7 @@ export async function render(el, ctx) {
   // The first chat adopts the full-featured main chat element. Once another panel has it (it is no longer a child of the shell), extra chats are self-contained.
   if (mainEl && mainEl.parentElement?.id === "shell" && (!ctx.params?.conversationId || ctx.params.conversationId === state.convId)) {
     mainEl.classList.remove("hidden");
-    mainEl.style.cssText = "display: flex !important; flex-direction: column; width: 100%; height: 100%; min-width: 0; min-height: 0; position: relative; background: var(--bg);";
+    mainEl.style.cssText = "display: flex !important; flex-direction: column; width: 100%; height: 100%; min-width: 0; min-height: 0; position: relative; background: transparent;";
     el.replaceChildren(mainEl);
 
     ctx.onClose(() => {

@@ -1,11 +1,12 @@
 // Tiles panel: responsive dashboard of live snapshot tiles from enabled apps.
 import { icon } from "/js/icons.js";
 import { on } from "/js/store.js";
+import { openPanel } from "/js/panel.js";   // not on ctx: destructuring it from there left every open button throwing
 
 export const wide = true;
 
 export async function render(el, ctx) {
-  const { h, api, openPanel, state: panelState, onClose } = ctx;
+  const { h, api, state: panelState, onClose } = ctx;
 
   el.replaceChildren();
 
@@ -64,6 +65,9 @@ export async function render(el, ctx) {
   // Drag and drop state for tile reordering
   let draggedTileId = null;
 
+  let dropTimer = null;
+  ctx.onClose(() => clearTimeout(dropTimer));
+
   function renderGrid() {
     grid.replaceChildren();
     tilePainters.clear();
@@ -112,7 +116,7 @@ export async function render(el, ctx) {
           const [moved] = orderedApps.splice(srcIdx, 1);
           orderedApps.splice(destIdx, 0, moved);
           panelState.set("tile_order", orderedApps.map((a) => a.id));
-          renderGrid();
+          dropTimer = setTimeout(renderGrid, 60);   // after the drag ends: rebuilding the grid mid-drag leaves Safari and Firefox unpainted
         }
       };
 

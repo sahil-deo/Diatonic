@@ -11,6 +11,7 @@ import { modelsPane } from "./settings-models.js";
 import { memoryPane } from "./settings-memory.js";
 import { accountsPane } from "./settings-accounts.js";
 import { keyboardPane } from "./settings-keyboard.js";
+import { layoutsPane, macrosPane } from "./settings-layouts.js";
 
 const dlg = () => $("#settings");
 let tab = "agent";
@@ -183,7 +184,7 @@ function automationPane() {
   ];
 }
 
-const TABS = [["agent", "Agent", agentPane], ["models", "Models", modelsPane], ["voice", "Voice", voicePane], ["accounts", "Accounts", accountsPane], ["apps", "Apps", appsPane], ["automation", "Automation", automationPane], ["actions", "Actions", actionsPane], ["memory", "Memory", memoryPane], ["interface", "Interface", interfacePane], ["keyboard", "Keyboard", keyboardPane]];
+const TABS = [["agent", "Agent", agentPane], ["models", "Models", modelsPane], ["voice", "Voice", voicePane], ["accounts", "Accounts", accountsPane], ["apps", "Apps", appsPane], ["automation", "Automation", automationPane], ["actions", "Actions", actionsPane], ["memory", "Memory", memoryPane], ["interface", "Interface", interfacePane], ["layouts", "Layouts", layoutsPane], ["macros", "Macros", macrosPane], ["keyboard", "Keyboard", keyboardPane]];
 
 export async function refreshApps() {
   state.apps = await api.get("/api/apps"); emit("apps"); if (dlg().open) renderPane();

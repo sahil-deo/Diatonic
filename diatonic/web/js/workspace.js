@@ -16,14 +16,20 @@ import {
   closePanel as treeClosePanel,
   split as treeSplit,
   moveTab as treeMoveTab,
+  swapPanels as treeSwapPanels,
   focusNeighbor as treeFocusNeighbor,
   allTabs,
   findTab,
   findStack,
 } from "./layout.js";
 
+/** Runs a change to the panel area once the browser has finished the drag. Rebuilding it inside the drop event removes the tab being
+ *  dragged mid-drag, and Safari and Firefox then skip the final repaint (panels look black) until the next click. */
+const afterDrag = (fn) => setTimeout(fn, 60);
+
 const STORAGE_KEY = "workspace:tree";
 let currentTree = null;
+let zoomedStackId = null;   // a view only: the saved tree is never changed by zooming
 const instances = new Map(); // tabId -> { tab, el, body, pctx, cleanups, mod }
 let hostElement = null;
 
@@ -215,7 +221,7 @@ function renderNode(node, tree) {
       const sizePct = (node.sizes[i] || (1 / node.children.length)) * 100;
       const childWrap = h("div", {
         class: "workspace-child-wrap",
-        style: `flex: 0 0 ${sizePct}%; overflow: hidden; display: flex; position: relative;`,
+        style: `flex: ${sizePct} 1 0px; min-width: 0; min-height: 0; overflow: hidden; display: flex; position: relative;`,   // a share of what the dividers leave, so the last panel is never pushed out of view
       }, renderNode(child, tree));
       el.append(childWrap);
 
@@ -223,9 +229,6 @@ function renderNode(node, tree) {
       if (i < node.children.length - 1) {
         const divider = h("div", {
           class: `workspace-divider workspace-divider-${node.dir}`,
-          style: isRow
-            ? "width: 5px; cursor: col-resize; background: var(--border); z-index: 10; flex: none;"
-            : "height: 5px; cursor: row-resize; background: var(--border); z-index: 10; flex: none;",
         });
 
         // Double click divider to equalize children sizes
@@ -239,7 +242,8 @@ function renderNode(node, tree) {
         divider.addEventListener("mousedown", (e) => {
           e.preventDefault();
           const startCoord = isRow ? e.clientX : e.clientY;
-          const totalSize = isRow ? el.clientWidth : el.clientHeight;
+          const gap = divider.getBoundingClientRect()[isRow ? "width" : "height"] * (node.children.length - 1);
+          const totalSize = (isRow ? el.clientWidth : el.clientHeight) - gap;
           const origSizes = [...node.sizes];
           let currentSizes = origSizes;
 
@@ -256,8 +260,8 @@ function renderNode(node, tree) {
             currentSizes = newSizes;
 
             const wraps = el.querySelectorAll(":scope > .workspace-child-wrap");
-            if (wraps[i]) wraps[i].style.flex = `0 0 ${newSizes[i] * 100}%`;
-            if (wraps[i + 1]) wraps[i + 1].style.flex = `0 0 ${newSizes[i + 1] * 100}%`;
+            if (wraps[i]) wraps[i].style.flex = `${newSizes[i] * 100} 1 0px`;
+            if (wraps[i + 1]) wraps[i + 1].style.flex = `${newSizes[i + 1] * 100} 1 0px`;
           };
 
           const onUp = () => {
@@ -277,10 +281,10 @@ function renderNode(node, tree) {
   }
 
   if (node.type === "stack") {
-    const stackEl = h("div", { class: "workspace-stack", style: "display: flex; flex-direction: column; width: 100%; height: 100%; overflow: hidden; background: var(--surface);" });
-    const tabbar = h("div", { class: "workspace-tabbar", style: "display: flex; align-items: center; border-bottom: 1px solid var(--border); background: var(--surface-2); min-height: 38px; height: 38px; padding: 0 6px; gap: 4px;" });
+    const stackEl = h("div", { class: "workspace-stack" });
+    const tabbar = h("div", { class: "workspace-tabbar" });
     const tabsEl = h("div", { class: "workspace-tabs" });   // scrolls on its own so the buttons on the right stay in reach
-    const content = h("div", { class: "workspace-stack-content", style: "flex: 1; min-height: 0; position: relative; overflow: hidden;" });
+    const content = h("div", { class: "workspace-stack-content" });
 
     node.tabs.forEach((tab, idx) => {
       const isActive = idx === node.active;
@@ -300,6 +304,7 @@ function renderNode(node, tree) {
         class: `workspace-tab ${isActive ? "active" : ""} ${tab.id === activeTabId ? "focused" : ""}`,
         title: appMeta.name || tab.app,
         draggable: "true",
+        oncontextmenu: async (e) => { e.preventDefault(); const tabEl = e.currentTarget; (await import("./panel-menu.js")).openPanelMenu(tabEl, tab.id, node.id); },
         "data-tab-id": tab.id,
         "data-stack-id": node.id,
         onclick: () => {
@@ -355,11 +360,7 @@ function renderNode(node, tree) {
           const raw = e.dataTransfer.getData("text/diatonic-tab");
           if (!raw) return;
           const { tabId: srcTabId } = JSON.parse(raw);
-          if (srcTabId && srcTabId !== tab.id) {
-            const currentTree = getTree();
-            const nextTree = moveTab(currentTree, srcTabId, node.id, idx);
-            applyTree(nextTree);
-          }
+          if (srcTabId && srcTabId !== tab.id) afterDrag(() => applyTree(treeMoveTab(getTree(), srcTabId, node.id, idx)));
         } catch {}
       };
 
@@ -367,6 +368,9 @@ function renderNode(node, tree) {
 
       // Mount and show/hide panel body
       mountTab(tab, content).then((inst) => {
+        // Loading is async. If another render replaced this one meanwhile (a split then a close, a move), `content` is gone:
+        // appending the body there would take it away from the panel that is on screen, which then stays empty until the next click.
+        if (!content.isConnected) return;
         if (!content.contains(inst.body)) content.append(inst.body);
         inst.body.hidden = !isActive;
         inst.body.style.width = "100%";
@@ -387,28 +391,12 @@ function renderNode(node, tree) {
         const raw = e.dataTransfer.getData("text/diatonic-tab");
         if (!raw) return;
         const { tabId: srcTabId } = JSON.parse(raw);
-        if (srcTabId) {
-          const currentTree = getTree();
-          const nextTree = moveTab(currentTree, srcTabId, node.id, -1);
-          applyTree(nextTree);
-        }
+        if (srcTabId) afterDrag(() => applyTree(treeMoveTab(getTree(), srcTabId, node.id, -1)));
       } catch {}
     };
 
     // Tabbar controls: Detach, Split side-by-side, Split stacked, and Add tab
     const activeTab = node.tabs[node.active];
-    const detachBtn = h("button", {
-      class: "icon-btn sm",
-      type: "button",
-      title: "Detach to separate window",
-      "aria-label": "Detach panel",
-      onclick: () => {
-        if (!activeTab) return;
-        window.open(`/?app=${encodeURIComponent(activeTab.app)}`, "_blank", "width=850,height=650");
-        closePanel(activeTab.id);
-      },
-      html: icon("popout", 14),
-    });
     const splitRightBtn = h("button", {
       class: "icon-btn sm",
       type: "button",
@@ -433,7 +421,10 @@ function renderNode(node, tree) {
       onclick: () => openPanel("launcher", {}, node.id),
       html: icon("plus", 14),
     });
-    tabbar.append(tabsEl, detachBtn, splitRightBtn, splitDownBtn, plusBtn);
+    const menuBtn = h("button", { class: "icon-btn sm", type: "button", title: "Panel menu: move, zoom, duplicate, pin, close", "aria-label": "Panel menu", html: icon("more", 14),
+      onclick: async (e) => { const btn = e.currentTarget; (await import("./panel-menu.js")).openPanelMenu(btn, activeTab?.id, node.id); } });
+    const restoreBtn = node.id === zoomedStackId && h("button", { class: "btn sm", type: "button", onclick: () => toggleZoom() }, "Show all panels");
+    tabbar.append(tabsEl, ...(restoreBtn ? [restoreBtn] : []), splitRightBtn, splitDownBtn, plusBtn, menuBtn);
     tabsEl.querySelector(".workspace-tab.active")?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
 
     // Edge drop zone indicator overlay on panel content
@@ -481,14 +472,13 @@ function renderNode(node, tree) {
         if (x < w * 0.2 || x > w * 0.8) dir = "row";
         else if (y < h * 0.2 || y > h * 0.8) dir = "col";
 
-        if (dir && srcTabId) {
-          const currentTree = getTree();
-          const found = findTab(currentTree, srcTabId);
+        if (dir && srcTabId) afterDrag(() => {
+          const found = findTab(getTree(), srcTabId);
           if (found && activeTab?.id && srcTabId !== activeTab.id) {
             splitPanel(activeTab.id, dir, found.tab.app, found.tab.params);
             closePanel(srcTabId);
           }
-        }
+        });
       } catch {}
     };
 
@@ -593,7 +583,9 @@ export function renderWorkspace(host, tree = null) {
     if (!liveTabIds.has(id)) disposeTab(id);
   }
 
-  hostElement.replaceChildren(renderNode(t.root, t));
+  const zoomed = zoomedStackId && findStack(t, zoomedStackId);
+  if (zoomedStackId && !zoomed) zoomedStackId = null;   // that panel was closed
+  hostElement.replaceChildren(renderNode(zoomed ? zoomed.stack : t.root, t));
 }
 
 export function openPanel(appId, params = {}, targetStackId = null) {
@@ -692,6 +684,54 @@ export function reopenClosedTab() {
   openPanel(entry.app, entry.params || {}, entry.stackId || null);
   if (typeof document !== "undefined") toast(`Reopened ${entry.app}`);
   return true;
+}
+
+function neighbour(tabId, dir) {
+  const tree = getTree();
+  const nid = treeFocusNeighbor(tree, tabId, dir);
+  return { tree, to: nid ? findTab(tree, nid) : null };
+}
+
+/** Which directions have another panel next to this one (the menu greys out the rest). */
+export function neighbourDirections(tabId) {
+  return ["left", "right", "up", "down"].filter((d) => neighbour(tabId, d).to);
+}
+
+/** Moves a tab into the panel beside it. */
+export function moveTabToward(tabId = activeTabId, dir = "right") {
+  const { tree, to } = neighbour(tabId, dir);
+  if (!to) return toast(`No panel to the ${dir}`);
+  applyTree(treeMoveTab(tree, tabId, to.stack.id));
+  focusTab(tabId);
+}
+
+/** Trades places with the panel beside it. */
+export function swapTabWith(tabId = activeTabId, dir = "right") {
+  const { tree, to } = neighbour(tabId, dir);
+  if (!to) return toast(`No panel to the ${dir}`);
+  applyTree(treeSwapPanels(tree, tabId, to.tab.id));
+  focusTab(tabId);
+}
+
+/** Opens another copy of a panel as a new tab beside it. */
+export function duplicateTab(tabId = activeTabId) {
+  const found = findTab(getTree(), tabId);
+  if (found) openPanel(found.tab.app, JSON.parse(JSON.stringify(found.tab.params || {})), found.stack.id);
+}
+
+export function closeOtherTabs(tabId = activeTabId) {
+  const found = findTab(getTree(), tabId);
+  if (found) for (const t of found.stack.tabs.map((x) => x.id)) if (t !== tabId) closePanel(t);
+}
+
+export const isZoomed = () => !!zoomedStackId;
+
+/** Shows one panel across the whole window, or brings the others back. The saved layout is untouched. */
+export function toggleZoom(tabId = activeTabId) {
+  const found = findTab(getTree(), tabId);
+  zoomedStackId = zoomedStackId ? null : found?.stack.id || null;
+  emit("panel");
+  renderWorkspace(hostElement);
 }
 
 export function getClosedTabsHistory() {

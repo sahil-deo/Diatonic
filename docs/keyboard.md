@@ -15,7 +15,7 @@ Everything the interface can do is a **command** with an id (`chat.new`, `panel.
 
 A thin outline shows which side has the keyboard; it appears once you use the keys and goes away on the next click.
 
-Leader keys: `n` new chat · `s` settings · `k` keyboard settings · `b` sidebar · `t` light/dark · `m` switch model · `h` / `l` focus the chat / the app panel · `x` close panel · `z` expand panel · `r` refresh panel · `a` then `f` files, `m` mail, `c` calendar, `n` notes, `t` to-dos, `g` GitHub, `s` terminal, `p` presentations, `j` jobs, `y` telemetry.
+Leader keys: `n` new chat · `s` settings · `k` keyboard settings · `b` sidebar · `t` light/dark · `m` switch model · `h` / `l` focus the chat / the app panel · `x` close panel · `z` expand panel · `r` refresh panel · `a` then `f` files, `m` mail, `c` calendar, `n` notes, `t` to-dos, `g` GitHub, `s` terminal, `p` presentations, `j` jobs, `y` telemetry · `w` then `v` / `s` split right / below, `t` reopen a closed tab, `z` zoom the panel, `d` duplicate it, `m` open its menu.
 
 **Vim-style keys** (Settings → Keyboard, or the command "Turn on vim-style keys"): `j` `k` move, Ctrl-D / Ctrl-U half a page, `g g` top, `G` bottom, `i` write a message.
 

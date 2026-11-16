@@ -3,6 +3,8 @@ import { $, h } from "./dom.js";
 import { icon } from "./icons.js";
 import { state, on } from "./store.js";
 import { api } from "./api.js";
+import { openPopover } from "./popover.js";
+import { openLayoutMenu } from "./layout-menu.js";
 
 const STORAGE_KEY = "diatonic.statusbar.pins";
 
@@ -172,6 +174,32 @@ function renderPin(pin) {
   return btn;
 }
 
+/** Pin or unpin apps from a list: the mouse way to what the palette's "Pin app" and right-click do. */
+async function openPinMenu() {
+  const { getAvailableApps } = await import("./palette.js");
+  const list = h("div", { class: "pm-list" });
+  const paint = () => {
+    const pinned = new Set(getPins().map((p) => p.appId));
+    list.replaceChildren(...getAvailableApps().filter((a) => a.id !== "chat").map((a) => h("button", {
+      type: "button", class: `pm-row${pinned.has(a.id) ? " on" : ""}`, "aria-pressed": String(pinned.has(a.id)),
+      onclick: () => { pinned.has(a.id) ? removePin(a.id) : addPin({ appId: a.id, label: a.name, icon: a.icon, zone: "center" }); paint(); pop?.place(); },
+    }, h("span", { html: icon(a.icon || "box", 15) }), h("span", { class: "pm-name" }, a.name), h("span", { class: "pm-check", html: pinned.has(a.id) ? icon("check", 14) : "" }))));
+  };
+  paint();
+  const pop = openPopover(addBtn, h("div", { class: "lm pm" }, h("div", { class: "lm-title" }, "Pin to the status bar"), list,
+    h("div", { class: "lm-empty" }, "Pinned apps open with one click. Hold ⌘ to open one beside the current panel.")), { align: "center" });
+  pop?.place();
+}
+
+// Kept as single elements so a menu anchored to one survives the status bar re-rendering.
+const addBtn = h("button", { type: "button", class: "sb-pin sb-add", title: "Pin or unpin apps", "aria-label": "Pin or unpin apps", html: icon("plus", 14), onclick: openPinMenu });
+const toolBtn = (id, ic, label, title, onclick) => h("button", { type: "button", id, class: "sb-tool", title, "aria-label": label, onclick }, h("span", { html: icon(ic, 15) }));
+const toolsEl = h("div", { class: "sb-tools" },
+  toolBtn("sb-layout", "layout", "Layouts", "Layouts: presets, saved layouts, undo", (e) => openLayoutMenu(e.currentTarget)),
+  toolBtn("sb-scratch", "edit", "Scratchpad", "Scratchpad", async () => (await import("./commands.js")).run("scratchpad.toggle")),
+  toolBtn("sb-cmds", "search", "Command bar", "Command bar (⌘K)", async () => (await import("./commands.js")).run("palette.open")),
+  toolBtn("sb-settings", "sliders", "Settings", "Settings (⌘,)", async () => (await import("./commands.js")).run("settings.open")));
+
 export function renderStatusBar() {
   const leftZone = $("#sb-left");
   const centerZone = $("#sb-center");
@@ -191,7 +219,7 @@ export function renderStatusBar() {
     ...Array.from(contributedItems.values()).map((it) => {
       return h("button", {
         type: "button",
-        class: "sb-pin contributed",
+        class: `sb-pin contributed ${it.cls || ""}`,
         onclick: it.onClick || (() => {}),
         title: it.title || it.label,
       },
@@ -201,7 +229,7 @@ export function renderStatusBar() {
       );
     }),
   ];
-  centerZone.replaceChildren(...centerElements);
+  centerZone.replaceChildren(...centerElements, addBtn);
 
   // Mount into left zone (pins container)
   let leftPinsEl = leftZone.querySelector(".sb-pins-left");
@@ -218,12 +246,20 @@ export function renderStatusBar() {
     rightZone.prepend(rightPinsEl);
   }
   rightPinsEl.replaceChildren(...rightPins.map(renderPin));
+  if (!toolsEl.isConnected) rightZone.prepend(toolsEl);
 }
 
 export function initStatusBar() {
   renderStatusBar();
   checkBadges();
 
+  let stopRec = null;
+  on("macro:recording", (ev) => {
+    stopRec?.(); stopRec = null;
+    if (!ev?.recording) return;
+    stopRec = contributeStatus({ id: "macro-rec", cls: "recording", icon: "stop", label: `Recording ${ev.name}: stop`, title: "Stop recording and save the macro",
+      onClick: async () => (await import("./macros.js")).saveRecorded() });
+  });
   on("config", renderStatusBar);
   on("panel", renderStatusBar);
   on("apps", renderStatusBar);

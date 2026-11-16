@@ -300,7 +300,7 @@ export function openPalette(opts = {}) {
         h("span", { html: icon(it.icon || "command", 16) }),
         h("span", { class: "pal-label" }, mark(it.label, it.hits)),
         q.trim() && it.group && h("span", { class: "pal-tag" }, it.group),
-        it.hint && h("span", { class: "k" }, it.hint)
+        it.hint && h("span", { class: /[⌘⇧⌥⌃↵⎋]/.test(it.hint) ? "k key" : "k" }, it.hint)
       ));
     });
     list_.replaceChildren(...(rows.length ? rows : [h("div", { class: "p-empty" }, "No matches")]));

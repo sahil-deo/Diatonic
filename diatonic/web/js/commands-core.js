@@ -8,9 +8,10 @@ import { register, addProvider, labelOf, get } from "./commands.js";
 import { openPanel, closePanel, refreshPanel, toggleFull } from "./panel.js";
 import { openSettings } from "./settings.js";
 import { openPalette } from "./palette.js";
+import { openLayoutMenu } from "./layout-menu.js";
 import { invoke as invokeAction } from "./actions.js";
 import { getMacros, runMacro, startRecording, isRecording } from "./macros.js";
-import { applyTree, getLayouts, switchLayout, saveCurrentLayout, deleteLayout, undoLayout, redoLayout } from "./workspace.js";
+import { applyTree, toggleZoom, duplicateTab, moveTabToward, swapTabWith, closeOtherTabs, getActiveTabId, getLayouts, switchLayout, saveCurrentLayout, deleteLayout, undoLayout, redoLayout } from "./workspace.js";
 import { hintFor, keymap, userKeymap, saveKeymap } from "./keymap.js";
 import { registerNav, setRegion, markKeyboard } from "./nav.js";
 import { getOpenTabs, focusTab, applyPreset } from "./workspace.js";
@@ -20,7 +21,8 @@ const panelApps = () => [
   ...[...state.apps, ...(state.modApps || [])].filter((a) => a.enabled && a.panel)
 ];
 const SETTINGS = [["voice", "Voice settings", "mic"], ["memory", "Memory: what the agent remembers", "brain"], ["interface", "Customize the interface", "sliders"],
-  ["actions", "Edit saved prompts and buttons", "command"], ["keyboard", "Keyboard shortcuts", "command"]];
+  ["actions", "Edit saved prompts and buttons", "command"], ["keyboard", "Keyboard shortcuts", "command"],
+  ["layouts", "Layouts: presets and saved layouts", "layout"], ["macros", "Macros: record and run", "activity"]];
 
 /** h: functions that live in main.js ({toggleSidebar, setSidebar, setTheme, setSpeak, openModelMenu, focusComposer}). */
 export function registerCore(h) {
@@ -101,9 +103,9 @@ export function registerCore(h) {
       run: (a) => { if (a?.tree) applyTree(a.tree); } },
     { id: "macro.record.start", title: "Start recording macro", group: "Macros", icon: "activity",
       when: () => !isRecording(),
-      run: () => {
-        const name = prompt("Macro name:") || "New Macro";
-        startRecording(name);
+      run: (a) => {
+        if (a?.name) return startRecording(a.name);
+        openSettings("macros");   // a name box and a Start button, no browser prompt
       } },
     { id: "macro.record.stop", title: "Stop recording macro", group: "Macros", icon: "stop",
       when: () => isRecording(),
@@ -113,8 +115,8 @@ export function registerCore(h) {
       } },
     { id: "layout.save", title: "Save current layout", group: "Layout", icon: "sliders",
       run: (a) => {
-        const name = a?.name || prompt("Layout name:") || "Layout";
-        return saveCurrentLayout(name);
+        if (a?.name) return saveCurrentLayout(a.name);
+        openLayoutMenu(undefined, { focusSave: true });   // the menu has a name box: no browser prompt
       } },
     { id: "layout.switch", title: "Switch layout", group: "Layout", icon: "sliders",
       run: (a) => {
@@ -127,6 +129,19 @@ export function registerCore(h) {
         if (!getLayouts().length) { toast("No saved layouts to delete", "error"); return false; }
         openPalette({ initialQuery: "Delete layout" });   // a list of your layouts, one per row
       } },
+    { id: "panel.menu", title: "Panel menu", group: "Layout", icon: "more", run: async () => { const el = document.querySelector(`[data-tab-id="${getActiveTabId()}"]`); if (el) (await import("./panel-menu.js")).openPanelMenu(el, getActiveTabId()); } },
+    { id: "panel.zoom", title: "Zoom the panel to fill the window (again to undo)", group: "Layout", icon: "maximize", run: () => toggleZoom() },
+    { id: "panel.duplicate", title: "Duplicate panel", group: "Layout", icon: "plus", run: () => duplicateTab() },
+    { id: "tab.close_others", title: "Close other tabs in this panel", group: "Layout", icon: "x", run: () => closeOtherTabs() },
+    { id: "panel.move.left", title: "Move panel left", group: "Layout", icon: "chevron", run: () => moveTabToward(undefined, "left") },
+    { id: "panel.swap.left", title: "Swap with the panel to the left", group: "Layout", icon: "chevron", run: () => swapTabWith(undefined, "left") },
+    { id: "panel.move.right", title: "Move panel right", group: "Layout", icon: "chevron", run: () => moveTabToward(undefined, "right") },
+    { id: "panel.swap.right", title: "Swap with the panel to the right", group: "Layout", icon: "chevron", run: () => swapTabWith(undefined, "right") },
+    { id: "panel.move.up", title: "Move panel up", group: "Layout", icon: "chevron", run: () => moveTabToward(undefined, "up") },
+    { id: "panel.swap.up", title: "Swap with the panel to the up", group: "Layout", icon: "chevron", run: () => swapTabWith(undefined, "up") },
+    { id: "panel.move.down", title: "Move panel down", group: "Layout", icon: "chevron", run: () => moveTabToward(undefined, "down") },
+    { id: "panel.swap.down", title: "Swap with the panel to the down", group: "Layout", icon: "chevron", run: () => swapTabWith(undefined, "down") },
+    { id: "layout.menu", title: "Layouts menu", group: "Layout", icon: "layout", run: () => openLayoutMenu() },
     { id: "layout.undo", title: "Undo layout change", group: "Layouts", icon: "refresh", run: () => undoLayout() },
     { id: "layout.redo", title: "Redo layout change", group: "Layouts", icon: "refresh", run: () => redoLayout() },
   ].forEach(register);

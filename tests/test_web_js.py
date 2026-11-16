@@ -13,3 +13,89 @@ def test_node_suites_pass():
     files = sorted(str(p) for p in JS.glob("*.test.mjs"))
     r = subprocess.run(["node", "--test", *files], capture_output=True, text=True, timeout=120)
     assert r.returncode == 0, r.stdout[-3000:] + r.stderr[-1000:]
+
+
+def test_layouts_and_macros_have_a_mouse_path_and_no_browser_prompt():
+    """Everything a command does must also be reachable by mouse: Settings has the pages and the core commands ask in the page, not with prompt()."""
+    import re
+    web = Path(__file__).parent.parent / "diatonic" / "web" / "js"
+    core = (web / "commands-core.js").read_text(encoding="utf-8")
+    assert not re.search(r"(?<![.\w])prompt\(", core), "a core command opens a browser prompt: use a menu or Settings instead"
+    tabs = (web / "settings.js").read_text(encoding="utf-8")
+    assert '["layouts", "Layouts"' in tabs and '["macros", "Macros"' in tabs
+    bar = (web / "statusbar.js").read_text(encoding="utf-8")
+    assert 'id: "sb-layout"' in bar or '"sb-layout"' in bar and "sb-add" in bar     # the layout menu button and the pin button
+
+
+def test_every_panel_command_has_a_menu_entry():
+    """The panel menu is the mouse path for the panel commands; if one is added to the commands it must be added there too."""
+    web = Path(__file__).parent.parent / "diatonic" / "web" / "js"
+    core = (web / "commands-core.js").read_text(encoding="utf-8")
+    menu = (web / "panel-menu.js").read_text(encoding="utf-8")
+    for cmd, call in [("panel.zoom", "toggleZoom"), ("panel.duplicate", "duplicateTab"), ("panel.move.left", "moveTabToward"), ("panel.swap.left", "swapTabWith"), ("tab.close_others", "closeOtherTabs")]:
+        assert f'"{cmd}"' in core and call in menu, f"{cmd} has no entry in the panel menu"
+
+
+def test_rebuilt_panel_containers_have_no_entrance_animation():
+    """The panel area is rebuilt on every move and click; a fade-in that stalls leaves a panel invisible (it looked black) until the next event."""
+    import re
+    css = (Path(__file__).parent.parent / "diatonic" / "web" / "css" / "app.css").read_text(encoding="utf-8")
+    for sel in (".workspace-stack", ".workspace-tabbar", ".workspace-panel-body", ".workspace-stack-content"):
+        for rule in re.findall(re.escape(sel) + r"\s*\{([^}]*)\}", css):
+            assert "animation" not in rule, f"{sel} has an animation"
+
+
+def test_drag_and_drop_does_not_rebuild_the_page_inside_the_drop_event():
+    """Rebuilding the panel area inside `drop` removes the dragged tab mid-drag; Safari and Firefox then leave the page unpainted (black) until the next click."""
+    import re
+    web = Path(__file__).parent.parent / "diatonic" / "web"
+    ws = (web / "js" / "workspace.js").read_text(encoding="utf-8")
+    for body in re.findall(r"\.ondrop = \(e\) => \{(.*?)\n    \};", ws, re.S):
+        if "text/diatonic-tab" in body:
+            assert "afterDrag(" in body and "applyTree(" not in body.replace("afterDrag(() => applyTree(", ""), "a tab drop changes the layout before the drag has ended"
+    tiles = (web / "apps" / "tiles.js").read_text(encoding="utf-8")
+    drop = tiles[tiles.index("card.ondrop"):tiles.index("// Header")]
+    assert "renderGrid();" not in drop, "tile drop rebuilds the grid inside the drop event"
+    css = (web / "css" / "app.css").read_text(encoding="utf-8")
+    for sel in (".workspace-stack", ".rail, .sidebar", ".statusbar", ".composer, .chat-panel-composer"):
+        rule = css[css.index(sel + " {") if sel + " {" in css else css.index(sel):].split("}")[0]
+        assert "backdrop-filter" not in rule, f"{sel} blurs what is behind it; use blur only on floating things"
+    assert "background-attachment: fixed" not in css
+
+
+def test_workspace_only_calls_functions_it_has():
+    """The tab drop handlers called moveTab() while the file imports it as treeMoveTab; a try/catch hid the ReferenceError and tab drops silently did nothing."""
+    import re
+    ws = (Path(__file__).parent.parent / "diatonic" / "web" / "js" / "workspace.js").read_text(encoding="utf-8")
+    bare = re.findall(r"(?<![\w.])moveTab\(", ws)
+    assert not bare, "workspace.js calls moveTab(), which is only imported as treeMoveTab"
+
+
+def test_a_panel_loading_late_is_not_attached_to_a_replaced_container():
+    """Splitting then closing renders the panel area twice while a panel is still loading; the first render's callback must not pull the panel body into its discarded container (the moved panel stayed empty until the next click)."""
+    ws = (Path(__file__).parent.parent / "diatonic" / "web" / "js" / "workspace.js").read_text(encoding="utf-8")
+    after = ws[ws.index("mountTab(tab, content).then("):]
+    assert "content.isConnected" in after.split("content.append(inst.body)")[0], "the mount callback must check its container is still on the page"
+
+
+def test_split_children_share_the_space_the_dividers_leave():
+    """Children sized as fixed percentages plus 8px dividers add up to more than 100%, and overflow:hidden then cuts off the last panel (its right or bottom edge)."""
+    ws = (Path(__file__).parent.parent / "diatonic" / "web" / "js" / "workspace.js").read_text(encoding="utf-8")
+    assert "flex: 0 0 ${" not in ws, "a panel is sized as a fixed share of the whole, so dividers push the last one out of view"
+    assert ".style.flex = `${newSizes[i] * 100} 1 0px`" in ws
+
+
+def test_panels_only_take_things_the_panel_context_provides():
+    """tiles.js took `openPanel` from ctx, which has no such member, so every Home tile's open button threw and nothing opened."""
+    import re
+    web = Path(__file__).parent.parent / "diatonic" / "web"
+    src = (web / "js" / "panel.js").read_text(encoding="utf-8")
+    body = src[src.index("  return {\n    api, h, esc, toast,"):]
+    body = body[:body.index("\n  };")]
+    provided = set(re.findall(r"^    (\w+)\s*[:,(]", body, re.M)) | set(re.findall(r"\b(\w+),", body.split("\n")[1]))
+    assert {"api", "h", "toast", "reload", "state", "onClose", "prompt", "replaceTab"} <= provided, provided
+    for f in sorted((web / "apps").glob("*.js")):
+        for names in re.findall(r"const \{([^}]*)\} = ctx;", f.read_text(encoding="utf-8")):
+            for part in names.split(","):
+                key = part.split(":")[0].strip()
+                assert key in provided, f"{f.name} takes `{key}` from ctx, which does not provide it"

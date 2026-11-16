@@ -47,6 +47,8 @@ const P = {
   presentation: '<path d="M2 3h20v14H2zM8 21h8M12 17v4"/>',
   shield: '<path d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5l-8-3z"/>',
   "split-v": '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 3v18"/>',
+  more: '<circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/>',
+  layout: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M9 12h12"/>',
   "split-h": '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 12h18"/>',
   popout: '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14 21 3"/>',
 };
