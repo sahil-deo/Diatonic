@@ -30,6 +30,44 @@ const afterDrag = (fn) => setTimeout(fn, 60);
 const STORAGE_KEY = "workspace:tree";
 let currentTree = null;
 let zoomedStackId = null;   // a view only: the saved tree is never changed by zooming
+
+// Panel bodies live in their own layer and are only positioned over their stack's empty slot; a render never moves or re-attaches them.
+// Detaching an <iframe> (a PDF, a sandbox) reloads it, so rebuilding the tree around the bodies sent a PDF back to page 1 on every click.
+let treeEl = null, layerEl = null, syncRaf = 0, pendingMounts = [];
+const slots = new Map();   // tabId -> { el, active }: where that tab's body goes on screen right now
+const slotWatcher = new ResizeObserver(() => scheduleSync());
+
+function ensureLayers() {
+  if (treeEl && treeEl.parentElement === hostElement) return;
+  treeEl = h("div", { class: "workspace-tree" });
+  layerEl = h("div", { class: "workspace-layer" });
+  hostElement.replaceChildren(treeEl, layerEl);
+  slotWatcher.observe(hostElement);
+  addEventListener("resize", scheduleSync);
+  const endDrag = () => hostElement?.classList.remove("tab-dragging");
+  addEventListener("dragend", endDrag, true);
+  addEventListener("drop", endDrag, true);
+}
+
+function scheduleSync() { if (!syncRaf) syncRaf = requestAnimationFrame(syncBodies); }
+
+/** Puts every panel body over its slot (or hides it when its tab is not showing). Cheap: no DOM is moved. */
+function syncBodies() {
+  syncRaf = 0;
+  if (!hostElement) return;
+  const hr = hostElement.getBoundingClientRect();
+  for (const [id, inst] of instances) {
+    const slot = slots.get(id);
+    if (!slot || !slot.active || !slot.el.isConnected) { inst.body.classList.add("is-away"); continue; }
+    const r = slot.el.getBoundingClientRect();
+    const st = inst.body.style;
+    st.left = `${r.left - hr.left}px`; st.top = `${r.top - hr.top}px`; st.width = `${r.width}px`; st.height = `${r.height}px`;
+    st.paddingInline = r.width < 80 ? "0" : "";   // a body cannot be narrower than its padding, and it is no longer clipped by the stack
+    st.paddingBlock = r.height < 80 ? "0" : "";
+    inst.body.classList.remove("is-away");
+  }
+  for (const el of [...layerEl.children]) if (!instances.has(el.dataset.bodyFor)) el.remove();   // a body whose panel is gone
+}
 const instances = new Map(); // tabId -> { tab, el, body, pctx, cleanups, mod }
 let hostElement = null;
 
@@ -120,12 +158,12 @@ export async function reloadTab(tabId, reimport = false) {
   }
 }
 
-async function mountTab(tab, container = null) {
+async function mountTab(tab) {
   let inst = instances.get(tab.id);
   if (!inst) {
     const isFlush = tab.app === "shell" || tab.app === "presentations";
-    const body = h("div", { class: `panel-body workspace-panel-body ${isFlush ? "flush" : ""}` });
-    if (container && !container.contains(body)) container.append(body);
+    const body = h("div", { class: `panel-body workspace-panel-body ${isFlush ? "flush" : ""}`, "data-body-for": tab.id });
+    layerEl.append(body);
     const appMeta = tab.app === "chat"
       ? { id: "chat", name: "Chat", icon: "chat" }
       : tab.app === "launcher"
@@ -142,6 +180,7 @@ async function mountTab(tab, container = null) {
     const pctx = panelContext(appObj, body, tab.params);
     inst = { tab, body, pctx, cleanups: [], mod: null };
     instances.set(tab.id, inst);
+    syncBodies();   // give it its size before the panel renders (some measure themselves)
 
     try {
       let mod;
@@ -179,8 +218,8 @@ async function mountTab(tab, container = null) {
       }
       body.replaceChildren(h("div", { class: "p-empty" }, `Couldn't load ${tab.app}: ${e.message}`));
     }
-  } else if (container && !container.contains(inst.body)) {
-    container.append(inst.body);
+  } else if (!layerEl.contains(inst.body)) {
+    layerEl.append(inst.body);
   }
   return inst;
 }
@@ -192,6 +231,7 @@ export function disposeTab(tabId) {
   inst.cleanups.forEach((f) => { try { f(); } catch {} });
   inst.body.remove();
   instances.delete(tabId);
+  slots.delete(tabId);
 }
 
 function renderNode(node, tree) {
@@ -262,6 +302,7 @@ function renderNode(node, tree) {
             const wraps = el.querySelectorAll(":scope > .workspace-child-wrap");
             if (wraps[i]) wraps[i].style.flex = `${newSizes[i] * 100} 1 0px`;
             if (wraps[i + 1]) wraps[i + 1].style.flex = `${newSizes[i + 1] * 100} 1 0px`;
+            syncBodies();
           };
 
           const onUp = () => {
@@ -334,6 +375,7 @@ function renderNode(node, tree) {
         e.dataTransfer.setData("text/diatonic-tab", JSON.stringify({ tabId: tab.id, stackId: node.id }));
         e.dataTransfer.effectAllowed = "move";
         tabBtn.classList.add("dragging");
+        hostElement?.classList.add("tab-dragging");   // lets the drop zones, which sit under the panel bodies, receive the drag
       };
 
       tabBtn.ondragend = () => {
@@ -366,16 +408,10 @@ function renderNode(node, tree) {
 
       tabsEl.append(tabBtn);
 
-      // Mount and show/hide panel body
-      mountTab(tab, content).then((inst) => {
-        // Loading is async. If another render replaced this one meanwhile (a split then a close, a move), `content` is gone:
-        // appending the body there would take it away from the panel that is on screen, which then stays empty until the next click.
-        if (!content.isConnected) return;
-        if (!content.contains(inst.body)) content.append(inst.body);
-        inst.body.hidden = !isActive;
-        inst.body.style.width = "100%";
-        inst.body.style.height = "100%";
-      });
+      // The body is not placed here: this empty slot only says where it goes (see syncBodies)
+      slots.set(tab.id, { el: content, active: isActive });
+      slotWatcher.observe(content);
+      pendingMounts.push(tab);
     });
 
     tabbar.ondragover = (e) => {
@@ -585,7 +621,12 @@ export function renderWorkspace(host, tree = null) {
 
   const zoomed = zoomedStackId && findStack(t, zoomedStackId);
   if (zoomedStackId && !zoomed) zoomedStackId = null;   // that panel was closed
-  hostElement.replaceChildren(renderNode(zoomed ? zoomed.stack : t.root, t));
+  ensureLayers();
+  slots.clear(); slotWatcher.disconnect(); slotWatcher.observe(hostElement); pendingMounts = [];
+  treeEl.replaceChildren(renderNode(zoomed ? zoomed.stack : t.root, t));
+  const toMount = pendingMounts; pendingMounts = [];
+  syncBodies();   // panels already open move to their new slots without being touched
+  for (const tab of toMount) mountTab(tab).then(scheduleSync);
 }
 
 export function openPanel(appId, params = {}, targetStackId = null) {
@@ -747,10 +788,7 @@ export function applyTree(tree, recordHistory = true) {
   }
   const nextTabs = allTabs(tree);
   for (const [id, inst] of instances.entries()) {
-    if (!nextTabs.some((t) => t.id === id)) {
-      inst.pctx?.dispose?.();
-      instances.delete(id);
-    }
+    if (!nextTabs.some((t) => t.id === id)) disposeTab(id);
   }
   activeTabId = nextTabs[0]?.id || null;
   state.panelApp = nextTabs[0]?.app || null;

@@ -71,11 +71,19 @@ def test_workspace_only_calls_functions_it_has():
     assert not bare, "workspace.js calls moveTab(), which is only imported as treeMoveTab"
 
 
-def test_a_panel_loading_late_is_not_attached_to_a_replaced_container():
-    """Splitting then closing renders the panel area twice while a panel is still loading; the first render's callback must not pull the panel body into its discarded container (the moved panel stayed empty until the next click)."""
+def test_panel_bodies_are_never_moved_by_a_render():
+    """A PDF is an <iframe>, and detaching an iframe reloads it (back to page 1). Rendering the layout must only position bodies, never re-attach them."""
     ws = (Path(__file__).parent.parent / "diatonic" / "web" / "js" / "workspace.js").read_text(encoding="utf-8")
-    after = ws[ws.index("mountTab(tab, content).then("):]
-    assert "content.isConnected" in after.split("content.append(inst.body)")[0], "the mount callback must check its container is still on the page"
+    assert "layerEl.append(body)" in ws, "bodies must be created in their own layer"
+    assert "content.append(inst.body)" not in ws and "container.append(" not in ws, "a body is appended into a stack: the next render would re-attach it and reload any iframe"
+    render = ws[ws.index("export function renderWorkspace"):]
+    render = render[:render.index("\n}\n")]
+    assert "slots.clear()" in render and "syncBodies()" in render
+    apply = ws[ws.index("export function applyTree"):]
+    apply = apply[:apply.index("\n}\n")]
+    assert "disposeTab(id)" in apply and "instances.delete(id)" not in apply, "applyTree must remove the body of a panel it drops (a leftover body stays on screen)"
+    assert "!instances.has(el.dataset.bodyFor)" in ws, "orphaned bodies must be swept from the layer"
+
 
 
 def test_split_children_share_the_space_the_dividers_leave():

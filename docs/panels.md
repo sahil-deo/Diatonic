@@ -31,6 +31,10 @@ Today only one panel is open at a time, so a module can keep its state in `let` 
 
 Audit: all clean (2026-11-16). Every built-in panel keeps its state per instance (on `ctx`, inside `render`, or in a WeakMap keyed by `ctx`). Checked by `node scripts/check_module_state.mjs` (0 lines found).
 
+## Where a panel's content lives
+
+A panel's content (its `el`) is **not** a child of the stack you see: it lives in a separate layer over the window and is only positioned on top of its stack's empty slot (`syncBodies` in `js/workspace.js`). That is deliberate. Re-attaching an element that contains an `<iframe>` reloads it, so a PDF in the Files panel went back to page 1 whenever the layout was re-rendered (a click, a new panel, a move). Because the content is never moved, a panel keeps its state, scroll position and any iframe through all of that. Consequences: do not rely on the content being inside `.workspace-stack` in CSS selectors, and a new layout preset still opens fresh panels (the old ones are closed), so it does reset them.
+
 ## Chat panels
 
 The first chat panel adopts the main chat (`#main`: streaming, approval cards, tool output, the home tiles). Any further chat panel is self-contained: it keeps its own conversation id in `ctx.state` (`cid`), sends with its own id, shows "Working…" while its run is active and loads the finished reply. It does not stream, show approval cards or tool output; use the main chat for those. It never touches `state.convId`, which belongs to the main chat. Full streaming in every chat needs `js/chat.js` split away from its single message list (still open, see `todo.md`).

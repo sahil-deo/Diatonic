@@ -1027,3 +1027,11 @@ dialog.modal[open] { animation: glass-in .2s var(--ease) both; }
 .pm-arrow:hover:not(:disabled) { background: var(--surface-3); color: var(--accent); }
 .pm-arrow:disabled { opacity: .3; cursor: default; }
 .pm-arrow-left svg { transform: rotate(180deg); } .pm-arrow-up svg { transform: rotate(-90deg); } .pm-arrow-down svg { transform: rotate(90deg); }
+
+/* panel bodies live in a layer over the stacks (so a re-render never re-attaches them: that reloads a PDF iframe to page 1) */
+.shell.shell-tree .workspace-host { position: relative; }
+.workspace-tree { flex: 1; min-width: 0; min-height: 0; display: flex; }
+.workspace-layer { position: absolute; inset: 0; z-index: 1; pointer-events: none; overflow: hidden; }
+.workspace-layer > .workspace-panel-body { position: absolute; pointer-events: auto; border-radius: 0 0 calc(var(--radius) * var(--rs, 1)) calc(var(--radius) * var(--rs, 1)); }
+.workspace-layer > .workspace-panel-body.is-away { visibility: hidden; pointer-events: none; }
+.workspace-host.tab-dragging .workspace-panel-body { pointer-events: none; opacity: .3; }
