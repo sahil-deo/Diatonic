@@ -34,6 +34,8 @@ Open **Files** (folder icon in the left rail) and share one or more folders (sug
 
 ## Web
 
+![Web search: clean text search results and page reader](images/Web%20Search.png)
+
 Search the web and read pages as plain text. The agent has `web_search` (titles, links, snippets) and `web_read` (a page's text and links, cut to the page size limit in Settings → Web). The panel does the same for you: type words to search, or paste an address to open it.
 
 - **No browser:** pages are fetched and reduced to text. Pages that need JavaScript or a login come back empty or refused.
@@ -45,6 +47,9 @@ Search the web and read pages as plain text. The agent has `web_search` (titles,
 Say what you want in plain words ("remind me to call mom tomorrow at 9", "every weekday at 8 give me my to-do briefing", "add a to-do to send the invoice by Friday", "jot down that the wifi password is on the fridge") or use the panels in the left rail.
 
 **Scheduler** (`clock` icon)
+
+![Scheduler: reminders, recurring prompt jobs, and script jobs](images/Scheduler.png)
+
 - **Reminders:** a notification at a time you give. Times are parsed by code, not by the model: `in 20 minutes`, `tomorrow 9am`, `friday 5pm`, `2026-11-20 15:00`, `every weekday at 9`, `every 30 minutes`, `monthly on the 1st at 8am` or a 5-field cron like `0 9 * * 1-5`. A bare hour without am/pm is read as pm from 1 to 7 ("at 5" means 5 pm) 8 to 11 as am, and 12 as noon; when that rule was used the agent tells you the exact time it set, so say "7am" if you meant the morning.
 - **Prompt jobs:** run an AI prompt on a schedule in their own chat (named `⏰ <job> · <time>`) and notify you with the result. They are **read-only**: the tools that change things aren't even offered. In the panel you can tick *Allow it to propose changes*; writes then still need approval, a notification ("A scheduled job needs your approval") points you to the waiting card, and with nobody there it times out and is denied. Only the UI can grant this, never the agent. With shell access on, a prompt job may run read-only commands plus the exact commands listed under *Commands it may run unattended* (see [Terminal and shell access](#terminal-and-shell-access)).
 - **Script jobs:** run a shell command on a schedule (timeout, killed as a whole process group, minimal environment, output captured, notification on failure). **Off by default**: turn them on in Settings → Automation. If the agent proposes one you get an approval card with the exact command.
@@ -59,9 +64,13 @@ Say what you want in plain words ("remind me to call mom tomorrow at 9", "every 
 
 ## Home screen
 
-![Home screen with tiles for mail, calendar, telemetry and GitHub](images/Home.png)
+![Home screen: live tiles for telemetry, to-dos, GitHub and notes](images/Agent.png)
 
 An empty chat shows live tiles from your apps: to-dos, calendar, latest mail, upcoming reminders and jobs, GitHub issues assigned to you, a telemetry summary, recent notes, and the apps you built (progress for data apps, the latest values for API apps). Click an item to open it in its app. **Customize** (below the tiles) picks the layout, 4 small, 2 stacked, 2 side by side or 1 big (or the old suggestion chips), and the app in each tile; or ask the agent ("put my mail and GitHub issues side by side on the home screen"). Tiles refresh every two minutes and when their app's data changes; mail and GitHub are cached for a minute. Any app can offer a tile by implementing `snapshot(n)`.
+
+![New Tab: app launcher and recent conversations](images/Home.png)
+
+The **New Tab** page (or the Home icon) provides a fast launcher across all built-in apps, custom data apps, and recent conversations with quick search filtering.
 
 ## Terminal and shell access
 

@@ -45,7 +45,11 @@ A panel body is wrapped in `.panel-body`, whose generic form rules (border, back
 
 ## Layouts
 
+![Multi-panel workspace layout with split panes and tabs](images/Multi%20Panel.png)
+
 A **layout** is how the panels are arranged: the tree of splits and tabs and the app in each. There is one word and one way to keep one:
+
+![Layout presets and saved arrangements](images/Layouts.png)
 
 - **By mouse:** the layout button at the bottom right of the window opens the Layouts menu: presets as thumbnails, a name box to save the current layout, your saved layouts (click to switch, trash icon to delete, asked in place), undo, redo and reopen a closed tab. Settings → Layouts shows the same. Everything below also has a command.
 - Arrange it with presets (`layout.preset.*`), splits, drag and drop, or the agent (`ui_arrange_panels`); `layout.undo` and `layout.redo` step through changes.

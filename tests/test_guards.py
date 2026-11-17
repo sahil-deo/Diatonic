@@ -354,3 +354,42 @@ def test_real_loops_are_still_caught():
     assert detect_loop("Here is the update. " + long + long) is not None                    # a long sentence straight again
     cyc = "Checking your calendar for tomorrow now. Looking at all accounts to be sure. "
     assert detect_loop(cyc * 3 + "Checking") is not None
+
+
+def test_text_rephrase_task_is_not_nudged_even_with_app_keywords(env, monkeypatch):
+    ctx, _, _, db = env
+    from diatonic.apps.registry import Registry
+    reg = Registry(ctx).discover()
+    prompt = ("I mostly stick to the London session. It's easier to build a routine, and it helps me avoid taking "
+              "unnecessary trades. Trading all day can get exhausting pretty quickly\n"
+              "rephrase this without changing the core content")
+    rephrased = ("I primarily focus on the London session because it's easier to establish a consistent routine, "
+                 "which helps me avoid unnecessary trades. Trading throughout the day can get exhausting quickly.")
+    p = ScriptedProvider([[{"content": rephrased}]])
+    monkeypatch.setattr(loop, "make_provider", lambda c: p)
+    conv = db.create_conversation()
+    async def go():
+        return [e async for e in loop.run_agent(ctx, reg, conv["id"], prompt)]
+    ev = asyncio.run(go())
+    assert len(p.seen) == 1
+    assert [e for e in ev if e["type"] == "message"][0]["text"] == rephrased
+    assert not any(e["type"] == "rewrite" for e in ev)
+
+
+def test_nudged_defensive_reply_restores_original_draft(env, monkeypatch):
+    ctx, _, _, db = env
+    from diatonic.apps.registry import Registry
+    reg = Registry(ctx).discover()
+    prompt = "terminal status"
+    draft = "Here is your terminal information."
+    defense = "No tool call was needed because this is a straightforward task. The original message has been accurately rephrased."
+    p = ScriptedProvider([[{"content": draft}], [{"content": defense}]])
+    monkeypatch.setattr(loop, "make_provider", lambda c: p)
+    conv = db.create_conversation()
+    async def go():
+        return [e async for e in loop.run_agent(ctx, reg, conv["id"], prompt)]
+    ev = asyncio.run(go())
+    assert [e for e in ev if e["type"] == "message"][0]["text"] == draft
+
+
+

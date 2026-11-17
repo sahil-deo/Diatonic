@@ -58,6 +58,20 @@ def is_navigation(text: str) -> bool:
     return bool(_NAV.match(text)) and not _NAV_NOT.search(text)
 
 
+# "rephrase this", "proofread this email", "translate this to French": textual tasks do not expect tools.
+_TEXT_TASK = re.compile(
+    r"\b(?:rephrase|rewrite|paraphrase|reword|proofread|correct (?:the )?grammar|fix (?:the )?grammar|"
+    r"translate|summarize (?:this|the following)|shorten (?:this|the)|expand on (?:this|the)|"
+    r"polish (?:this|the)|make (?:this|the) (?:more|sound)|edit this)\b",
+    re.I,
+)
+_ACTION_AND = re.compile(r"\b(?:and|then)\s+(?:send|save|create|run|schedule|add|delete|remove|open)\b", re.I)
+
+
+def is_text_task(text: str) -> bool:
+    return bool(_TEXT_TASK.search(text)) and not bool(_ACTION_AND.search(text))
+
+
 # "summarize this", "reply to it", "delete that one": the user means what is open on their screen.
 _DEICTIC = re.compile(r"\b(?:this|that|it|these|those|here|current(?:ly)?|opened|on (?:the )?screen)\b", re.I)
 
@@ -148,7 +162,8 @@ def select_tools(registry, text: str, prior_apps: set[str], force: set[str] | fr
         if len(json.dumps([tool_spec(a, t) for a, t in every.values()])) <= FALLBACK_ALL_CHARS:
             return every, False          # few tools in total: offering them all is cheap and safest
         return rank_tools(registry, text), False
-    return {f"{a.id}_{t.name}": (a, t) for a in chosen for t in a.tools_for(text, prior_tools)}, bool(named)
+    return {f"{a.id}_{t.name}": (a, t) for a in chosen for t in a.tools_for(text, prior_tools)}, bool(named) and not is_text_task(text)
+
 
 
 TRACE_TURNS = 1       # how many of the most recent tool-using answers keep their tool trace in context
@@ -459,7 +474,7 @@ async def run_agent(ctx, registry, conv_id: str, text: str, *, speak: bool = Fal
         on_screen = ""
     if on_screen and screen_app in hidden:   # don't put an email subject or note title in a cloud prompt
         on_screen = screen_line(registry, {k: v for k, v in screen.items() if k != "title"})[0]
-    if attachments:   # the user attached what the answer needs, so a no-tool reply is legitimate (no 'call a tool' nudge)
+    if attachments or is_text_task(text):   # textual tasks or user attachments: a no-tool reply is legitimate (no 'call a tool' nudge)
         expects_tool = False
     if readonly:  # unattended runs may only read; nothing can be changed without a person present
         tool_map = {n: (a, t) for n, (a, t) in tool_map.items() if (not t.needs_approval or t.ask) and a.id not in hidden}
@@ -488,6 +503,7 @@ async def run_agent(ctx, registry, conv_id: str, text: str, *, speak: bool = Fal
     tokens = 0
     options: dict | None = None
     forced = finished = False
+    nudged_draft = ""
 
     def note(kind: str, message: str) -> dict:
         guards.append(message)
@@ -541,7 +557,7 @@ async def run_agent(ctx, registry, conv_id: str, text: str, *, speak: bool = Fal
                     if why:
                         guard.nudged = True  # once per run
                         if content.strip():   # the discarded draft must not appear twice (live view, stored chat)
-                            texts.pop()
+                            nudged_draft = texts.pop()
                             yield {"type": "rewrite", "text": ""}
                         messages += [{"role": "assistant", "content": content}, {"role": "user", "content": why}]
                         continue
@@ -594,6 +610,12 @@ async def run_agent(ctx, registry, conv_id: str, text: str, *, speak: bool = Fal
         ctx.db.add_message(conv_id, "assistant", partial, {"tools": list(cards.values()), "stopped": True, "guards": guards})
         raise
 
+    if nudged_draft and not used_tools:
+        # If the model didn't call tools after the nudge and responded with a meta-explanation that no tool was needed,
+        # restore the actual first draft so the user's answer is not lost.
+        if re.search(r"\b(?:no tool(?:s)? (?:call|were|was|needed|necessary|is needed|was needed|are needed)|accurately rephrased)\b", texts[-1] if texts else "", re.I):
+            texts = [nudged_draft]
+            yield {"type": "rewrite", "text": nudged_draft}
     final = collapse_repeats(texts[-1] if used_tools and texts else "\n\n".join(texts))
     if not final and not error:
         final = _fallback(list(cards.values()))

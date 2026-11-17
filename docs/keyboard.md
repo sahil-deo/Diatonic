@@ -4,6 +4,8 @@ Everything the interface can do is a **command** with an id (`chat.new`, `panel.
 
 ## Basics
 
+![Command palette with quick actions and keyboard shortcuts](images/Command%20Bar.png)
+
 | Key | What it does |
 |---|---|
 | ⌘K | Command palette. Type a few letters (`gcal` finds Google Calendar); things you use often rise to the top. |

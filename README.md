@@ -2,7 +2,7 @@
 
 **A local agent harness for your day-to-day apps.** Diatonic is everything around the model that turns it into a useful agent: the apps and tools, the agent loop, approvals, guardrails, memory and the interface. Plug in a small local model (or Gemini, or Groq) and it becomes an assistant for your mail, calendar, files, notes, to-dos, GitHub and terminal.
 
-![Diatonic's home screen: live tiles for mail, calendar, telemetry and GitHub, with the chat below](docs/images/Home.png)
+![Diatonic workspace: multi-panel layout with Files, Terminal, Chat, and Notes side by side](docs/images/Multi%20Panel.png)
 
 Everything runs locally at **http://localhost:5005**. The model is interchangeable; the harness is what makes even a 4B model reliable: it picks the few tools each request needs, checks and repairs tool arguments, cuts off loops, asks before anything that matters, and keeps private data away from cloud models. On top of that, the agent can change its own interface and build you new apps.
 
@@ -10,26 +10,30 @@ Everything runs locally at **http://localhost:5005**. The model is interchangeab
 
 <table>
 <tr>
-<td width="50%"><img src="docs/images/Calendar.png" alt="Calendar: month view across two Google accounts"><br><b>Calendar and Mail</b>: any number of Google accounts, a Google-Calendar-style view and a Gmail-style inbox. Create events by hand or by asking.</td>
-<td width="50%"><img src="docs/images/File%20Explorer.png" alt="Files: browsing a shared project folder"><br><b>Files</b>: browse shared folders, view code, Markdown and PDFs, reference files in chat with <code>@</code>, and let the agent edit them (it shows you the diff first).</td>
+<td width="50%"><img src="docs/images/Agent.png" alt="Diatonic agent home screen with live tiles for telemetry, to-dos, GitHub, and notes"><br><b>Agent & live tiles</b>: ask the agent anything or use quick actions, with live snapshots for telemetry, to-dos, GitHub and notes.</td>
+<td width="50%"><img src="docs/images/Home.png" alt="New Tab app launcher and recent conversations"><br><b>App launcher</b>: fast new-tab grid to launch any built-in app, user-built data app, or resume recent conversations.</td>
 </tr>
 <tr>
-<td><img src="docs/images/Notes.png" alt="Notes: a Markdown checklist note"><br><b>Notes, to-dos and reminders</b>: plain Markdown notes, to-dos with due dates, reminders and scheduled jobs that run a prompt or a script.</td>
-<td><img src="docs/images/Telemetry.png" alt="Telemetry: speed and reliability of recent runs"><br><b>Telemetry</b>: how fast and reliable the agent is: time per run, where the time goes, cache reuse, tool errors.</td>
+<td><img src="docs/images/Scheduler.png" alt="Scheduler: reminders and recurring jobs"><br><b>Reminders & jobs</b>: plain-English reminders, scheduled prompt jobs with unattended permissions, and recurring script jobs.</td>
+<td><img src="docs/images/Web%20Search.png" alt="Web search and plain text reader"><br><b>Web search</b>: text-first web search and page reader that extracts clean content without browser overhead.</td>
 </tr>
 <tr>
-<td><img src="docs/images/Mail.png" alt="Asking Diatonic to summarise the last 10 hours of mail across two Gmail accounts"><br><b>Just ask</b>: "summarise the mails from the last 10 hours" reads both Gmail accounts and answers in the format you asked for.</td>
-<td><img src="docs/images/Settings.png" alt="Settings: interface options"><br><b>Make it yours</b>: themes, layout and quick actions, or just ask the agent ("make the accent green", "add a button that opens my files").</td>
+<td><img src="docs/images/Command%20Bar.png" alt="Command palette: quick navigation and keyboard actions"><br><b>Command palette</b>: ⌘K palette for rapid keyboard navigation, app switching, panel splits, and shortcuts.</td>
+<td><img src="docs/images/Layouts.png" alt="Layout presets and saved workspaces"><br><b>Custom layouts</b>: presets (single, split, stacked, grid) or save named layouts (Dev, Study, Work) to switch anytime.</td>
+</tr>
+<tr>
+<td colspan="2"><img src="docs/images/Actions.png" alt="Settings: custom actions and saved prompts"><br><b>Custom actions & prompts</b>: create saved prompts with placeholders like <code>{{input}}</code>, custom <code>/</code> slash commands, and script buttons.</td>
 </tr>
 <tr>
 <td colspan="2">
 <b>Also</b>
 
+- **Calendar and Mail**: Google Calendar and Gmail across multiple accounts with sandboxed email reading
+- **Files**: browse shared folders, code syntax highlighting, Markdown/PDF viewer, and safe diff-based editing
 - A real **terminal** (tabs, vim, htop), and shell commands for the agent if you allow it
 - **Apps the agent builds** from a sentence: trackers and lists, or apps on a web API
 - **Local or cloud models** (Ollama, Gemini, Groq), switchable from the status bar
 - **Voice**: push-to-talk dictation and short spoken summaries, all local
-- **Home screen tiles** with live snapshots from your apps, in the layout you choose
 - **Parallel chats** that keep running in the background
 </td>
 </tr>

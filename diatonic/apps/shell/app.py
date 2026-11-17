@@ -32,7 +32,8 @@ class ShellApp(App):
     untrusted_tools = ["run"]       # command output can contain text written by others (logs, downloads)
     keywords = ["shell", "terminal", "command", "commands", "run", "git", "npm", "pip", "brew", "install", "installed", "process", "processes",
                 "space", "disk", "size", "largest", "how big", "directory", "script", "python", "node", "uv", "docker", "port", "ollama",
-                "build", "tests", "version", "versions", "running", "cpu", "memory usage", "uptime"]
+                "tests", "version", "versions", "running", "cpu", "memory usage", "uptime"]
+    keyword_patterns = [r"\b(?:(?:cargo|npm|pnpm|yarn|make|ninja|gradle|mvn|dotnet|go|docker)\s+build|(?:run|start|trigger|rebuild)\s+(?:the\s+)?build|build\s+(?:the\s+)?(?:project|repo|package|code|binary))\b"]
 
     def __init__(self, ctx):
         super().__init__(ctx)

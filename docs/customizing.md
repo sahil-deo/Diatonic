@@ -76,6 +76,8 @@ Keys are kept in the keychain, one per API host, never in `config.json` or a pro
 
 ## Make it yours: quick actions, `/` commands and interface
 
+![Creating a custom action with saved prompt and parameters](images/Actions.png)
+
 **Saved prompts and script buttons** (Settings → Actions, or **+ Add** on the bar above the message box). Each one can be a chip on the bar, a `/command`, a keyboard shortcut, or all three.
 
 - **Saved prompt:** text that is dropped into the message box (so you can tweak it) or sent straight away, optionally in a fresh chat. Placeholders: `{{input}}` (whatever you type after the command), `{{date}}`, `{{time}}`, `{{day}}`, `{{clipboard}}`. Example: `/summarize <paste text>` fills in `Summarize in 3 bullets: …`. A chip whose prompt needs `{{input}}` asks for it first.

@@ -36,7 +36,12 @@ function renderEmpty() {
 
 /* ---------- rendering ---------- */
 const nearBottom = () => msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 140;
-const scroll = (force) => { if (force || nearBottom()) msgs.scrollTo({ top: msgs.scrollHeight }); };
+const scroll = (force, smooth = false) => {
+  if (force || nearBottom()) {
+    try { msgs.scrollTo({ top: msgs.scrollHeight, behavior: smooth ? "smooth" : "instant" }); }
+    catch { msgs.scrollTop = msgs.scrollHeight; }
+  }
+};
 const appName = (id) => state.apps.find((a) => a.id === id)?.name || id || "Tool";
 const MENTION = /(?<![\w/@])@(?:"([^"]+)"|(\S+))/g;
 function userBubble(text) {
