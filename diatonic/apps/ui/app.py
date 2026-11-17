@@ -529,7 +529,7 @@ class UiApp(App):
 
     async def set_theme(self, a: dict):
         self._guard_mod()
-        keys = ("theme", "accent", "density", "font", "font_size", "radius", "width", "sidebar_width", "show_status_bar", "show_suggestions", "show_speak_button")
+        keys = ("theme", "accent", "density", "font", "font_size", "radius", "width", "sidebar_width", "show_status_bar", "show_suggestions", "show_speak_button", "show_rail")
         try:
             patch = {k: a[k] for k in keys if a.get(k) is not None and a.get(k) != ""}
             hide, show = self._app_list(a.get("hide_apps")), self._app_list(a.get("show_apps"))

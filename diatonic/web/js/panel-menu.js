@@ -31,8 +31,19 @@ export function openPanelMenu(anchor, tabId, stackId) {
     ["left", "up", "down", "right"].map((d) => h("button", { type: "button", class: `icon-btn sm pm-arrow pm-arrow-${d}`, disabled: !dirs.includes(d) || undefined,
       title: dirs.includes(d) ? `${label} ${d}` : `Nothing to the ${d}`, "aria-label": `${label} ${d}`, html: icon("chevron", 14), onclick: go(() => fn(tabId, d)) })));
 
+  const appRows = [];
+  if (tab.app === "shell") {
+    const termBody = () => document.querySelector(`.workspace-panel-body[data-body-for="${tabId}"]`);
+    appRows.push(
+      row("Ask the agent", "chat", () => termBody()?.dispatchEvent(new CustomEvent("shell:ask-agent"))),
+      row("Agent history", "clock", () => termBody()?.dispatchEvent(new CustomEvent("shell:toggle-history"))),
+      h("div", { class: "pm-sep" })
+    );
+  }
+
   const pop = openPopover(anchor, h("div", { class: "lm pm panel-menu" },
     h("div", { class: "pm-head" }, h("span", { html: icon(ic, 16) }), h("strong", {}, name)),
+    ...appRows,
     row("Split to the right", "split-v", () => ws.splitPanel(tabId, "row", "launcher"), "⌘; w v"),
     row("Split below", "split-h", () => ws.splitPanel(tabId, "col", "launcher"), "⌘; w s"),
     h("div", { class: "pm-sep" }),

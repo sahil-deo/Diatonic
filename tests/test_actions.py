@@ -43,8 +43,8 @@ def test_long_fields_are_clipped_and_timeout_capped():
 
 
 def test_appearance_validation():
-    assert clean_appearance({"accent": "#ff8800", "font_size": 99, "density": "compact"}) == \
-        {"accent": "#ff8800", "font_size": 22, "density": "compact"}
+    assert clean_appearance({"accent": "#ff8800", "font_size": 99, "density": "compact", "show_rail": False}) == \
+        {"accent": "#ff8800", "font_size": 22, "density": "compact", "show_rail": False}
     assert clean_appearance({"accent": ""}) == {"accent": ""}
     for bad in ({"accent": "red"}, {"density": "huge"}, {"nope": 1}, {"custom_css": "x" * 20001}, {"rail_hidden": "github"}):
         with pytest.raises(ValueError):

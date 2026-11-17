@@ -3,7 +3,7 @@ import { state } from "./store.js";
 
 export const DEFAULT_APPEARANCE = {
   theme: "system", accent: "", density: "comfortable", font: "system", font_size: 14, radius: "default", width: "default",
-  sidebar: "show", sidebar_width: "default", show_status_bar: true, show_quick_actions: true, show_suggestions: true, show_speak_button: true,
+  sidebar: "show", sidebar_width: "default", show_status_bar: true, show_quick_actions: true, show_suggestions: true, show_speak_button: true, show_rail: false,
   rail_order: [], rail_hidden: [], custom_css: "",
 };
 export const ACCENTS = ["#7c9cff", "#a78bfa", "#f472b6", "#fb923c", "#34d399", "#22d3ee", "#facc15", "#ef4444"];
@@ -42,6 +42,7 @@ export function applyAppearance(a = state.config?.appearance) {
   shell.classList.toggle("hide-qa", !a.show_quick_actions);
   shell.classList.toggle("hide-suggest", !a.show_suggestions);
   shell.classList.toggle("hide-speak", !a.show_speak_button);
+  shell.classList.toggle("hide-rail", !a.show_rail);
   shell.classList.toggle("sb-hidden", a.sidebar === "hide");
   let css = document.getElementById("user-css");
   if (!css) { css = document.createElement("style"); css.id = "user-css"; document.head.append(css); }

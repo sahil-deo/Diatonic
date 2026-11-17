@@ -70,6 +70,7 @@ DEFAULTS: dict[str, Any] = {
         "show_quick_actions": True,
         "show_suggestions": True,
         "show_speak_button": True,
+        "show_rail": False,
         "rail_order": [],           # app ids, in the order you want them
         "rail_hidden": [],
         "statusbar_pins": [],       # [{id, label, icon, appId, zone}]

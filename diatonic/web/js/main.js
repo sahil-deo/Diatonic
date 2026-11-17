@@ -187,6 +187,12 @@ function setSidebar(next) {
   state.config.appearance.sidebar = next; applyAppearance();
   api.putConfig({ appearance: { sidebar: next } }).then((c) => { state.config = c; }).catch(() => {});
 }
+function toggleRail() { setRail(!state.config.appearance.show_rail); }
+function setRail(next) {
+  if (state.config.appearance.show_rail === next) return;
+  state.config.appearance.show_rail = next; applyAppearance();
+  api.putConfig({ appearance: { show_rail: next } }).then((c) => { state.config = c; }).catch(() => {});
+}
 async function setTheme(t) { state.config = await api.putConfig({ appearance: { theme: t } }); applyTheme(); }
 
 /* ---------- boot ---------- */
@@ -201,7 +207,7 @@ async function boot() {
   initVoiceUI({ setInput, send: (t) => chat.send(t), openSettings });
   initActions({ newChat: () => chat.newChat(), openSettings, setTheme, setSpeak, openPanel, closePanel, toggleSidebar,
     editAction: (id) => { requestEdit(id); openSettings("actions"); } });
-  registerCore({ toggleSidebar, setSidebar, setTheme, setSpeak, openModelMenu, focusComposer: () => (dockVisible() ? focusDock() : input.focus()) });
+  registerCore({ toggleSidebar, setSidebar, toggleRail, setRail, setTheme, setSpeak, openModelMenu, focusComposer: () => (dockVisible() ? focusDock() : input.focus()) });
   initKeymap();
   initMacros();
   $("#new-chat").onclick = () => chat.newChat();

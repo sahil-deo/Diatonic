@@ -88,7 +88,7 @@ ENUMS = {"theme": {"system", "light", "dark"}, "density": {"comfortable", "compa
          "radius": {"sharp", "default", "round"}, "width": {"narrow", "default", "wide", "full"},
          "sidebar": {"show", "hide"}, "sidebar_width": {"narrow", "default", "wide"}}
 HOME_LAYOUTS = {"grid4": 4, "two_rows": 2, "two_cols": 2, "one": 1, "suggestions": 0}   # layout -> number of tiles
-BOOLS = {"show_status_bar", "show_quick_actions", "show_suggestions", "show_speak_button"}
+BOOLS = {"show_status_bar", "show_quick_actions", "show_suggestions", "show_speak_button", "show_rail"}
 
 
 def clean_appearance(patch) -> dict:

@@ -45,6 +45,7 @@ export function interfacePane() {
       setTimeout(() => location.reload(), 600);
     }),
     toggle("Sidebar", "Conversation list. Toggle anytime with ⌘B.", a.sidebar === "show", (v) => set({ sidebar: v ? "show" : "hide" })),
+    toggle("Left rail", "Apps and navigation bar on the left edge.", a.show_rail, (v) => { set({ show_rail: v }); emit("rail-changed"); }),
     toggle("Quick-action bar", "Your saved prompts and script buttons above the message box.", a.show_quick_actions, (v) => set({ show_quick_actions: v })),
     toggle("Status bar", null, a.show_status_bar, (v) => set({ show_status_bar: v })),
     toggle("Spoken-summary button", "In the top bar. Also in Settings → Voice.", a.show_speak_button, (v) => set({ show_speak_button: v })),

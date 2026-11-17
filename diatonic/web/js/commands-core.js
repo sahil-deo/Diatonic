@@ -42,6 +42,8 @@ export function registerCore(h) {
     { id: "customization.export", title: "Export customizations", group: "Settings", icon: "download", run: () => { window.location.href = "/api/customization/export"; } },
     { id: "sidebar.set", title: "Show or hide the sidebar", group: "Actions", hidden: true, run: (a) => h.setSidebar(a.mode) },
     { id: "sidebar.toggle", title: "Toggle sidebar", group: "Actions", icon: "menu", run: () => h.toggleSidebar() },
+    { id: "rail.set", title: "Show or hide the left rail", group: "Actions", hidden: true, run: (a) => h.setRail?.(a.mode) },
+    { id: "rail.toggle", title: "Toggle left rail", group: "Actions", icon: "menu", run: () => h.toggleRail?.() },
     { id: "theme.dark", title: "Theme: dark", group: "Actions", icon: "chevron", run: () => h.setTheme("dark") },
     { id: "theme.light", title: "Theme: light", group: "Actions", icon: "chevron", run: () => h.setTheme("light") },
     { id: "theme.toggle", title: "Theme: switch light / dark", group: "Actions", icon: "chevron", hidden: true, run: () => h.setTheme(light() ? "dark" : "light") },
@@ -72,6 +74,16 @@ export function registerCore(h) {
     } },
     { id: "panel.toggleFull", title: "Expand or shrink the app panel", group: "Apps", icon: "maximize", when: panelOpen, run: () => toggleFull() },
     { id: "panel.refresh", title: "Refresh the app panel", group: "Apps", icon: "refresh", when: panelOpen, run: () => refreshPanel() },
+    { id: "terminal.ask", title: "Terminal: Ask the agent about output", group: "Actions", icon: "chat", run: () => {
+      const activeId = getActiveTabId();
+      const panelEl = activeId ? document.querySelector(`.workspace-panel-body[data-body-for="${activeId}"]`) : document.querySelector(".workspace-panel-body[data-body-for]");
+      panelEl?.dispatchEvent(new CustomEvent("shell:ask-agent"));
+    } },
+    { id: "terminal.history", title: "Terminal: Toggle agent command history", group: "Actions", icon: "clock", run: () => {
+      const activeId = getActiveTabId();
+      const panelEl = activeId ? document.querySelector(`.workspace-panel-body[data-body-for="${activeId}"]`) : document.querySelector(".workspace-panel-body[data-body-for]");
+      panelEl?.dispatchEvent(new CustomEvent("shell:toggle-history"));
+    } },
     { id: "focus.left", title: "Focus left panel", group: "Navigate", icon: "chevleft", run: () => { import("./workspace.js").then((m) => m.focusNeighbor("left")); setRegion("chat"); } },
     { id: "focus.right", title: "Focus right panel", group: "Navigate", icon: "chevright", run: () => { import("./workspace.js").then((m) => m.focusNeighbor("right")); setRegion("panel"); } },
     { id: "focus.up", title: "Focus upper panel", group: "Navigate", icon: "chevron", run: () => { import("./workspace.js").then((m) => m.focusNeighbor("up")); setRegion("panel"); } },

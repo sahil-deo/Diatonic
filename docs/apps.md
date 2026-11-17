@@ -32,6 +32,14 @@ Open **Files** (folder icon in the left rail) and share one or more folders (sug
 
 **Safety model.** Every path is resolved through symlinks and must stay inside a shared folder; `..`, absolute paths elsewhere, and symlinks leading out are refused. Credentials and key material (`.env`, `*.pem`, `*.key`, `id_rsa*`, `secrets.json`, `.ssh/`, `.aws/`, …) are blocked even inside a shared folder unless you opt in. System folders, your whole home folder, `~/Library` and Diatonic's own data can't be shared. The viewer serves only PDFs and images inline (images under a no-script policy); everything else downloads, so a stray `.html` can never run against the app.
 
+## Web
+
+Search the web and read pages as plain text. The agent has `web_search` (titles, links, snippets) and `web_read` (a page's text and links, cut to the page size limit in Settings → Web). The panel does the same for you: type words to search, or paste an address to open it.
+
+- **No browser:** pages are fetched and reduced to text. Pages that need JavaScript or a login come back empty or refused.
+- **Search engine:** DuckDuckGo by default (no key). If it blocks a search, Wikipedia answers instead. You can also pick `wikipedia` or `searxng` (your own server) in Settings → Web. DuckDuckGo and Wikipedia receive your search words.
+- **Safety:** only public addresses open, never localhost or your own network. Everything it returns counts as untrusted, so a run that used it cannot change things without approval.
+
 ## Reminders, scheduled jobs, to-dos and notes
 
 Say what you want in plain words ("remind me to call mom tomorrow at 9", "every weekday at 8 give me my to-do briefing", "add a to-do to send the invoice by Friday", "jot down that the wifi password is on the fridge") or use the panels in the left rail.
@@ -57,7 +65,7 @@ An empty chat shows live tiles from your apps: to-dos, calendar, latest mail, up
 
 ## Terminal and shell access
 
-**Terminal** (⌘ icon in the rail) is a real terminal: your login shell on a pseudo-terminal, rendered with [xterm.js](https://xtermjs.org) (vendored in `web/vendor/xterm/`, MIT). Tabs, colours, resize, copy (⌘C with a selection) and paste, ⌘K to clear; vim, htop, ssh and REPLs work. Sessions run in the server, so closing the panel or reloading keeps them going and reopening replays their recent output. **Ask the agent** sends the selection (or the last screenful) to the chat; **Agent history** lists every command the agent ran, with output, and can put one in your terminal.
+**Terminal** (⌘ icon in the rail) is a real terminal: your login shell on a pseudo-terminal, rendered with [xterm.js](https://xtermjs.org) (vendored in `web/vendor/xterm/`, MIT). Colours, resize, copy (⌘C with a selection) and paste, ⌘K to clear; vim, htop, ssh and REPLs work. Sessions run in the server, so closing the panel or reloading keeps them going and reopening replays their recent output. The panel menu (`···` on the tab bar) and command palette provide **Ask the agent** (sends the selection or the last screenful to the chat) and **Agent history** (lists every command the agent ran, with output, and can put one in your terminal).
 
 **The agent's shell** is off until you turn it on in **Settings → Automation**. Then it has one tool, `shell_run(command, cwd, timeout)`, and every command is classified by parsing it, not by pattern-matching:
 
