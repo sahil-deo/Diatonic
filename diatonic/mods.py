@@ -1,4 +1,4 @@
-"""Interface mods the agent makes on request: named CSS, scripts and whole panels, with an undo history.
+"""Interface mods the agent makes on request: named CSS, scripts and buttons, with an undo history.
 
 Stored in one JSON file in the Diatonic home folder. Styles are filtered (no network, no touching the approval UI).
 Scripts and panels are arbitrary code, so the tools that create them always need an approval card, and the store
@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 
 NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
-KINDS = ("style", "script", "panel", "button", "app", "data", "tools")
+KINDS = ("style", "script", "button")   # a mod of any other kind (API and connected apps, trackers) is ignored on load
 MAX_CODE = 20_000
 MAX_CHANGES = 40
 # CSS may not fetch anything, and may not restyle the approval UI (a hidden Deny button is as good as a forged one).
@@ -47,18 +47,14 @@ class ModStore:
         self.path = Path(folder) / "mods.json"
         self._lock = threading.Lock()
         self.data = {"mods": {}, "changes": []}
-        self.on_change = lambda: None   # set by the server: API apps become real apps when their manifest changes
         self.on_layout_revert = None
         try:
             self.data.update(json.loads(self.path.read_text()))
         except (OSError, ValueError):
             pass
+        self.data["mods"] = {k: v for k, v in self.data.get("mods", {}).items() if v.get("kind") in KINDS}   # anything but styles, scripts and buttons is dropped
 
     def _save(self) -> None:
-        try:
-            self.on_change()
-        except Exception:
-            pass
         with self._lock:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self.path.with_suffix(".tmp")
@@ -90,24 +86,6 @@ class ModStore:
             check_css(code)
         elif kind == "button":
             check_button(code)
-        elif kind == "data":
-            from .dataapps import DataSpecError, check_data_manifest
-            try:
-                code = json.dumps(check_data_manifest(code))
-            except DataSpecError as e:
-                raise ModError(str(e))
-        elif kind == "tools":
-            from .toolapps import ToolSpecError, check_tool_manifest
-            try:
-                code = json.dumps(check_tool_manifest(code))
-            except ToolSpecError as e:
-                raise ModError(str(e))
-        elif kind == "app":
-            from .apiapps import AppSpecError, check_manifest
-            try:
-                code = json.dumps(check_manifest(code))
-            except AppSpecError as e:
-                raise ModError(str(e))
         elif len(code) > MAX_CODE:
             raise ModError(f"Code is limited to {MAX_CODE:,} characters.")
         before = self.data["mods"].get(name)

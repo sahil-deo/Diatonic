@@ -1,0 +1,149 @@
+{
+  "button": {
+    "doc": "A button in the harness style. Use kind \"primary\" for the one main action of a view and \"danger\" for deleting.",
+    "props": [
+      {"name": "label", "type": "string", "doc": "The text on the button.", "required": true},
+      {"name": "onclick", "type": "function", "doc": "Called when it is pressed."},
+      {"name": "kind", "type": "\"default\" | \"primary\" | \"danger\"", "doc": "Look of the button. Default is \"default\"."},
+      {"name": "size", "type": "\"sm\"", "doc": "\"sm\" for a small button inside rows and cards."},
+      {"name": "disabled", "type": "boolean", "doc": "Greys it out and ignores presses."}
+    ],
+    "example": {"label": "Start", "kind": "primary"}
+  },
+  "badge": {
+    "doc": "A small coloured label for a status or a count.",
+    "props": [
+      {"name": "text", "type": "string", "doc": "What it says.", "required": true},
+      {"name": "tone", "type": "\"ok\" | \"warn\" | \"danger\" | \"accent\" | \"muted\"", "doc": "Colour. Default is \"muted\"."}
+    ],
+    "example": {"text": "Done", "tone": "ok"}
+  },
+  "card": {
+    "doc": "A bordered box with an optional title, body, footer and buttons in the header. Use it to group one thing, such as a timer or a note.",
+    "props": [
+      {"name": "title", "type": "string", "doc": "Heading."},
+      {"name": "subtitle", "type": "string", "doc": "One quiet line under the heading."},
+      {"name": "body", "type": "string | Node | Array", "doc": "The content."},
+      {"name": "footer", "type": "string | Node | Array", "doc": "Content at the bottom, such as buttons."},
+      {"name": "actions", "type": "Array<button props>", "doc": "Buttons shown on the right of the heading."}
+    ],
+    "example": {"title": "Focus", "subtitle": "25 minutes", "body": "Time left: 24:10", "actions": [{"label": "Pause", "size": "sm"}]}
+  },
+  "section": {
+    "doc": "A heading with content under it and no box. Use it to split a panel into parts.",
+    "props": [
+      {"name": "title", "type": "string", "doc": "Heading.", "required": true},
+      {"name": "body", "type": "string | Node | Array", "doc": "The content."},
+      {"name": "actions", "type": "Array<button props>", "doc": "Buttons on the right of the heading."}
+    ],
+    "example": {"title": "Today", "body": "Nothing planned."}
+  },
+  "row": {
+    "doc": "One line of a list: an optional check mark, a title, a quiet second line and something on the right. Rows are the unit lists and listApp are made of.",
+    "props": [
+      {"name": "title", "type": "string", "doc": "Main text.", "required": true},
+      {"name": "subtitle", "type": "string", "doc": "Quiet text under the title."},
+      {"name": "right", "type": "string | Node", "doc": "Text or a badge at the right end."},
+      {"name": "mark", "type": "{checked: boolean, onchange: function}", "doc": "Adds a check box; onchange gets true or false."},
+      {"name": "onclick", "type": "function", "doc": "Makes the whole row clickable."},
+      {"name": "selected", "type": "boolean", "doc": "Highlights the row."}
+    ],
+    "example": {"title": "Read chapter 3", "subtitle": "Due Friday", "right": "2 left"}
+  },
+  "list": {
+    "doc": "A stack of rows, or a message when there are none.",
+    "props": [
+      {"name": "items", "type": "Array<row props>", "doc": "One entry per row.", "required": true},
+      {"name": "empty", "type": "string", "doc": "Text shown when items is empty."}
+    ],
+    "example": {"items": [{"title": "Limits", "subtitle": "Unit 1"}, {"title": "Series", "subtitle": "Unit 2"}], "empty": "Nothing here yet."}
+  },
+  "table": {
+    "doc": "A table with a header row. Cells show row[key], or the result of render(row) when a column has one.",
+    "props": [
+      {"name": "columns", "type": "Array<{key, label, align?, render?}>", "doc": "One per column; align is \"right\" for numbers.", "required": true},
+      {"name": "rows", "type": "Array<object>", "doc": "The data.", "required": true},
+      {"name": "empty", "type": "string", "doc": "Text shown when there are no rows."},
+      {"name": "onRowClick", "type": "function", "doc": "Called with the row when it is clicked."}
+    ],
+    "example": {"columns": [{"key": "name", "label": "Name"}, {"key": "qty", "label": "Qty", "align": "right"}], "rows": [{"name": "Apples", "qty": 4}, {"name": "Pears", "qty": 7}]}
+  },
+  "tabs": {
+    "doc": "A row of tabs that switches the content below it.",
+    "props": [
+      {"name": "tabs", "type": "Array<{id, label, content}>", "doc": "content is a string, Node or Array.", "required": true},
+      {"name": "active", "type": "string", "doc": "Id of the tab shown first. Default is the first one."},
+      {"name": "onChange", "type": "function", "doc": "Called with the id when the user switches."}
+    ],
+    "example": {"tabs": [{"id": "a", "label": "Open", "content": "Open items"}, {"id": "b", "label": "Done", "content": "Done items"}]}
+  },
+  "field": {
+    "doc": "A labelled input. Give a type (text, number, date, textarea, select, checkbox) or your own input element. Read the value from the returned element's control.",
+    "props": [
+      {"name": "label", "type": "string", "doc": "Label above the input.", "required": true},
+      {"name": "type", "type": "\"text\" | \"number\" | \"date\" | \"textarea\" | \"select\" | \"checkbox\"", "doc": "Kind of input. Default is \"text\"."},
+      {"name": "name", "type": "string", "doc": "Name used by form."},
+      {"name": "value", "type": "string | number | boolean", "doc": "Starting value."},
+      {"name": "options", "type": "Array<string | [value, label]>", "doc": "Choices for select."},
+      {"name": "placeholder", "type": "string", "doc": "Hint shown when empty."},
+      {"name": "help", "type": "string", "doc": "A quiet line under the input."},
+      {"name": "input", "type": "Node", "doc": "Your own input element instead of type."}
+    ],
+    "example": {"label": "Name", "placeholder": "What is it called?", "help": "Shown in the list."}
+  },
+  "form": {
+    "doc": "A set of fields with a submit button. onSubmit gets an object with one value per field name (numbers as numbers, check boxes as true or false).",
+    "props": [
+      {"name": "fields", "type": "Array<field props>", "doc": "Each needs a name.", "required": true},
+      {"name": "submit", "type": "string", "doc": "Text of the submit button. Default is \"Save\"."},
+      {"name": "onSubmit", "type": "function", "doc": "Called with (values, formElement). May be async; the button is disabled while it runs."}
+    ],
+    "example": {"fields": [{"name": "title", "label": "Title"}, {"name": "minutes", "label": "Minutes", "type": "number", "value": 25}], "submit": "Add"}
+  },
+  "kv": {
+    "doc": "Labels with their values, for details such as a record's properties.",
+    "props": [
+      {"name": "items", "type": "Array<{label, value}>", "doc": "One pair per line.", "required": true}
+    ],
+    "example": {"items": [{"label": "Status", "value": "Open"}, {"label": "Due", "value": "Friday"}]}
+  },
+  "stat": {
+    "doc": "One big number with a label, for dashboards. Put several in a row with a flex container, or inside a card.",
+    "props": [
+      {"name": "label", "type": "string", "doc": "What the number is.", "required": true},
+      {"name": "value", "type": "string | number", "doc": "The number.", "required": true},
+      {"name": "hint", "type": "string", "doc": "A quiet line under it, such as a change."},
+      {"name": "tone", "type": "\"ok\" | \"warn\" | \"danger\"", "doc": "Colours the number."}
+    ],
+    "example": {"label": "Topics done", "value": "18 / 24", "hint": "3 this week", "tone": "ok"}
+  },
+  "empty": {
+    "doc": "A centred message for a view with nothing in it, with an optional button that fixes that.",
+    "props": [
+      {"name": "title", "type": "string", "doc": "What is missing.", "required": true},
+      {"name": "text", "type": "string", "doc": "What to do about it."},
+      {"name": "action", "type": "button props", "doc": "A button, for example {label: \"Add one\", onclick}."}
+    ],
+    "example": {"title": "No timers yet", "text": "Start one to see it here.", "action": {"label": "Start a timer", "kind": "primary"}}
+  },
+  "modal": {
+    "doc": "A dialog over the panel. It returns the overlay element: append it to el. It closes on Esc, on a click outside, or with the element's close() method.",
+    "props": [
+      {"name": "title", "type": "string", "doc": "Heading.", "required": true},
+      {"name": "body", "type": "string | Node | Array", "doc": "The content."},
+      {"name": "actions", "type": "Array<button props>", "doc": "Buttons at the bottom. A button with kind \"primary\" is the main one."},
+      {"name": "onClose", "type": "function", "doc": "Called after it closes."}
+    ],
+    "example": {"title": "Delete this timer?", "body": "It cannot be brought back.", "actions": [{"label": "Cancel"}, {"label": "Delete", "kind": "danger"}]}
+  },
+  "chart": {
+    "doc": "A simple bar or line chart of labelled numbers.",
+    "props": [
+      {"name": "data", "type": "Array<{label, value}>", "doc": "Points in order.", "required": true},
+      {"name": "type", "type": "\"bar\" | \"line\"", "doc": "Default is \"bar\"."},
+      {"name": "height", "type": "number", "doc": "Height in pixels. Default is 140."},
+      {"name": "unit", "type": "string", "doc": "Text added after each value, such as \"min\"."}
+    ],
+    "example": {"data": [{"label": "Mon", "value": 3}, {"label": "Tue", "value": 5}, {"label": "Wed", "value": 2}, {"label": "Thu", "value": 6}], "type": "bar", "unit": " h"}
+  }
+}

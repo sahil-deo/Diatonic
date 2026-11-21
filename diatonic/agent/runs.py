@@ -86,9 +86,32 @@ class RunManager:
         client = opts.pop("client", None)
         run = Run(conv["id"], conv["title"], client)
         self.runs[run.conv_id] = run
-        self._publish(run, {"type": "run_start", "title": run.title})
+        from . import router
+        model_m, route_info = router.resolve_model(ctx, text, screen=opts.get("screen"), conv_id=run.conv_id)
+        opts["model"] = model_m
+        self._publish(run, {"type": "run_start", "title": run.title, "model": model_m.get("label", model_m.get("model", "")), "route": route_info})
         run.task = asyncio.create_task(self._drive(run, ctx, registry, text, speak, opts))
         return run
+
+    # ---- activity that is not a model run (an outside agent using our tools over MCP) ----
+    def attach(self, conv_id: str, title: str) -> Run:
+        """A run with no task of its own, so tool cards and approvals for that conversation reach the UI like any other run's."""
+        run = self.runs.get(conv_id)
+        if run is None:
+            run = self.runs[conv_id] = Run(conv_id, title)
+            self._publish(run, {"type": "run_start", "title": title})
+        return run
+
+    def publish(self, conv_id: str, ev: dict) -> None:
+        run = self.runs.get(conv_id)
+        if run:
+            self._publish(run, ev)
+
+    def detach(self, conv_id: str) -> None:
+        run = self.runs.get(conv_id)
+        if run and run.task is None:
+            self.runs.pop(conv_id, None)
+            self._publish(run, {"type": "done"})
 
     def cancel(self, conv_id: str) -> bool:
         run = self.runs.get(conv_id)

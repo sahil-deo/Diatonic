@@ -54,13 +54,6 @@ function topbarHost() {
   return bar;
 }
 
-/** Run panel code: the body of an async function (diatonic, el, ctx). */
-export async function runPanel(code, el, ctx) {
-  const { api: d } = makeApi();
-  const r = await new AsyncFunction("diatonic", "el", "ctx", code)(d, el, ctx);
-  if (r instanceof Node) el.append(r);   // small models often build an element and return it
-}
-
 function paintStyles(mods) {
   const want = new Map(mods.filter((m) => m.kind === "style" && m.enabled).map((m) => [m.name, m]));
   document.querySelectorAll("style[data-mod]").forEach((s) => { const m = want.get(s.dataset.mod); if (!m || s.dataset.v !== String(m.version)) s.remove(); });
@@ -91,20 +84,12 @@ async function runScripts(mods) {
   for (const m of want.values()) if (!live.has(m.name)) await start(m);
 }
 
-function panelApps(mods) {
-  state.modApps = mods.filter((m) => m.kind === "panel" && m.enabled)
-    .map((m) => ({ id: `mod-${m.name}`, name: m.title, icon: "box", panel: true, enabled: true, mod: true, code: m.code, version: m.version }));
-  emit("rail-changed");
-  const open = state.modApps.find((a) => a.id === state.panelApp);
-  if (state.panelApp?.startsWith("mod-")) emit("ui", open ? { action: "open", app: open.id, reload: true } : { action: "close" });   // re-render or close an edited panel
-}
-
 export async function loadMods() {
-  if (SAFE) { state.modApps = []; state.mods = []; return []; }
+  if (SAFE) { state.mods = []; return []; }
   let mods = [];
   try { mods = await api.get("/api/mods"); } catch { return []; }
   state.mods = mods;
-  paintStyles(mods); panelApps(mods); await runScripts(mods);
+  paintStyles(mods); await runScripts(mods);
   return mods;
 }
 

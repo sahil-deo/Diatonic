@@ -19,7 +19,7 @@ from ...agent import session
 from ...shell import runner
 from ...shell.classify import classify
 from ...shell.terminal import Terminals
-from ..base import WRITE, App, Tool, ToolError
+from ..base import App, Tool, ToolError
 
 
 class ShellApp(App):
@@ -139,7 +139,7 @@ class ShellApp(App):
                      {"properties": {"command": {"type": "string"}, "cwd": {"type": "string", "description": "Folder to run in, e.g. ~/Developer/Diatonic"},
                                      "timeout": {"type": "integer", "description": "Seconds, default 60, at most 600 (for installs and builds)"}},
                       "required": ["command"]},
-                     self.run, WRITE, title="Run command", describe=self._describe, precheck=self._precheck, preview=self._preview,
+                     self.run, effects={"execute"}, title="Run command", describe=self._describe, precheck=self._precheck, preview=self._preview,
                      ask=self._ask, timeout=float(self.cfg.get("max_timeout", 600)) + 15)]
 
     async def snapshot(self, n: int) -> dict:

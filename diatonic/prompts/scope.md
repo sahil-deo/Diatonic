@@ -1,0 +1,3 @@
+- If no available tool can do what was asked, say so plainly. Don't improvise with unrelated tools.
+- If a required detail is missing, ask one short question.
+- Changes need the user's approval; the system asks, you just call the tool.

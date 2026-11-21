@@ -15,7 +15,7 @@ node scripts/mount_twice.mjs <app-id>...         # mounts a panel twice, checks 
 node evals/run_build_eval.mjs --only id,id       # real-model eval of agent-built panels (slow, needs Ollama; skip unless asked)
 ```
 
-To look at the UI, drive the scratch Chrome with `scripts/cdp.mjs` (a 34-line DevTools helper: `open(url, port)`, `ev(js)`, `key(...)`, `errors`). Examples of its use are in `evals/run_build_eval.mjs` and `scripts/mount_twice.mjs`. A UI change is not done until you have loaded it in the scratch Chrome and the console shows no errors.
+To look at the UI, drive the scratch Chrome with `scripts/cdp.mjs` (a 34-line DevTools helper: `open(url, port)`, `ev(js)`, `key(...)`, `errors`). Examples of its use are in `evals/run_build_eval.mjs` and `scripts/mount_twice.mjs`. A UI change is not done until you have loaded it in the scratch Chrome and the console shows no errors. While working through `docs/v3-plan.md` this check is made once, at the end of each phase, and the tests carry the steps in between (see "Keeping the token cost down" there).
 
 ## Hard rules
 
@@ -63,7 +63,7 @@ Match the file you are editing. The patterns below are what the codebase already
 
 - `diatonic/server.py` routes and wiring · `diatonic/agent/` the loop, providers, approvals, guards, runs · `diatonic/apps/<id>/app.py` one folder per app (tools, settings, routes) · `diatonic/apps/ui/` the agent's interface and app-building tools
 - `diatonic/web/index.html`, `js/` shell modules, `apps/` one panel per app, `css/app.css`
-- `diatonic/mods.py` interface changes the agent made · `diatonic/keymap.py` the keymap file · `diatonic/dataapps.py`, `apiapps.py`, `toolapps.py` apps the agent builds
+- `diatonic/mods.py` interface changes the agent made · `diatonic/keymap.py` the keymap file · `diatonic/fileapps.py` apps the agent builds (the build tools and the builder session are in `diatonic/apps/ui/builder.py`)
 - `docs/` user and developer docs · `todo.md` the plan, in phases · `evals/` the build eval
 
 ## Things that have already caused trouble

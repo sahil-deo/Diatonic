@@ -17,6 +17,7 @@ from typing import AsyncIterator
 
 import jsonschema
 
+from .. import instructions
 from ..apps.base import ToolError
 from ..voice import summarizer
 from . import approvals, session
@@ -29,22 +30,10 @@ MAX_RESULT_CHARS = 3500   # per tool result sent to the model
 MAX_CALLS_PER_STEP = 4
 RETRY_OPTIONS = {"temperature": 0.9, "repeat_penalty": 1.2, "top_k": 50}
 
-SYSTEM_PROMPT = """You are Diatonic, a concise assistant that operates the user's apps with tools.
-- To look something up or change it, call a tool. Never guess data.
-- Call a tool once per question. When you have its result, answer; don't call it again with the same arguments.
-- If no available tool can do what was asked, say so plainly. Don't improvise with unrelated tools.
-- Don't announce what you're about to do; do it. Never repeat yourself.
-- Say an action succeeded only if its tool succeeded. If a tool failed, say why in one line.
-- If a required detail is missing, ask one short question.
-- Changes need the user's approval; the system asks, you just call the tool.
-- Resolve relative dates from the current time and pass ISO 8601.
-- Keep answers short. Lead with the result."""
-
-
 def build_system_prompt(ctx, registry) -> str:
     extra = ctx.config.data["agent"].get("system_prompt", "").strip()
     # The clock goes on the user turn instead, so this prefix stays identical and Ollama can reuse its KV cache.
-    return SYSTEM_PROMPT + f"\nTimezone: {ctx.tz_name}." + (f"\n\nUser preferences:\n{extra}" if extra else "")
+    return instructions.system_text() + f"\nTimezone: {ctx.tz_name}." + (f"\n\nUser preferences:\n{extra}" if extra else "")
 
 
 # "show my calendar", "open my latest email", "hide the sidebar": the user wants the screen moved, not data read out.
@@ -145,8 +134,7 @@ def select_tools(registry, text: str, prior_apps: set[str], force: set[str] | fr
     """
     apps = registry.enabled()
     ui = next((x for x in apps if x.id == "ui"), None)
-    building = any(n in ("ui_create_app", "ui_add_list", "ui_connect_api", "ui_add_action", "ui_set_fields") for n in prior_tools)
-    if ui and not force and not building and is_navigation(text):
+    if ui and not force and is_navigation(text):
         return {f"ui_{t.name}": (ui, t) for t in ui.tools() if t.name in ("open_app", "open_item", "set_layout")}, True
     low = text.lower()
     # Words inside paths and file names ("notes/todo.md") are not requests about the Notes app, so keyword matching
@@ -155,8 +143,6 @@ def select_tools(registry, text: str, prior_apps: set[str], force: set[str] | fr
     named = [a for a in apps if a.id in force or any(re.search(rf"\b{re.escape(k)}(?:s|es)?\b", plain) for k in a.keywords)
              or any(re.search(p, low) for p in a.keyword_patterns)]
     chosen = [a for a in apps if a in named or a.id in prior_apps]
-    if ui and ui in chosen and not force and ui.builds_something(text):
-        chosen = [ui]          # building a panel about to-dos is not asking about to-dos: the lookup tools would just answer instead
     if not chosen:
         every = {f"{a.id}_{t.name}": (a, t) for a in apps for t in a.tools()}
         if len(json.dumps([tool_spec(a, t) for a, t in every.values()])) <= FALLBACK_ALL_CHARS:
@@ -164,6 +150,36 @@ def select_tools(registry, text: str, prior_apps: set[str], force: set[str] | fr
         return rank_tools(registry, text), False
     return {f"{a.id}_{t.name}": (a, t) for a in chosen for t in a.tools_for(text, prior_tools)}, bool(named) and not is_text_task(text)
 
+
+
+# Tools that put real code or structure into an app. An app is built only when one of these has succeeded.
+WRITE_CODE_TOOLS = ("ui_write_app_file", "ui_patch_app_file", "ui_add_script")
+BUILT_TOOLS = WRITE_CODE_TOOLS
+
+
+def can_build(tool_map: dict) -> bool:
+    return any(n in tool_map for n in WRITE_CODE_TOOLS)
+
+
+def unbuilt_failure(text: str, cards: list[dict], tool_map: dict, registry) -> str | None:
+    """A run that was asked to build an app but never got one built is a failure, whatever the model says at the end.
+
+    A small model reports "I created your app" after it made an empty folder, or after its code was rejected. So the words
+    at the end of a build run are replaced by what happened. A run the user declined, or that is not about building, is left alone.
+    """
+    if any(c.get("status") == "denied" for c in cards):
+        return None
+    ui = registry.apps.get("ui")
+    asked = bool(ui and ui.builds_something(text)) or any(c["name"] in ("ui_create_file_app",) for c in cards)
+    if not asked or not (can_build(tool_map) or cards):
+        return None
+    if any(c.get("ok") and c["name"] in WRITE_CODE_TOOLS and not (c["name"] == "ui_write_app_file" and (c.get("args") or {}).get("path") != "index.js") for c in cards):
+        return None
+    failed = [c for c in cards if c["name"] in BUILT_TOOLS + ("ui_create_file_app",) and not c.get("ok")]
+    why = (failed[-1].get("preview") or "").strip().splitlines()[:1] if failed else []
+    made = any(c.get("ok") and c["name"] == "ui_create_file_app" for c in cards)
+    return ("I did not build that. " + ("An empty placeholder app was created, but no code was written to it. " if made else "Nothing was created. ")
+            + (f"The last error was: {why[0][:300]} " if why else "") + "Ask again, or ask for something smaller.")
 
 
 TRACE_TURNS = 1       # how many of the most recent tool-using answers keep their tool trace in context
@@ -273,7 +289,23 @@ async def _execute(call: dict, tool_map: dict, registry, guard: RunGuard, out: d
     """Run one tool call, yielding UI events. What the model should see goes in out['content']."""
     cid = uuid.uuid4().hex[:8]
     name, args = call["name"], _args(call["arguments"])
+    raw = call["arguments"]
+    if isinstance(raw, str) and raw.strip() and not args:   # not valid JSON: usually a long argument cut off at the reply limit
+        out.update(ok=False, content=f"Error: the arguments of {name} were not valid JSON, most likely cut off because they were too long. "
+                                     "Call it again with a shorter, simpler version.")
+        guard.errors += 1
+        yield {"type": "tool_call", "id": cid, "name": name, "app": "", "title": name, "args": {}, "risk": "read", "describe": "", "needs_approval": False}
+        yield {"type": "tool_result", "id": cid, "ok": False, "preview": out["content"], "ms": 0}
+        return
     entry = tool_map.get(name)
+    if entry is None and can_build(tool_map) and not name.startswith("ui_") and name in registry.tool_map():
+        # In a build run, a tool named in the SDK examples is for the app's own code, not for the model to call: running it answers the
+        # question ("lists my to-dos") instead of building the panel that would.
+        out.update(ok=False, content=f"Error: {name} is not a tool you can call for this request. It is for the app's code: inside index.js use "
+                                     f"await ctx.tool('{name}', {{}}). Now call write_app_file with the whole index.js (create_file_app first if the app does not exist).")
+        guard.errors += 1
+        yield {"type": "guard", "kind": "unknown_tool", "message": f"The model called {name} instead of building the app that uses it."}
+        return
     if entry is None and not guard.readonly:   # a real tool we didn't offer: the router guessed wrong, so let it run
         entry = registry.tool_map().get(name)
     if entry is None:
@@ -291,7 +323,7 @@ async def _execute(call: dict, tool_map: dict, registry, guard: RunGuard, out: d
         guard.dups += 1
         if not prev["ok"]:
             msg = f"This exact call already failed: {prev['content']} Change the arguments, or stop and explain."
-        elif tool.risk == "read":
+        elif not tool.changes:
             msg = "[Already fetched earlier in this run. Use this result and answer; don't call again.]\n" + prev["content"]
         else:
             msg = "Already done earlier in this run. Don't repeat it; tell the user it's done."
@@ -311,7 +343,8 @@ async def _execute(call: dict, tool_map: dict, registry, guard: RunGuard, out: d
         yield {"type": "tool_result", "id": cid, "ok": False, "preview": out["content"], "ms": 0}
         return
 
-    blocked = tool.precheck(args) if tool.precheck else None
+    blocked = session.UNTRUSTED_NOTE if "display" in tool.effects and session.untrusted_sources() else None   # content written by others can't change the interface
+    blocked = blocked or (tool.precheck(args) if tool.precheck else None)
     if blocked:  # don't ask the user to approve something that cannot run
         yield {"type": "tool_call", "id": cid, "name": name, "app": app.id, "title": tool.title, "args": args,
                "risk": tool.risk, "describe": "", "needs_approval": False}
@@ -362,13 +395,13 @@ async def _execute(call: dict, tool_map: dict, registry, guard: RunGuard, out: d
     if needs:
         out["approval"] = True
         fut = approvals.request(cid)
-        yield {"type": "notify", "text": f"I need your approval: {describe}"}
         if guard.approval_timeout is not None and ctx is not None and getattr(ctx, "notifier", None):   # a scheduled run is waiting
             try:
                 await ctx.notifier.send("A scheduled job needs your approval", describe[:300], kind="approval",
-                                        data={"conversation_id": guard.conv_id})
+                                        data={"conversation_id": guard.conv_id, "approval_id": cid})
             except Exception:
                 pass
+        yield {"type": "notify", "text": f"I need your approval: {describe}"}
         try:
             approved = await asyncio.wait_for(fut, guard.approval_timeout)
         except asyncio.TimeoutError:
@@ -389,7 +422,7 @@ async def _execute(call: dict, tool_map: dict, registry, guard: RunGuard, out: d
         yield {"type": "tool_status", "id": cid, "status": "approved" if approved else "denied"}
         if not approved:
             out.update(ok=False, denied=True, content="The user denied this action. Don't retry it; acknowledge and ask what they'd like instead.")
-            guard.remember(key, ok=False, content="The user denied it.", risk=tool.risk)
+            guard.remember(key, ok=False, content="The user denied it.", changes=tool.changes)
             yield {"type": "tool_result", "id": cid, "ok": False, "preview": "Denied by you", "ms": 0}
             return
 
@@ -412,7 +445,7 @@ async def _execute(call: dict, tool_map: dict, registry, guard: RunGuard, out: d
     finally:
         session.CALL.reset(token)
     ms = int((time.monotonic() - t0) * 1000)
-    guard.remember(key, ok=ok, content=clip(text, MAX_RESULT_CHARS), risk=tool.risk)
+    guard.remember(key, ok=ok, content=clip(text, MAX_RESULT_CHARS), changes=tool.changes)
     if not ok:
         guard.errors += 1
     content = clip(text, MAX_RESULT_CHARS)
@@ -443,13 +476,38 @@ def _fallback(cards: list[dict]) -> str:
 
 async def run_agent(ctx, registry, conv_id: str, text: str, *, speak: bool = False, readonly: bool = False,
                     approval_timeout: float | None = None, extra_system: str = "", attachments: str = "",
-                    force_apps: frozenset = frozenset(), screen: dict | None = None) -> AsyncIterator[dict]:
+                    force_apps: frozenset = frozenset(), screen: dict | None = None, model: dict | None = None) -> AsyncIterator[dict]:
+    if model is None:
+        from . import router
+        model, _ = router.resolve_model(ctx, text, screen=screen, conv_id=conv_id)
     cfg = ctx.config.data
-    acfg = cfg["agent"]
+    acfg = dict(cfg["agent"])
+    if model:
+        acfg.update({k: model[k] for k in ("provider", "model", "endpoint") if k in model})
+        if "context" in model:
+            acfg["num_ctx"] = model["context"]
+        if "max_tokens" in model:
+            acfg["max_tokens"] = model["max_tokens"]
+        if "id" in model:
+            acfg["active_model"] = model["id"]
+
+    if acfg["provider"] == "antigravity":   # it runs its own agent and tools: none of the small-model routing below applies
+        from . import antigravity
+        async for ev in antigravity.run(ctx, registry, conv_id, text, attachments=attachments, model=model):
+            yield ev
+        return
     session.UNTRUSTED.set({})
+    typed = text
+    skill, text = instructions.split_slash(text or "")   # "/app-creator make a timer": that skill's text goes into this turn only
+    if skill:
+        extra_system += f"\n\nSkill {skill.name}:\n{skill.body}"
+        text = text or f"Follow the skill {skill.name}."
     session.REQUEST.set(text or "")
     t0 = time.monotonic()
-    provider = make_provider(ctx)
+    try:
+        provider = make_provider(ctx, model=model)
+    except TypeError:
+        provider = make_provider(ctx)
     guard = RunGuard(acfg)
     guard.approval_timeout = approval_timeout
     trace = ctx.telemetry.begin(conv_id, text, "scheduled" if (readonly or approval_timeout is not None) else "chat", acfg["model"])
@@ -463,15 +521,23 @@ async def run_agent(ctx, registry, conv_id: str, text: str, *, speak: bool = Fal
     history = build_history(ctx.db.history(conv_id, limit=int(acfg["history_messages"])), int(acfg["history_chars"]), hidden)
     prior_apps = ctx.db.apps_used(conv_id)
     prior_tools = ctx.db.tools_used(conv_id)
-    ctx.db.add_message(conv_id, "user", text)
-    tool_map, expects_tool = select_tools(registry, text, prior_apps, force_apps, prior_tools)
-    on_screen, screen_app = screen_line(registry, screen)
-    # "summarize this", or a follow-up like "list contents" that names no app: it's about what is on screen.
-    if screen_app and (_DEICTIC.search(text) or not expects_tool):
-        force_apps = frozenset(force_apps) | {screen_app}
-        tool_map, expects_tool = select_tools(registry, text, prior_apps, force_apps, prior_tools)
+    ctx.db.add_message(conv_id, "user", typed)
+    ui_app = registry.apps.get("ui")
+    # Building an app is a session: one fixed toolset and one app for the whole conversation, not tools picked by the words of each message.
+    builder = ui_app.builder_session(conv_id, text, prior_tools, screen, is_navigation(text)) if ui_app and not readonly and not force_apps else None
+    screen_app = None
+    if builder:
+        tool_map, expects_tool, on_screen = {f"ui_{t.name}": (ui_app, t) for t in ui_app.builder_tools()}, True, ""
+        extra_system += builder.note
     else:
-        on_screen = ""
+        tool_map, expects_tool = select_tools(registry, text, prior_apps, force_apps, prior_tools)
+        on_screen, screen_app = screen_line(registry, screen)
+        # "summarize this", or a follow-up like "list contents" that names no app: it's about what is on screen.
+        if screen_app and (_DEICTIC.search(text) or not expects_tool):
+            force_apps = frozenset(force_apps) | {screen_app}
+            tool_map, expects_tool = select_tools(registry, text, prior_apps, force_apps, prior_tools)
+        else:
+            on_screen = ""
     if on_screen and screen_app in hidden:   # don't put an email subject or note title in a cloud prompt
         on_screen = screen_line(registry, {k: v for k, v in screen.items() if k != "title"})[0]
     if attachments or is_text_task(text):   # textual tasks or user attachments: a no-tool reply is legitimate (no 'call a tool' nudge)
@@ -491,7 +557,15 @@ async def run_agent(ctx, registry, conv_id: str, text: str, *, speak: bool = Fal
                 {"role": "user", "content": f"{text}{attachments}{on_screen}\n\n(Now: {now})"}]
     # Never send more than the model can take: a context overflow is a hard error from Ollama, not a slow answer.
     fixed = sum(len(m.get("content") or "") for m in messages) + 600 * len(history) // 10
-    tool_map, specs = fit_budget(tool_map, specs, fixed, int(acfg.get("num_ctx") or 8192), int(acfg.get("max_tokens") or 1024))
+    num_ctx, reply_cap = int(acfg.get("num_ctx") or 8192), int(acfg.get("max_tokens") or 1024)
+    base_options: dict | None = None
+    max_steps = int(acfg["max_steps"])
+    if can_build(tool_map):
+        max_steps = max(max_steps, int(acfg.get("build_max_steps") or 14))   # a whole index.js goes in one tool argument: give the reply and the context room for it
+        reply_cap = max(reply_cap, int(acfg.get("build_max_tokens") or 4096))
+        num_ctx = max(num_ctx, int(acfg.get("build_num_ctx") or 16384))
+        base_options = {"num_predict": reply_cap, "num_ctx": num_ctx}
+    tool_map, specs = fit_budget(tool_map, specs, fixed, num_ctx, reply_cap)
     trace.routing(sorted({a.id for a, _ in tool_map.values()}), len(specs))
 
     cards: dict[str, dict] = {}
@@ -501,9 +575,10 @@ async def run_agent(ctx, registry, conv_id: str, text: str, *, speak: bool = Fal
     used_tools = had_approval = had_error = False
     error: str | None = None
     tokens = 0
-    options: dict | None = None
+    options: dict | None = base_options
     forced = finished = False
     nudged_draft = ""
+    cut_nudged = False
 
     def note(kind: str, message: str) -> dict:
         guards.append(message)
@@ -511,7 +586,7 @@ async def run_agent(ctx, registry, conv_id: str, text: str, *, speak: bool = Fal
         return {"type": "guard", "kind": kind, "message": message}
 
     try:
-        for _step in range(int(acfg["max_steps"])):
+        for _step in range(max_steps):
             if guard.expired():
                 yield note("timeout", f"Stopped: this run took longer than {int(acfg['run_timeout'])}s.")
                 break
@@ -527,7 +602,7 @@ async def run_agent(ctx, registry, conv_id: str, text: str, *, speak: bool = Fal
                 if guard.loops == 1:  # retry once: hotter sampling, stronger repetition penalty, explicit nudge
                     yield {"type": "rewrite", "text": ""}
                     yield note("loop", "The model started repeating itself, so I cut it off and retried.")
-                    options = RETRY_OPTIONS
+                    options = {**(base_options or {}), **RETRY_OPTIONS}
                     messages.append({"role": "user", "content": "(Your last reply repeated itself. Reply once, briefly, without repeating. Call a tool if one is needed.)"})
                     continue
                 if content:
@@ -537,6 +612,11 @@ async def run_agent(ctx, registry, conv_id: str, text: str, *, speak: bool = Fal
                 break
             if holder["truncated"]:
                 yield note("length", "The reply hit the length limit and was cut short.")
+                if not calls and not forced and can_build(tool_map) and not cut_nudged:   # most likely a long file cut off mid-argument
+                    cut_nudged = True
+                    messages += [{"role": "assistant", "content": content},
+                                 {"role": "user", "content": "(Your reply was cut off before the tool call finished, so nothing was saved. Write a shorter, simpler version and call the tool again.)"}]
+                    continue
 
             if calls:
                 # "I'll check that for you" before a tool call is noise, and small models imitate it
@@ -617,10 +697,15 @@ async def run_agent(ctx, registry, conv_id: str, text: str, *, speak: bool = Fal
             texts = [nudged_draft]
             yield {"type": "rewrite", "text": nudged_draft}
     final = collapse_repeats(texts[-1] if used_tools and texts else "\n\n".join(texts))
+    unbuilt = None if error else unbuilt_failure(text, list(cards.values()), tool_map, registry)
+    if unbuilt:
+        final, had_error = unbuilt, True
+        yield note("unbuilt", "Nothing was built, so the reply was replaced.")
+        yield {"type": "rewrite", "text": final}
     if not final and not error:
         final = _fallback(list(cards.values()))
         yield {"type": "rewrite", "text": final}
-    perf = trace.finish("error" if error else "ok", error, len(final))
+    perf = trace.finish("error" if error or unbuilt else "ok", error or unbuilt, len(final))
     ctx.db.add_message(conv_id, "assistant", final, {"tools": list(cards.values()), "error": error, "guards": guards, "perf": perf})
     yield {"type": "message", "text": final}
 

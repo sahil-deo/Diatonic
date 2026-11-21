@@ -1,0 +1,53 @@
+# Markdown: the rendered page
+
+`Compos.Core.Markdown.Html` draws a Markdown buffer as the page a reader sees in the preview (an iframe) and in the rows renderer. The parser is tree-sitter; the renderer keeps these rules.
+
+## Invariants
+
+1. Every element says the byte it was drawn from (`data-src="START-STOP"`), and every run of text says where it began (`data-s`). A reader moving the caret asks the page where it landed, and the page answers exactly.
+2. The page does not change when the caret moves. A caret mark is drawn as a span inside the structure; it never changes how the source parses.
+3. The newline that ends a block is the end of the block, not a line inside it: drawn as a byte a caret can stand on, never as a break. A newline the author typed inside a paragraph is a line the reader has to see.
+4. Markup is consumed and what it marked is drawn: the delimiters of emphasis, a fence's backticks, a link's destination are `@silent`.
+5. A caller can upgrade one complete paragraph (a URL alone on a line becomes an embed). The renderer keeps that policy outside itself.
+6. The rows renderer always hides Markdown markers. Toggle preview off to edit source syntax in Morg.
+7. Preview owns its page font. Its saved source typography survives restore, and preview teardown restores it.
+
+## Pictures and captions
+
+Markdown has no caption syntax of its own. The page uses the shape most renderers agree on: a picture on a line of its own, and under it a line that is only emphasis.
+
+```markdown
+![alt](picture.png)
+*The caption.*
+```
+
+1. That paragraph draws as `<figure data-src><img …><figcaption data-src>The caption.</figcaption></figure>`. The caption is not emphasis on the page: no `<em>`; the stylesheet sets it small, centred, and dim under the picture.
+2. The line between the picture and the caption is a byte a caret can stand on, drawn without a break.
+3. Anything else in the paragraph keeps it a paragraph: text before the picture, plain words under it, a line after the caption.
+4. A picture alone stays a paragraph with an image.
+5. The rows renderer (writing-mode, `markdown-paint`) paints the same shape: the stars step back, the words wear `md-caption`, and the row wears `row-caption`, which the page centres and shrinks under the picture. Away from a picture, `*text*` is emphasis (italic), as `_text_` is. The rows are lenient about a space before the closing star; the page's parser (CommonMark) is not, so write `*The caption.*` with no space inside the stars.
+
+## Tables
+
+The page draws three kinds of table.
+
+1. A pipe table: a head row, a rule row of dashes, and body rows. Each row is a table row, and the columns divide the width evenly.
+2. An aligned table: an indented code block whose words stand in shared columns. The grammar finds the block. The rows stay monospace and do not wrap, so the spaces keep the columns. A first row with no digits draws bold, with a line under it.
+3. A `table` fence: a pipe table or an aligned table whose cells take font colors.
+
+```table green=strong yellow=potential red=unfit green>=.7 yellow>=.4 red<.4
+| candidate | sonnet | jev | spec |
+|---|---|---|---|
+| Abhiram R | potential | unfit | .64 |
+```
+
+The fence arguments are color rules. The editor tries them in order, and the first rule that matches a cell colors it.
+
+- `COLOR=A,B` matches a cell whose text is `A` or `B`.
+- `COLOR<N`, `COLOR<=N`, `COLOR>N`, and `COLOR>=N` match a cell that holds a number. `.6` is a number.
+- A cell that no rule matches tries each of its words.
+- The colors are red, green, yellow, blue, purple, cyan, and gray. Each is a theme face (`table-red` and the others), so it follows the theme.
+
+The source view and the page both draw the colors. Another Markdown renderer shows a `table` fence as a code block.
+
+Tests: `apps/compos_core/test/compos/markdown_html_test.exs`.

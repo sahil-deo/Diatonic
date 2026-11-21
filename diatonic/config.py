@@ -16,7 +16,7 @@ def home() -> Path:
 
 
 DEFAULTS: dict[str, Any] = {
-    "server": {"host": "127.0.0.1", "port": 5005},
+    "server": {"host": "127.0.0.1", "port": 5005, "allowed_hosts": []},   # extra Host names, or ["*"] for any (e.g. behind tailscale serve)
     "agent": {
         "provider": "ollama",
         "model": "qwen3:4b-instruct",
@@ -27,6 +27,9 @@ DEFAULTS: dict[str, Any] = {
         "repeat_penalty": 1.05,
         "num_ctx": 8192,
         "max_tokens": 1024,         # hard cap on one model reply
+        "build_max_tokens": 4096,   # the cap when a run can write an app: a whole index.js is one tool argument and 1024 cuts it off
+        "build_max_steps": 14,       # model calls when a run can write an app: look up, create and write need more than 8
+        "build_num_ctx": 16384,     # the context for such a run, so the longer reply leaves room for the tool list
         "max_steps": 8,             # model calls per run
         "max_tool_calls": 10,       # tool executions per run
         "run_timeout": 300,         # seconds per run
@@ -38,6 +41,19 @@ DEFAULTS: dict[str, Any] = {
         "active_model": "",         # id of the saved model in use (see "models")
     },
     "models": [],   # saved models: [{id, label, provider, model, endpoint, context, max_tokens}]; keys are in the keychain
+    "model_routing": {
+        "enabled": False,
+        "rules": [
+            {"id": "ui", "name": "UI & Navigation", "description": "Opening panels, changing layouts, zoom, switching tabs", "model": ""},
+            {"id": "trivial", "name": "Trivial & Text Tasks", "description": "Quick text tasks, translations, summaries, proofreading, simple Q&A", "model": ""},
+            {"id": "multi_app", "name": "Multi-App Workflows", "description": "Everyday productivity tasks coordinating mail, calendar, notes, todos, etc.", "model": ""},
+            {"id": "builder", "name": "App Creation", "description": "Creating and editing custom mini-apps, /app-creator", "model": ""},
+            {"id": "complex", "name": "Deep Research & Code Analysis", "description": "In-depth research, repository code analysis, deep reasoning", "model": ""},
+        ],
+        "custom_rules": [],
+    },
+    "antigravity": {"command": "agy", "idle_minutes": 15, "mode": "default", "thought_level": "high", "permissions": "strict"},   # the Antigravity command line tool, permissions, and timeouts
+    "mcp": {"apps": []},   # apps an outside agent may use over /mcp (Antigravity); none until the user names them
     "voice": {
         "stt_model": "small.en",
         "auto_send": False,  # False = review the transcript before sending
@@ -92,7 +108,6 @@ DEFAULTS: dict[str, Any] = {
         "accounts": [],          # [{email, name, label, color, scopes, enabled, needs_reauth}]; tokens live in the keychain
         "default_account": "",   # used for writes (create event, send mail) when you don't say which account
         "calendar_prefs": {},    # {"<email>|<calendar id>": {"visible": bool, "color": "#rrggbb"}}
-        "redirect_path": "",     # which OAuth redirect URI to send Google: the default, or the original Calendar one
     },
     "actions": [],  # saved prompts and script buttons; see diatonic/actions.py
     "notifications": {

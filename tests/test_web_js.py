@@ -36,6 +36,24 @@ def test_every_panel_command_has_a_menu_entry():
         assert f'"{cmd}"' in core and call in menu, f"{cmd} has no entry in the panel menu"
 
 
+def test_panel_menu_has_reload_on_top_and_no_redundant_header():
+    """The panel menu must put Reload on top and not duplicate the tab's name in a redundant header."""
+    web = Path(__file__).parent.parent / "diatonic" / "web" / "js"
+    menu = (web / "panel-menu.js").read_text(encoding="utf-8")
+    assert "pm-head" not in menu, "panel-menu still contains pm-head header"
+    pop_index = menu.index("openPopover(anchor,")
+    reload_index = menu.index('row("Reload", "refresh"')
+    assert reload_index > pop_index, "Reload button not found inside openPopover"
+    assert reload_index < menu.index('row("Split to the right"'), "Reload button must be on top before splits"
+
+
+def test_reload_tab_coalesces_concurrent_calls():
+    """reloadTab must guard against overlapping concurrent reloads on the same instance."""
+    ws = (Path(__file__).parent.parent / "diatonic" / "web" / "js" / "workspace.js").read_text(encoding="utf-8")
+    assert "currentInst.reloading" in ws, "reloadTab does not track active reload execution"
+    assert "currentInst.pendingReload" in ws, "reloadTab does not queue pending reload requests"
+
+
 def test_rebuilt_panel_containers_have_no_entrance_animation():
     """The panel area is rebuilt on every move and click; a fade-in that stalls leaves a panel invisible (it looked black) until the next event."""
     import re
@@ -57,7 +75,7 @@ def test_drag_and_drop_does_not_rebuild_the_page_inside_the_drop_event():
     drop = tiles[tiles.index("card.ondrop"):tiles.index("// Header")]
     assert "renderGrid();" not in drop, "tile drop rebuilds the grid inside the drop event"
     css = (web / "css" / "app.css").read_text(encoding="utf-8")
-    for sel in (".workspace-stack", ".rail, .sidebar", ".statusbar", ".composer, .chat-panel-composer"):
+    for sel in (".workspace-stack", ".rail, .sidebar", ".statusbar", ".composer"):
         rule = css[css.index(sel + " {") if sel + " {" in css else css.index(sel):].split("}")[0]
         assert "backdrop-filter" not in rule, f"{sel} blurs what is behind it; use blur only on floating things"
     assert "background-attachment: fixed" not in css
@@ -98,12 +116,61 @@ def test_panels_only_take_things_the_panel_context_provides():
     import re
     web = Path(__file__).parent.parent / "diatonic" / "web"
     src = (web / "js" / "panel.js").read_text(encoding="utf-8")
-    body = src[src.index("  return {\n    api, h, esc, toast,"):]
+    body = src[src.index("  const ctx = {\n    api, h, esc, toast,"):]
     body = body[:body.index("\n  };")]
-    provided = set(re.findall(r"^    (\w+)\s*[:,(]", body, re.M)) | set(re.findall(r"\b(\w+),", body.split("\n")[1]))
+    provided = set(re.findall(r"^    (\w+)\s*[:,(]", body, re.M)) | set(re.findall(r"\b(\w+),", body.split("\n")[1])) | set(re.findall(r"\bctx\.(\w+) = ", src))
     assert {"api", "h", "toast", "reload", "state", "onClose", "prompt", "replaceTab"} <= provided, provided
     for f in sorted((web / "apps").glob("*.js")):
         for names in re.findall(r"const \{([^}]*)\} = ctx;", f.read_text(encoding="utf-8")):
             for part in names.split(","):
                 key = part.split(":")[0].strip()
                 assert key in provided, f"{f.name} takes `{key}` from ctx, which does not provide it"
+
+
+def test_workspace_tab_double_click_toggles_zoom():
+    """Double-clicking a tab triggers toggleZoom (Zoom: fill the window)."""
+    ws = (Path(__file__).parent.parent / "diatonic" / "web" / "js" / "workspace.js").read_text(encoding="utf-8")
+    assert "ondblclick" in ws, "workspace tab has no double-click handler"
+    tab_btn_part = ws[ws.index("const tabBtn = h("):ws.index("tabsEl.append(tabBtn)")]
+    assert "ondblclick:" in tab_btn_part and "toggleZoom(" in tab_btn_part, "tabBtn must trigger toggleZoom on double-click"
+    close_btn_part = tab_btn_part[tab_btn_part.index('title: "Close"'):]
+    assert "ondblclick:" in close_btn_part and "stopPropagation" in close_btn_part, "close button must stop dblclick propagation"
+
+
+def test_todos_drag_and_drop_handlers():
+    """todos.js must properly handle dropping files and emails without broken references."""
+    todos_src = (Path(__file__).parent.parent / "diatonic" / "web" / "apps" / "todos.js").read_text(encoding="utf-8")
+    assert "${B}/" not in todos_src, "todos.js references undefined variable B"
+    assert "${BASE}/create" in todos_src[todos_src.index("ondrop"):], "todos.js must post to ${BASE}/create on drop"
+    assert "toast" in todos_src[:todos_src.index("= ctx;")], "todos.js must take toast from ctx"
+    assert '"Files"' in todos_src, "todos.js must accept OS Files in ondragover"
+
+
+def test_launcher_search_and_highlight_styles():
+    """Launcher search input must be stripped of leaked panel-body input borders, and card highlights must be softened."""
+    css = (Path(__file__).parent.parent / "diatonic" / "web" / "css" / "app.css").read_text(encoding="utf-8")
+    assert ".launcher-search" in css[css.index(".composer textarea"):]
+    card_sel = css[css.index(".launcher-card.sel {"):css.index(".launcher-card-icon {")]
+    assert "color-mix" in card_sel, "launcher-card.sel should use a softened border with color-mix"
+
+
+def test_workspace_tabs_horizontal_wheel_scroll():
+    """Scrolling while hovering over tabs scrolls horizontally if tabs are overflowing."""
+    ws = (Path(__file__).parent.parent / "diatonic" / "web" / "js" / "workspace.js").read_text(encoding="utf-8")
+    assert 'tabsEl.addEventListener("wheel"' in ws
+    part = ws[ws.index('tabsEl.addEventListener("wheel"'):ws.index("const content = h(")]
+    assert "tabsEl.scrollWidth <= tabsEl.clientWidth" in part
+    assert "tabsEl.scrollLeft +=" in part
+
+
+def test_calendar_week_and_whichkey_styles_do_not_collide():
+    """WhichKey grid styles must be scoped under .whichkey so they don't break Calendar's .wk-grid."""
+    css = (Path(__file__).parent.parent / "diatonic" / "web" / "css" / "app.css").read_text(encoding="utf-8")
+    assert ".wk-grid { display: flex;" in css
+    assert ".whichkey .wk-grid {" in css
+    assert ".whichkey .wk-head {" in css
+
+
+
+
+

@@ -1,9 +1,10 @@
 """LLM providers. Add one by implementing `stream`/`complete`/`health` and registering it."""
+from .antigravity import AntigravityProvider
 from .base import Provider, ProviderError
 from .ollama import OllamaProvider
 from .openai import OpenAICompatProvider
 
-PROVIDERS: dict[str, type[Provider]] = {"ollama": OllamaProvider, "openai": OpenAICompatProvider}
+PROVIDERS: dict[str, type[Provider]] = {"ollama": OllamaProvider, "openai": OpenAICompatProvider, "antigravity": AntigravityProvider}
 
 
 def make_provider(ctx, model: dict | None = None) -> Provider:
@@ -17,7 +18,9 @@ def make_provider(ctx, model: dict | None = None) -> Provider:
     cls = PROVIDERS.get(cfg["provider"])
     if cls is None:
         raise ProviderError(f"Unknown provider '{cfg['provider']}'.")
-    if cfg["provider"] != "ollama":
+    if cfg["provider"] == "antigravity":
+        cfg["command"] = ctx.config.data.get("antigravity", {}).get("command") or "agy"
+    elif cfg["provider"] != "ollama":
         cfg["api_key"] = secrets.get(key_name(cfg["endpoint"]))
     return cls(ctx.http, cfg)
 

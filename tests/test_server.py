@@ -30,6 +30,31 @@ def test_host_and_origin_checks(tmp_path):
         assert c.put("/api/config", json={}, headers={"origin": "http://testserver"}).status_code == 200
 
 
+def test_allowed_hosts_in_the_config_let_a_named_host_in(tmp_path):
+    cfg = Config(tmp_path / "c.json")
+    cfg.data["server"]["allowed_hosts"] = ["box.tail1234.ts.net"]
+    with TestClient(create_app(cfg, Database(tmp_path / "d.db"))) as c:
+        assert c.get("/api/state", headers={"host": "box.tail1234.ts.net"}).status_code == 200
+        assert c.put("/api/config", json={}, headers={"host": "box.tail1234.ts.net", "origin": "https://box.tail1234.ts.net"}).status_code == 200
+        assert c.get("/api/state", headers={"host": "evil.com"}).status_code == 403
+
+
+def test_a_wildcard_host_still_refuses_a_cross_site_write(tmp_path):
+    cfg = Config(tmp_path / "c.json")
+    cfg.data["server"]["allowed_hosts"] = ["*"]
+    with TestClient(create_app(cfg, Database(tmp_path / "d.db"))) as c:
+        h = {"host": "anything.example"}
+        assert c.get("/api/state", headers=h).status_code == 200
+        assert c.put("/api/config", json={}, headers={**h, "origin": "https://anything.example"}).status_code == 200
+        assert c.put("/api/config", json={}, headers={**h, "origin": "https://evil.com"}).status_code == 403
+
+
+def test_the_page_cannot_change_allowed_hosts(tmp_path):
+    with client(tmp_path) as c:
+        r = c.put("/api/config", json={"server": {"allowed_hosts": ["*"]}}).json()
+        assert r["server"]["allowed_hosts"] == []
+
+
 def test_config_update_and_server_is_protected(tmp_path):
     with client(tmp_path) as c:
         r = c.put("/api/config", json={"voice": {"speak_summary": True}, "server": {"port": 1}}).json()
@@ -62,3 +87,10 @@ def test_voice_endpoints_degrade_cleanly(tmp_path):
         r = c.post("/api/voice/tts", json={"text": "hi"})
         assert r.status_code == 501 and r.json()["fallback"] == "system"
         assert c.post("/api/voice/transcribe", content=b"\0" * 4000).status_code in (409, 501)
+
+
+def test_a_request_cannot_choose_the_program_antigravity_runs(tmp_path):
+    with client(tmp_path) as c:
+        before = c.get("/api/state").json()["config"]["antigravity"]["command"]
+        assert c.put("/api/config", json={"antigravity": {"command": "/bin/sh"}}).status_code == 200
+        assert c.get("/api/state").json()["config"]["antigravity"]["command"] == before == "agy"

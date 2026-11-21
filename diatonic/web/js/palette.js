@@ -45,7 +45,7 @@ function remember(id) {
 
 export function getAvailableApps() {
   const builtins = [{ id: "chat", name: "Chat", icon: "chat" }];
-  const panelApps = [...(state.apps || []), ...(state.modApps || [])].filter((a) => a.enabled !== false && a.panel);
+  const panelApps = (state.apps || []).filter((a) => a.enabled !== false && a.panel);
   const seen = new Set(["chat"]);
   const res = [...builtins];
   for (const a of panelApps) {
@@ -353,9 +353,8 @@ export function openPalette(opts = {}) {
             toast(err.message, "error");
           }
         } else if (e.metaKey || e.ctrlKey) {
-          // ⌘Enter: new chat in a split
-          const ws = await import("./workspace.js");
-          await ws.splitActive("row", "chat");
+          // ⌘Enter: start a new conversation in the chat
+          await openPanel("chat");
           chat.newChat();
           await chat.send(text);
         } else {

@@ -49,6 +49,16 @@ STARTER_STYLE_CSS = """/* Styles for {name} */
 """
 
 
+def _needs_approval(tools: list[Tool]) -> list[Tool]:
+    """Tools in an app's own tools.py are code the agent wrote, so what they say about themselves (risk: read) is not trusted: they all ask first,
+    and a panel cannot call them. Otherwise a tool that deletes files and calls itself a read would run with no card and, from a run that
+    read mail, with no untrusted-content check."""
+    for t in tools:
+        if not t.changes:
+            t.add_effects("write")
+    return tools
+
+
 class FileAppError(Exception):
     pass
 
@@ -75,7 +85,8 @@ class FileApp(App):
         self.keywords = [str(k) for k in manifest.get("keywords", [])]
         self.private = bool(manifest.get("private", False))
         self.file_app = True
-        self.module = f"/custom-apps/{self.id}/index.js"
+        # The version changes on every write, so a panel opened after an edit loads the new code (a browser keeps a module for its URL)
+        self.module = f"/custom-apps/{self.id}/index.js?v={manifest.get('version', 1)}"
         self.styles = f"/custom-apps/{self.id}/style.css"
         self._tools_list = custom_tools or []
 
@@ -88,14 +99,14 @@ class FileAppStore:
         self.root = Path(folder)
         self.root.mkdir(parents=True, exist_ok=True)
         self.on_change: Callable[[str], None] = lambda app_id: None
+        self.on_delete: Callable[[str], None] = lambda app_id: None   # settings that point at the app (rail, pins, home tiles) are dropped here
         self._logs: dict[str, list[dict]] = {}
         self.errors: dict[str, str] = {}
 
     def _safe_path(self, app_id: str, relative_path: str) -> Path:
         """Resolve a relative path inside an app folder, strictly forbidding traversal outside."""
         clean_id = validate_app_id(app_id)
-        app_dir = (self.root / clean_id).resolve()
-        app_dir.mkdir(parents=True, exist_ok=True)
+        app_dir = (self.root / clean_id).resolve()   # not created here: a read of a deleted app must not bring its folder back
         target = (app_dir / relative_path).resolve()
         if not target.is_relative_to(app_dir):
             raise FileAppError("Path escapes app directory.")
@@ -220,20 +231,42 @@ class FileAppStore:
                 check_css(content)
             except ModError as e:
                 raise FileAppError(str(e))
+            if re.search(r"(?:^|[\}\;])\s*(?:body|html|:root)\b", content, re.I):
+                raise FileAppError("Custom app style.css must not style body, html, or :root. Scope styles to your app container.")
+            if re.search(r"(?:^|[\}\;])\s*\.btn\b", content):
+                raise FileAppError("Custom app style.css must not override global '.btn' directly. Scope it inside your app container (e.g. '.my-app .btn').")
         elif ext == ".json":
             try:
-                json.loads(content)
+                parsed = json.loads(content)
             except ValueError as e:
                 raise FileAppError(f"Invalid JSON: {e}")
+            if relative_path == "manifest.json" and isinstance(parsed, dict) and "permissions" in parsed:
+                from .appperms import normalise
+                try:
+                    normalise(parsed["permissions"])
+                except ValueError as e:
+                    raise FileAppError(f"manifest.json: {e}")
         elif ext == ".py":
             try:
                 ast.parse(content)
             except SyntaxError as e:
                 raise FileAppError(f"Python syntax error on line {e.lineno}: {e.msg}")
+        elif Path(relative_path).name == "index.js":
+            if re.search(r"\bdocument\s*\.\s*body\s*\.\s*(?:replaceChildren|innerHTML\s*=)", content) or \
+               re.search(r"\bdocument\s*\.\s*documentElement\s*\.\s*innerHTML\s*=", content):
+                raise FileAppError("Custom app index.js must not overwrite document.body. Render into the container element passed to render(el, ctx).")
+            if not re.search(r"\bexport\s+(?:default\s+)?(?:async\s+)?function\s+render\b|\bexport\s+(?:const|let|var)\s+render\s*=|\bexport\s*\{[^}]*\brender\b", content):
+                raise FileAppError("Custom app index.js must export a render(el, ctx) function.")
+
+    def check_content(self, relative_path: str, content: str) -> None:
+        """The checks write_file makes, without writing: the approval card runs them so the user is never asked about a write that will fail."""
+        self._validate_content(relative_path, content)
 
     def write_file(self, app_id: str, relative_path: str, content: str) -> dict:
         clean_id = validate_app_id(app_id)
         target = self._safe_path(clean_id, relative_path)
+        if not self.exists(clean_id):   # a write after a delete (a late tool call, an open tab) must not recreate the app as an empty folder
+            raise FileAppError(f"App '{clean_id}' does not exist. Create it first.")
         self._validate_content(relative_path, content)
 
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -293,11 +326,21 @@ class FileAppStore:
         shutil.rmtree(app_dir)
         self.errors.pop(clean_id, None)
         self._logs.pop(clean_id, None)
-        try:
-            self.on_change(clean_id)
-        except Exception:
-            pass
+        for hook in (self.on_delete, self.on_change):
+            try:
+                hook(clean_id)
+            except Exception:
+                log.exception("after deleting app %s", clean_id)
         return True
+
+    def prune_empty(self) -> list[str]:
+        """Remove folders with no files at all: what an older version left behind when an open tab asked for a deleted app."""
+        gone = []
+        for child in sorted(self.root.iterdir()) if self.root.is_dir() else []:
+            if child.is_dir() and not any(child.iterdir()):
+                child.rmdir()
+                gone.append(child.name)
+        return gone
 
     # ---- logging and diagnostics for self-debugging -------------------
     def log_error(self, app_id: str, error: str, source: str = "runtime") -> None:
@@ -322,6 +365,16 @@ class FileAppStore:
         clean_id = validate_app_id(app_id)
         self._logs.pop(clean_id, None)
         self.errors.pop(clean_id, None)
+
+    def declared_tool_names(self, app_id: str) -> list[str]:
+        """Names of the tools an app's tools.py offers, found by reading the manifest and the source. Nothing is imported or run."""
+        app_dir = self.root / validate_app_id(app_id)
+        try:
+            raw = json.loads((app_dir / "manifest.json").read_text(encoding="utf-8")).get("tools", [])
+        except (OSError, ValueError):
+            return []
+        names = list(raw) if isinstance(raw, dict) else [t.get("name") for t in raw if isinstance(t, dict)]
+        return [n for n in names if isinstance(n, str) and n]
 
     # ---- python tools loading ------------------------------------------
     def load_tools(self, app_id: str, ctx) -> list[Tool]:
@@ -352,11 +405,19 @@ class FileAppStore:
             if hasattr(mod, "export_tools") and callable(mod.export_tools):
                 tools = mod.export_tools(ctx)
                 if isinstance(tools, list):
-                    return [t for t in tools if isinstance(t, Tool)]
+                    return _needs_approval([t for t in tools if isinstance(t, Tool)])
 
             # Option 2: Tools declared in manifest.json mapping to functions in tools.py
             tools = []
-            for tdef in manifest.get("tools", []):
+            raw_tools = manifest.get("tools", [])
+            if isinstance(raw_tools, dict):
+                manifest_tools = [{"name": k, **v} if isinstance(v, dict) else {"name": k} for k, v in raw_tools.items()]
+            elif isinstance(raw_tools, list):
+                manifest_tools = raw_tools
+            else:
+                manifest_tools = []
+
+            for tdef in manifest_tools:
                 if not isinstance(tdef, dict):
                     continue
                 name = tdef.get("name")
@@ -368,24 +429,15 @@ class FileAppStore:
 
                 is_async = iscoroutinefunction(fn)
 
-                async def make_handler(func, is_coro):
-                    async def handler(args: dict):
-                        try:
-                            if is_coro:
-                                return await func(args)
-                            return await asyncio.to_thread(func, args)
-                        except ToolError:
-                            raise
-                        except Exception as ex:
-                            raise ToolError(f"{name} failed: {ex}")
-                    return handler
-
-                handler = asyncio.run(make_handler(fn, is_async)) if asyncio.get_event_loop().is_running() else None
-                # synchronous setup for handler
-                async def _exec(a, _fn=fn, _is_async=is_async):
-                    if _is_async:
-                        return await _fn(a)
-                    return await asyncio.to_thread(_fn, a)
+                async def _exec(a, _fn=fn, _is_async=is_async, _name=name):
+                    try:
+                        if _is_async:
+                            return await _fn(a)
+                        return await asyncio.to_thread(_fn, a)
+                    except ToolError:
+                        raise
+                    except Exception as ex:
+                        raise ToolError(f"{_name} failed: {ex}")
 
                 risk = WRITE if tdef.get("risk") == "write" else READ
                 tools.append(Tool(
@@ -396,7 +448,7 @@ class FileAppStore:
                     risk=risk,
                     title=tdef.get("title") or name.replace("_", " ").title(),
                 ))
-            return tools
+            return _needs_approval(tools)
         except Exception as e:
             log.exception("Failed to load tools for %s", clean_id)
             self.log_error(clean_id, f"tools.py load error: {e}", source="python_tools")
@@ -437,7 +489,7 @@ class FileAppStore:
 
         app_id = validate_app_id(bundle.get("id") or manifest.get("id"))
         app_dir = self.root / app_id
-        if app_dir.is_dir() and not overwrite:
+        if (app_dir / "manifest.json").is_file() and not overwrite:
             raise FileAppError(f"App '{app_id}' already exists. Pass overwrite=True to replace it.")
 
         # Validate all files before creating anything

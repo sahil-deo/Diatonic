@@ -11,14 +11,16 @@ import { openPalette } from "./palette.js";
 import { openLayoutMenu } from "./layout-menu.js";
 import { invoke as invokeAction } from "./actions.js";
 import { getMacros, runMacro, startRecording, isRecording } from "./macros.js";
-import { applyTree, toggleZoom, duplicateTab, moveTabToward, swapTabWith, closeOtherTabs, getActiveTabId, getLayouts, switchLayout, saveCurrentLayout, deleteLayout, undoLayout, redoLayout } from "./workspace.js";
+import { applyTree, toggleZoom, unzoom, duplicateTab, moveTabToward, swapTabWith, closeOtherTabs, getActiveTabId, getLayouts, switchLayout, saveCurrentLayout, deleteLayout, undoLayout, redoLayout } from "./workspace.js";
 import { hintFor, keymap, userKeymap, saveKeymap } from "./keymap.js";
 import { registerNav, setRegion, markKeyboard } from "./nav.js";
 import { getOpenTabs, focusTab, applyPreset } from "./workspace.js";
 
 const panelApps = () => [
   { id: "tiles", name: "Home", icon: "layout", enabled: true, panel: true },
-  ...[...state.apps, ...(state.modApps || [])].filter((a) => a.enabled && a.panel)
+  { id: "chats", name: "Chats", icon: "chat", enabled: true, panel: true },
+  { id: "components", name: "Components", icon: "layout", enabled: true, panel: true },
+  ...state.apps.filter((a) => a.enabled && a.panel)
 ];
 const SETTINGS = [["voice", "Voice settings", "mic"], ["memory", "Memory: what the agent remembers", "brain"], ["interface", "Customize the interface", "sliders"],
   ["actions", "Edit saved prompts and buttons", "command"], ["keyboard", "Keyboard shortcuts", "command"],
@@ -39,6 +41,7 @@ export function registerCore(h) {
       run: () => h.setSpeak(!state.config.voice.speak_summary) },
     { id: "settings.open", title: "Settings", group: "Actions", icon: "sliders", run: (a) => openSettings(a.tab || undefined),
       titleFor: (a) => (a.tab ? `Settings: ${a.tab}` : "Settings") },
+    { id: "prompt.show", title: "Show the system prompt", group: "Settings", icon: "sliders", run: () => import("./prompt-view.js").then((m) => m.showPrompt()) },
     { id: "customization.export", title: "Export customizations", group: "Settings", icon: "download", run: () => { window.location.href = "/api/customization/export"; } },
     { id: "sidebar.set", title: "Show or hide the sidebar", group: "Actions", hidden: true, run: (a) => h.setSidebar(a.mode) },
     { id: "sidebar.toggle", title: "Toggle sidebar", group: "Actions", icon: "menu", run: () => h.toggleSidebar() },
@@ -142,7 +145,16 @@ export function registerCore(h) {
         openPalette({ initialQuery: "Delete layout" });   // a list of your layouts, one per row
       } },
     { id: "panel.menu", title: "Panel menu", group: "Layout", icon: "more", run: async () => { const el = document.querySelector(`[data-tab-id="${getActiveTabId()}"]`); if (el) (await import("./panel-menu.js")).openPanelMenu(el, getActiveTabId()); } },
-    { id: "panel.zoom", title: "Zoom the panel to fill the window (again to undo)", group: "Layout", icon: "maximize", run: () => toggleZoom() },
+    { id: "panel.zoom", title: "Zoom the panel to fill the window (again to undo)", group: "Layout", icon: "maximize", run: (a) => {
+      let tid = a?.tabId;
+      if (!tid && a?.app) {
+        const tabs = typeof getOpenTabs === "function" ? getOpenTabs() : [];
+        const found = tabs.find((x) => x.id === a.app || x.app === a.app);
+        if (found) tid = found.tabId;
+      }
+      toggleZoom(tid || undefined);
+    } },
+    { id: "panel.unzoom", title: "Restore all panels (exit zoom)", group: "Layout", icon: "minimize", run: () => unzoom() },
     { id: "panel.duplicate", title: "Duplicate panel", group: "Layout", icon: "plus", run: () => duplicateTab() },
     { id: "tab.close_others", title: "Close other tabs in this panel", group: "Layout", icon: "x", run: () => closeOtherTabs() },
     { id: "panel.move.left", title: "Move panel left", group: "Layout", icon: "chevron", run: () => moveTabToward(undefined, "left") },

@@ -38,7 +38,7 @@ export async function render(el, ctx) {
           ext(d.url)),
         h("h3", { class: "p-t" }, d.title || d.url),
         h("div", { class: "web-text" }, d.text),
-        d.links.length && h("div", { class: "p-s" }, "Links on this page"),
+        ...(d.links.length ? [h("div", { class: "p-s" }, "Links on this page")] : []),
         ...d.links.map((l) => row(l.url, h("div", { class: "p-t" }, l.text), h("div", { class: "p-s" }, l.url))));
     } catch (e) { body.replaceChildren(h("div", { class: "p-empty" }, e.message)); }
   }

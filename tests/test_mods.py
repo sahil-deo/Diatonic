@@ -126,15 +126,12 @@ def test_style_applies_immediately_but_unsafe_css_is_refused(env, tmp_path, monk
 
 
 @pytest.mark.parametrize("approve", [True, False])
-def test_scripts_and_panels_need_an_approval_card_showing_the_code(env, tmp_path, monkeypatch, approve):
+def test_scripts_need_an_approval_card_showing_the_code(env, tmp_path, monkeypatch, approve):
     code = "diatonic.addButton({label: 'Hi', onclick: () => diatonic.toast('hi')})"
     ctx, events, ev = run_chat(env, tmp_path, monkeypatch, [[call("ui_add_script", name="hi-button", code=code)], [{"content": "ok"}]], approve=approve)
     card = [e for e in ev if e["type"] == "tool_call"][0]
     assert card["needs_approval"] and "hi-button" in card["describe"] and code in card["preview"]
     assert (ctx.mods.get("hi-button") is not None) is approve                                        # nothing is stored unless approved
-    ctx, events, ev = run_chat(env, tmp_path, monkeypatch, [[call("ui_add_panel", name="clock", title="Clock", code="el.textContent = new Date()")], [{"content": "ok"}]], approve=approve)
-    assert [e for e in ev if e["type"] == "tool_call"][0]["needs_approval"]
-    assert (ctx.mods.get("clock") is not None) is approve
 
 
 def test_a_run_that_read_email_cannot_change_the_interface(env, tmp_path, monkeypatch):
@@ -152,7 +149,7 @@ def test_background_runs_cannot_change_the_interface(env, tmp_path, monkeypatch)
 
 
 def test_colour_names_and_loose_hex_are_understood(env, tmp_path, monkeypatch):
-    from diatonic.apps.ui.app import hex_colour
+    from diatonic.apps.ui.looks import hex_colour
     assert hex_colour("green") == "#34d399" and hex_colour("00ff00") == "#00ff00" and hex_colour("#f80") == "#ff8800" and hex_colour("nope") == "nope"
 
 

@@ -45,7 +45,7 @@ export function flags() {
   f.add(state.panelApp ? "panel" : "no-panel");
   if (state.panelApp) f.add(`panel:${state.panelApp}`);
   f.add("app:chat");
-  for (const x of [...state.apps, ...(state.modApps || [])]) if (x.enabled !== false) f.add(`app:${x.id}`);
+  for (const x of state.apps) if (x.enabled !== false) f.add(`app:${x.id}`);
   f.add(document.body.querySelector(".region-focus")?.id === "panel" ? "focus:panel" : "focus:chat");
   if (hasList()) f.add("list");
   return f;

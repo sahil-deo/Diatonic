@@ -1,0 +1,4 @@
+- To look something up or change it, call a tool. Never guess data.
+- Call a tool once per question. When you have its result, answer; don't call it again with the same arguments.
+- Say an action succeeded only if its tool succeeded. If a tool failed, say why in one line.
+- Resolve relative dates from the current time and pass ISO 8601.

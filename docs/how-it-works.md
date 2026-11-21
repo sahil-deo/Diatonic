@@ -4,9 +4,9 @@ Approvals, running several chats at once, the guardrails that make a small model
 
 ## Approvals
 
-Approvals work in any chat, including background ones. Every tool declares a risk level: `read` runs immediately; `write` and `destructive` show an approval card (**⌘↵** approve, **Esc** deny) with exactly what will happen: the diff for a file edit, the full message for an email, the code for a script.
+Approvals work in any chat, including background ones. Every tool declares its effects (see [platform.md](platform.md)): a tool that only reads runs immediately; one that writes, deletes, runs code or spends shows an approval card (**⌘↵** approve, **Esc** deny) with exactly what will happen: the diff for a file edit, the full message for an email, the code for a script.
 
-Some writes run without a card because they are easy to undo and can't reach outside Diatonic: theme and CSS changes, top-bar buttons, building or editing data apps and adding items to them, and adding endpoints to an API app you already approved. They appear as tool cards in the chat, and interface changes offer an **Undo**. Each app's list in Settings → Apps shows which tools ask; you can mark more as *always allow* there.
+Some writes run without a card because they are easy to undo and can't reach outside Diatonic: theme and CSS changes and top-bar buttons. They appear as tool cards in the chat, and interface changes offer an **Undo**. Each app's list in Settings → Apps shows which tools ask; you can mark more as *always allow* there.
 
 With a cloud model, private apps get an extra card, "Share private data with a cloud model?" (**Allow once**, **Allow for this chat**, **Deny**). Pressing **Stop** while a card is waiting cancels it. Voice input never approves anything, so a mis-heard word can't merge a PR.
 
@@ -38,10 +38,37 @@ With a small local model most of the time goes into reading the prompt, so the h
 - **Tool routing:** only the apps your message names (plus those already used in the chat, and the app on screen) offer tools, and an app can narrow its own tools per request. A request that names no app gets only its few best-matching tools, and plain chat gets none. Add `keywords` to a new app to take part.
 - **Never over the context window:** before each model call the lowest-ranked tools are dropped until the prompt plus room for the reply fits the model's context. If the model calls a real tool that wasn't offered, it still runs.
 - **Compact schemas and results:** self-explanatory parameter descriptions are dropped, tool results are compacted and clipped, history is capped by characters, and only the latest tool-using answer replays its tool trace.
+- **Instructions are files:** the system prompt is the sections in `diatonic/prompts/`, and how to build an app is a skill the agent reads on demand (`docs/platform.md`, "Instructions are files").
 - **KV-cache friendly:** the system prompt and tool list stay byte-identical between turns about the same app (the clock rides on the user message), so Ollama reuses its cache. Chat within one app is much faster than alternating apps.
 - **Sampling tuned for Qwen3-instruct** (temperature 0.6, top-p 0.8, top-k 20, repeat penalty 1.05) instead of the near-greedy settings that make small models loop. Spoken summaries use a tiny capped call.
 
 All limits are in Settings → Agent and `~/.diatonic/config.json`.
+
+## Rule-based model routing
+
+Instead of locking all queries to a single model, Diatonic can route each request to the best-suited model based on its intent (`diatonic/agent/router.py`). Configure this in **Settings → Models → Task-based Model Routing**.
+
+The router evaluates requests across five standard tiers in priority order, plus any custom rules:
+
+1. **Custom Rules**: user-defined regex rules (e.g. `\b(sql|postgres)\b` → specialized code model).
+2. **App Creation (`builder`)**: requests to build, create, or modify apps and trackers (e.g. "create an app to track my habits").
+3. **Deep Research & Code Analysis (`complex`)**: multi-file refactoring, deep architectural inquiries, complex diff analysis, or deep research tasks.
+4. **UI Navigation (`ui`)**: lightweight layout management, theme adjustments, and window zooming (e.g. "zoom the calendar", "split mail", "toggle sidebar").
+5. **Multi-App Workflows (`multi_app`)**: tasks requiring cross-app coordination and multiple tools (e.g. "check my calendar for conflicts and draft email responses").
+6. **Trivial Tasks (`trivial`)**: greetings, short factual lookups, or simple single-app commands.
+7. **Default**: falls back to the globally selected model.
+
+When a message arrives, `agent/runs.py` classifies the task, resolves the model (local Ollama, cloud API, or Antigravity), tags the run metadata, and dispatches execution via `agent/loop.py`. You can test routing patterns in real time using the prompt tester in Settings → Models.
+
+## Antigravity and MCP dual-mode permissions
+
+When Antigravity (`agy`) is selected, Diatonic communicates with it over the Agent Client Protocol (ACP) via `agent/acp.py` and `agent/antigravity.py`. Each conversation runs in an isolated subprocess (`agy acp --sandbox`). Diatonic simultaneously runs a local Streamable HTTP MCP server (`diatonic/mcp.py`) exposing enabled apps as tools to the external agent with per-conversation bearer authentication.
+
+In **Settings → Models → Antigravity Permissions**, you can choose how Antigravity handles permissions:
+
+- **Strict**: Every file read/write, skill execution, and tool execution prompts an approval card in Diatonic.
+- **Auto (Like Local Models)**: Safe file reads and writes inside shared folders, skill executions, and read-only tools run automatically without interrupting you with approval cards. Sensitive and destructive actions (sending emails, deleting files, shell commands) still produce approval cards.
+- **Command Guardrails**: Regardless of permission mode, desktop launcher commands (`open -a`, `osascript`, `kill`, `ps`) and direct access to `~/.diatonic` are intercepted and blocked by strict guardrails.
 
 ## Adding an app
 
@@ -75,25 +102,26 @@ def create(ctx):
 
 - Tools are exposed to the model as `<app>_<tool>` and validated against their JSON Schema before running.
 - Add `routes()` for backend endpoints (mounted at `/api/apps/<id>/`) and set `panel = True` plus `web/apps/<id>.js` (exporting `render(el, ctx)`) for a side panel. Export `navigate(params, ctx)` too and the agent can open items in it; `current()` tells the agent what "this" refers to.
-- Keep tool descriptions short and the tool count modest; a 4B model chooses better from fewer, sharper tools. An app with many tools can override `tools_for(text)` to offer only those a request needs.
-- For a simple tracker or a web API you don't need code at all: ask the agent to build it (see [Making it yours](customizing.md#your-own-apps-no-api-and-no-code)).
+- Keep tool descriptions short and the tool count modest; a 4B model chooses better from fewer, sharper tools. An app with many tools can override `tools_for(text)` to offer only those a request needs. Building an app does not use it: that is a builder session with a fixed toolset (`apps/ui/builder.py`).
+- For a web API you don't need code at all: ask the agent to build it (see [Making it yours](customizing.md#apps-on-web-apis-built-by-the-agent)).
 
 ## Layout
 
 ```
 diatonic/
   server.py            Starlette app, SSE event stream, static UI
+  mcp.py               Streamable HTTP MCP server exposing apps as tools to outside agents
   agent/               loop.py (tool routing, budget), guards.py, approvals.py, runs.py, session.py,
-                       providers/ (ollama.py, openai.py for Gemini, Groq and other compatible APIs)
+                       router.py (rule-based model routing), acp.py (Agent Client Protocol client),
+                       antigravity.py (sandboxed runner for agy),
+                       providers/ (ollama.py, openai.py for Gemini, Groq, and antigravity.py)
   models.py            saved models, switching, keys per provider host
   mods.py              interface changes the agent made, with undo history
-  dataapps.py          runtime for data apps (lists and fields, no code)
-  apiapps.py           runtime for API apps (server-side calls with host and size limits)
   google/              multi-account OAuth, tokens, authenticated requests
-  apps/                base.py, registry.py, ui/ (interface tools), shell/ (Terminal + agent shell), github/, gcal/, gmail/, files/, …
+  apps/                base.py, registry.py, ui/ (app.py show and layout, looks.py theme and styles, builder.py building apps), shell/ (Terminal + agent shell), github/, gcal/, gmail/, files/, …
   shell/               classify.py (read-only / approve / refuse), runner.py (agent commands), terminal.py (PTY sessions)
   voice/               stt.py (Whisper), tts.py (Piper), summarizer.py, models.py
-  web/                 index.html, css/, js/ (ES modules), apps/ (panels; _data.js and _api.js serve built apps)
+  web/                 index.html, css/, js/ (ES modules), apps/ (panels)
 tests/
 ```
 

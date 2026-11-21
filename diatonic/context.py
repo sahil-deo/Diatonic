@@ -9,6 +9,10 @@ import httpx
 
 from . import secrets
 from .config import Config, home
+from . import ctxapi, instructions, uikit
+from .apptimers import AppTimers
+from .appstore import AppStore
+from .catalog import Catalog
 from .mods import ModStore
 from .fileapps import FileAppStore
 from .db import Database
@@ -38,11 +42,18 @@ class Context:
         self.google = GoogleAccounts(self)
         self.mods = ModStore(home() / "ui")
         self.fileapps = FileAppStore(home() / "apps")
+        self.apptimers = AppTimers(self, db)   # ctx.timer: countdowns that run on the server
+        self.appstore = AppStore(db)   # ctx.store: each file app's own key/value area and tables
         self.scheduler = None   # set by the server once the engine exists
         self.notifier = None
         self.broadcast = lambda ev: None   # pushes an event to every connected UI
         self.send_ui = lambda client, ev: False   # pushes a screen-control event to one window
         self.registry = None
+        self.catalog = Catalog(self)
+        self.catalog.add_source(ctxapi.entries)
+        self.catalog.add_source(uikit.entries)
+        self.catalog.add_source(instructions.entries)
+        self.builder_seen: dict[tuple, float] = {}   # (conversation, app) -> when its logged errors were last put in front of the agent
         self.cloud_grants: dict[tuple, set] = {}   # (conversation, model) -> private apps allowed for that chat
 
     def cloud(self) -> bool:

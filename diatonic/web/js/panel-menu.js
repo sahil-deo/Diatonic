@@ -7,10 +7,10 @@ import { findTab } from "./layout.js";
 import { getPins, addPin, removePin } from "./statusbar.js";
 import * as ws from "./workspace.js";
 
-const SPECIAL = { chat: ["Chat", "chat"], launcher: ["New tab", "plus"], tiles: ["Home", "layout"], home: ["Home", "layout"] };
+const SPECIAL = { chat: ["Chat", "chat"], chats: ["Chats", "chat"], launcher: ["New tab", "plus"], tiles: ["Home", "layout"], components: ["Components", "layout"], home: ["Home", "layout"] };
 const metaOf = (app) => {
   if (SPECIAL[app]) return SPECIAL[app];
-  const a = [...state.apps, ...(state.modApps || [])].find((x) => x.id === app);
+  const a = state.apps.find((x) => x.id === app);
   return [a?.name || app, a?.icon || "box"];
 };
 
@@ -18,6 +18,7 @@ export function openPanelMenu(anchor, tabId, stackId) {
   const found = tabId && findTab(ws.getTree(), tabId);
   if (!found) return;
   const { tab, stack } = found;
+  const appObj = state.apps.find((x) => x.id === tab.app);
   const [name, ic] = metaOf(tab.app);
   const dirs = ws.neighbourDirections(tabId);
   const pinned = getPins().some((p) => p.appId === tab.app);
@@ -42,7 +43,8 @@ export function openPanelMenu(anchor, tabId, stackId) {
   }
 
   const pop = openPopover(anchor, h("div", { class: "lm pm panel-menu" },
-    h("div", { class: "pm-head" }, h("span", { html: icon(ic, 16) }), h("strong", {}, name)),
+    row("Reload", "refresh", () => ws.reloadTab(tabId, true)),
+    h("div", { class: "pm-sep" }),
     ...appRows,
     row("Split to the right", "split-v", () => ws.splitPanel(tabId, "row", "launcher"), "⌘; w v"),
     row("Split below", "split-h", () => ws.splitPanel(tabId, "col", "launcher"), "⌘; w s"),
@@ -53,11 +55,24 @@ export function openPanelMenu(anchor, tabId, stackId) {
     arrows("Swap with", ws.swapTabWith),
     h("div", { class: "pm-sep" }),
     pinnable && row(pinned ? "Unpin from status bar" : "Pin to status bar", "star", () => (pinned ? removePin(tab.app) : addPin({ appId: tab.app, label: name, icon: ic, zone: "center" }))),
-    row("Reload", "refresh", () => ws.reloadTab(tabId, true)),
     row("Open in its own window", "popout", () => { window.open(`/?app=${encodeURIComponent(tab.app)}`, "_blank", "width=850,height=650"); ws.closePanel(tabId); }),
     h("div", { class: "pm-sep" }),
     row("Close tab", "x", () => ws.closePanel(tabId)),
-    row("Close other tabs", "x", () => ws.closeOtherTabs(tabId), null, stack.tabs.length < 2, true)),
+    row("Close other tabs", "x", () => ws.closeOtherTabs(tabId), null, stack.tabs.length < 2, true),
+    appObj?.file_app ? h("div", { class: "pm-sep" }) : null,
+    appObj?.file_app ? row("Delete custom app...", "trash", async () => {
+      if (confirm(`Permanently delete custom app "${name}" and all its files?`)) {
+        try {
+          const { api } = await import("./api.js");
+          const { refreshApps } = await import("./settings.js");
+          await api.del(`/api/custom-apps/${tab.app}`);
+          ws.closePanel(tabId);
+          await refreshApps();
+        } catch (err) {
+          alert(`Failed to delete app: ${err.message}`);
+        }
+      }
+    }, null, false, true) : null),
     { align: "right", below: true });
   pop?.place();
 }

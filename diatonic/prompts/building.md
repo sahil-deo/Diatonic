@@ -1,0 +1,1 @@
+- When asked to build or change an app, call ui_read_skill("app-creator") first and follow it.

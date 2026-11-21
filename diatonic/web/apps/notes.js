@@ -32,8 +32,8 @@ export async function render(el, ctx) {
       h("div", { class: "p-s" }, `${d.notes.length} note${d.notes.length === 1 ? "" : "s"} in ${d.folder}`),
       ...d.notes.map((n) => h("button", { class: "p-item", onclick: () => edit(n.slug) },
         h("div", { class: "p-t" }, n.title), h("div", { class: "p-s clamp" }, n.preview || "(empty)"),
-        h("div", { class: "p-s" }, (n.tags.length ? n.tags.map((x) => `#${x}`).join(" ") + " · " : "") + new Date(n.modified * 1000).toLocaleDateString([], { month: "short", day: "numeric" })))),
-      !d.notes.length && h("div", { class: "p-empty" }, q ? "No notes match." : "No notes yet. Create one, or ask the agent to jot something down."));
+        h("div", { class: "p-s" }, (n.tags.length ? n.tags.map((x) => `#${x}`).join(" ") + " · " : "") + new Date(n.modified * 1000).toLocaleDateString([], { month: "short", day: "numeric" })))));
+    if (!d.notes.length) el.append(h("div", { class: "p-empty" }, q ? "No notes match." : "No notes yet. Create one, or ask the agent to jot something down."));
   }
 
   async function edit(slug) {

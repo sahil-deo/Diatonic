@@ -1,0 +1,1 @@
+- When you have ui_platform_search, use it to find what the platform can do (a few words), then ui_platform_describe for the exact call. Never guess a name or an argument.

@@ -8,10 +8,37 @@ import { speaker } from "./voice.js";
 let openChat = () => {};
 const pop = () => $("#inbox");
 
+export function buildFaviconSvg(count = 0) {
+  const base = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='#7c9cff'/><path d='M8 12h16M8 16h16M8 20h16' stroke='#0e0f13' stroke-width='2' stroke-linecap='round'/><circle cx='20' cy='16' r='3' fill='#0e0f13'/>";
+  if (!count || count <= 0) return `${base}</svg>`;
+  const text = count > 9 ? "9+" : String(count);
+  const badge = text.length > 1
+    ? `<rect x='13' y='1.5' width='18' height='15' rx='7.5' fill='#ef4444' stroke='#ffffff' stroke-width='1.5'/><text x='22' y='12' font-family='system-ui, -apple-system, sans-serif' font-size='9' font-weight='bold' fill='#ffffff' text-anchor='middle'>${text}</text>`
+    : `<circle cx='23' cy='9' r='7.5' fill='#ef4444' stroke='#ffffff' stroke-width='1.5'/><text x='23' y='12.5' font-family='system-ui, -apple-system, sans-serif' font-size='10' font-weight='bold' fill='#ffffff' text-anchor='middle'>${text}</text>`;
+  return `${base}${badge}</svg>`;
+}
+
+export function updateFavicon(count = 0) {
+  if (typeof document === "undefined") return;
+  const svg = buildFaviconSvg(count);
+  const url = `data:image/svg+xml,${encodeURIComponent(svg)}`;
+  let link = document.querySelector("link[rel~='icon']");
+  if (!link) {
+    link = document.createElement("link");
+    link.rel = "icon";
+    document.head.appendChild(link);
+  }
+  if (link.getAttribute("href") === url) return;
+  link.href = url;
+  link.remove();
+  document.head.appendChild(link);
+}
+
 function paintBell() {
   const b = $("#bell-badge");
   b.hidden = !state.unreadCount;
   b.textContent = state.unreadCount > 9 ? "9+" : state.unreadCount || "";
+  updateFavicon(state.unreadCount);
   if (!pop().classList.contains("hidden")) renderList();
 }
 
@@ -39,10 +66,29 @@ function row(n) {
   if (n.kind === "reminder") acts.push(
     h("button", { class: "btn sm", onclick: () => snooze(10) }, "10 min"), h("button", { class: "btn sm", onclick: () => snooze(60) }, "1 hour"),
     h("button", { class: "btn sm", onclick: () => snooze(tomorrow()) }, "Tomorrow 9am"));
+  if (n.kind === "approval" && n.data?.approval_id) {
+    const decide = async (ok) => {
+      try {
+        const res = await api.approve(n.data.approval_id, ok);
+        if (res.ok) {
+          toast(ok ? "Approved" : "Rejected");
+          await api.del(`/api/notifications/${n.id}`);
+        } else {
+          toast("This approval is no longer pending", "warn");
+        }
+      } catch {
+        toast("Couldn't send your decision", "error");
+      }
+      await loadInbox();
+    };
+    acts.push(
+      h("button", { class: "btn sm primary", onclick: (e) => { e.stopPropagation(); decide(true); } }, "Approve"),
+      h("button", { class: "btn sm", onclick: (e) => { e.stopPropagation(); decide(false); } }, "Reject"));
+  }
   if (n.data?.conversation_id) acts.push(h("button", { class: "btn sm", onclick: () => { pop().classList.add("hidden"); openChat(n.data.conversation_id); } }, "Open chat"));
   acts.push(h("button", { class: "btn sm", onclick: async () => { await api.del(`/api/notifications/${n.id}`); await loadInbox(); } }, n.kind === "reminder" ? "Done" : "Dismiss"));
   return h("div", { class: `inbox-item ${n.read ? "" : "unread"}`, onclick: async () => { if (!n.read) { await api.post(`/api/notifications/${n.id}/read`); n.read = 1; await loadInbox(); } } },
-    h("div", { class: "i-top" }, h("span", { class: `i-kind ${n.kind}`, html: icon(n.kind === "reminder" ? "bell" : n.kind === "job" ? "clock" : "check", 14) }),
+    h("div", { class: "i-top" }, h("span", { class: `i-kind ${n.kind}`, html: icon(n.kind === "reminder" ? "bell" : n.kind === "job" ? "clock" : n.kind === "approval" ? "shield" : "check", 14) }),
       h("span", { class: "i-title" }, n.title), h("span", { class: "i-time" }, ago(n.created_at))),
     n.body && h("div", { class: "i-body" }, n.body), h("div", { class: "i-acts" }, acts));
 }

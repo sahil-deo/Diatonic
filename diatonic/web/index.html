@@ -32,11 +32,9 @@
       <div class="title" id="chat-title">New chat</div>
       <div class="grow"></div>
       <button class="chip-btn" id="speak-toggle" aria-pressed="false" title="Spoken summaries"><span id="speak-icon"></span><span>Spoken summary</span></button>
-      <button class="icon-btn bell" id="bell" aria-label="Notifications" aria-haspopup="true"><span id="bell-icon"></span><i class="bell-badge" id="bell-badge" hidden></i></button>
-      <button class="icon-btn" id="palette-btn" title="Commands (⌘K)" data-cmd="palette.open" data-title="Commands" aria-label="Commands"></button>
+      <button class="icon-btn" id="topbar-new-chat" title="New chat (⇧⌘O)" data-cmd="chat.new" data-title="New chat" aria-label="New chat"><span id="topbar-new-chat-icon"></span></button>
     </header>
 
-    <div class="inbox hidden" id="inbox" role="dialog" aria-label="Notifications"></div>
     <section class="messages" id="messages" aria-live="polite"></section>
 
     <footer class="composer-wrap">
@@ -68,6 +66,8 @@
 
   <div class="dock" id="dock" aria-label="Agent"></div>
 
+  <div class="inbox hidden" id="inbox" role="dialog" aria-label="Notifications"></div>
+
   <footer class="statusbar" id="statusbar">
     <div class="sb-zone sb-left" id="sb-left">
       <span class="status" id="st-agent"><i class="dot"></i><span>Connecting…</span></span>
@@ -77,6 +77,7 @@
     <div class="sb-zone sb-center" id="sb-center"></div>
     <div class="sb-zone sb-right" id="sb-right">
       <span class="status muted" id="st-hint">⌘K commands · ⌘, settings</span>
+      <button class="icon-btn sb-bell" id="bell" aria-label="Notifications" aria-haspopup="true" title="Notifications"><span id="bell-icon"></span><i class="bell-badge" id="bell-badge" hidden></i></button>
     </div>
   </footer>
 </div>

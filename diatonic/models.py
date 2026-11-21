@@ -15,9 +15,10 @@ PRESETS = {
     "ollama": {"label": "Ollama (on this computer)", "provider": "ollama", "endpoint": "http://localhost:11434", "context": 8192},
     "gemini": {"label": "Google AI Studio (Gemini)", "provider": "openai", "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai", "context": 32768},
     "groq": {"label": "Groq", "provider": "openai", "endpoint": "https://api.groq.com/openai/v1", "context": 32768},
+    "antigravity": {"label": "Antigravity (Google; runs its own agent)", "provider": "antigravity", "endpoint": "https://antigravity.google", "context": 1048576},
     "openai": {"label": "Other OpenAI-compatible API", "provider": "openai", "endpoint": "", "context": 16384},
 }
-PROVIDERS = ("ollama", "openai")
+PROVIDERS = ("ollama", "openai", "antigravity")
 # What a saved model sets on the agent when it's chosen; the rest of the agent settings (timeouts, budgets) stay shared.
 FIELDS = ("provider", "model", "endpoint")
 
@@ -68,7 +69,7 @@ def clean(m: dict, existing: list[dict]) -> dict:
         raise ValueError("The endpoint must be a full address, e.g. https://api.groq.com/openai/v1")
     if u.scheme == "http" and not is_local(endpoint):
         raise ValueError("Cloud endpoints must use https:// (the API key would otherwise travel unencrypted).")
-    name = str(m.get("model") or "").strip()
+    name = str(m.get("model") or "").strip() or ("default" if provider == "antigravity" else "")   # Antigravity: the account's own default model
     if not name or len(name) > 120 or any(c.isspace() for c in name):
         raise ValueError("Enter the model name exactly as the provider lists it, e.g. qwen3:8b or gemini-2.5-flash.")
     try:
@@ -105,5 +106,6 @@ def public(config) -> dict:
     saved = ensure(config)   # first: it may set the active model
     act = config.data["agent"].get("active_model")
     return {"active": act, "presets": PRESETS,
-            "models": [{**m, "cloud": is_cloud(m), "key_set": has_key(m["endpoint"]) if is_cloud(m) or m["provider"] == "openai" else None,
+            "routing": config.data.get("model_routing", {}),
+            "models": [{**m, "cloud": is_cloud(m), "key_set": True if m["provider"] == "antigravity" else has_key(m["endpoint"]) if is_cloud(m) or m["provider"] == "openai" else None,   # it signs in itself
                         "active": m["id"] == act} for m in saved]}

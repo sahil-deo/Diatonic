@@ -11,6 +11,12 @@ from typing import Any, Awaitable, Callable
 
 READ, WRITE, DESTRUCTIVE = "read", "write", "destructive"
 
+# What a tool can do to the world. `risk` is only the short label shown on cards; every rule reads `effects`.
+#   read: looks at data    write: changes data    destroy: deletes it    external: talks to the network or another service
+#   execute: runs commands or code    spend: costs money or quota    display: changes the interface itself (theme, panels, buttons)
+EFFECTS = frozenset({"read", "write", "destroy", "external", "execute", "spend", "display"})
+CHANGING = frozenset({"write", "destroy", "execute", "spend"})   # these ask first, and a panel may not use them
+
 
 class ToolError(Exception):
     """Raised by a tool handler; the message is shown to the model and the user.
@@ -30,7 +36,9 @@ class Tool:
     description: str
     parameters: dict  # JSON Schema (type: object)
     handler: Callable[[dict], Awaitable[Any]]
-    risk: str = READ  # read | write | destructive
+    risk: str = READ  # read | write | destructive: a shorthand that sets `effects` when none are given
+    effects: frozenset[str] | set[str] | None = None
+    domain: str = ""   # what the tool is about ("mail", "files"); empty means the app's own id
     title: str = ""
     describe: Callable[[dict], str] | None = None  # human-readable summary for approval cards
     # Return an error message if the call can't possibly work; the user is then not asked to approve it.
@@ -48,10 +56,29 @@ class Tool:
         self.title = self.title or self.name.replace("_", " ").capitalize()
         self.parameters.setdefault("type", "object")
         self.parameters.setdefault("properties", {})
+        if self.effects is None:
+            self.effects = frozenset({READ} if self.risk == READ else {"write", "destroy"} if self.risk == DESTRUCTIVE else {WRITE})
+        else:
+            self.effects = frozenset(self.effects)
+            if bad := self.effects - EFFECTS:
+                raise ValueError(f"Tool {self.name}: unknown effects {sorted(bad)}")
+            self._sync_risk()
+
+    def _sync_risk(self) -> None:
+        self.risk = DESTRUCTIVE if "destroy" in self.effects else WRITE if self.effects & CHANGING else READ
+
+    def add_effects(self, *more: str) -> None:
+        self.effects = frozenset(self.effects | set(more))
+        self._sync_risk()
+
+    @property
+    def changes(self) -> bool:
+        """True if the tool changes anything beyond reading."""
+        return bool(self.effects & CHANGING)
 
     @property
     def needs_approval(self) -> bool:
-        return self.risk != READ
+        return self.changes
 
 
 class App:

@@ -97,7 +97,15 @@ def test_open_item_and_loose_app_names(env, monkeypatch):
 def test_layout(env, monkeypatch):
     _, b = run_chat(env, monkeypatch, [[call("ui_set_layout", mode="focus", sidebar="hide")], [{"content": "ok"}]])
     evs = [e for e in b if e["type"] == "ui"]
-    assert [(e["command"], e.get("args")) for e in evs] == [("layout.preset.single", None), ("sidebar.set", {"mode": "hide"})]
+    assert [(e["command"], e.get("args")) for e in evs] == [("panel.zoom", None), ("sidebar.set", {"mode": "hide"})]
+
+    # zoom and unzoom modes
+    _, b = run_chat(env, monkeypatch, [[call("ui_set_layout", mode="zoom")], [{"content": "ok"}]])
+    assert next(e for e in b if e["type"] == "ui")["command"] == "panel.zoom"
+    _, b = run_chat(env, monkeypatch, [[call("ui_set_layout", mode="unzoom")], [{"content": "ok"}]])
+    assert next(e for e in b if e["type"] == "ui")["command"] == "panel.unzoom"
+    _, b = run_chat(env, monkeypatch, [[call("ui_set_layout", mode="single")], [{"content": "ok"}]])
+    assert next(e for e in b if e["type"] == "ui")["command"] == "layout.preset.single"
 
 
 def test_split_layout_opens_a_launcher_instead_of_asking_the_user_to_pick(env, monkeypatch):

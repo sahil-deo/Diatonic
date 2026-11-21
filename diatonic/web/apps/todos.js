@@ -3,7 +3,7 @@ const BASE = "/api/apps/todos";
 export async function navigate(p, ctx) { if (p.view) { ctx.state.set("showDone", p.view === "done"); await ctx.reload(); } }
 
 export async function render(el, ctx) {
-  const { api, h, reload } = ctx;
+  const { api, h, reload, toast } = ctx;
   const showDone = ctx.state.get("showDone", false);      // per panel, not per module: two To-dos panels can show different lists
   const d = await api.get(`${BASE}/panel${showDone ? "?done=1" : ""}`);
   const err = h("div", { class: "form-err" });
@@ -36,45 +36,55 @@ export async function render(el, ctx) {
       h("button", { class: "icon-btn sm del", title: "Delete", "aria-label": `Delete ${t.title}`, onclick: () => act("delete", t.id), html: "✕" }));
   };
 
-  el.append(h("div", { class: "quick-add" }, title, due, h("button", { class: "btn primary sm", onclick: add }, "Add")), err,
+  el.replaceChildren(h("div", { class: "quick-add" }, title, due, h("button", { class: "btn primary sm", onclick: add }, "Add")), err,
     h("div", { class: "p-section" }, `${showDone ? "All" : "Open"} (${d.todos.length})`),
     ...(d.todos.length ? d.todos.map(row) : [h("div", { class: "p-empty" }, "Nothing to do. Nice.")]),
     h("label", { class: "chk", style: "margin-top:14px" }, h("input", { type: "checkbox", checked: showDone, onchange: (e) => { ctx.state.set("showDone", e.target.checked); reload(); } }), "Show completed"),
     h("div", { class: "p-s", style: "margin-top:10px" }, "Double-click a title to edit it. Drag files or emails here to create to-dos."));
 
   el.ondragover = (e) => {
-    if (e.dataTransfer.types.includes("text/diatonic-file") || e.dataTransfer.types.includes("text/diatonic-email") || e.dataTransfer.types.includes("text/plain")) {
+    if (e.dataTransfer.types.includes("text/diatonic-file") || e.dataTransfer.types.includes("text/diatonic-email") || e.dataTransfer.types.includes("Files") || e.dataTransfer.types.includes("text/plain")) {
       e.preventDefault();
       e.dataTransfer.dropEffect = "copy";
       el.classList.add("drop-target");
     }
   };
-  el.ondragleave = () => el.classList.remove("drop-target");
+  el.ondragleave = (e) => {
+    if (!el.contains(e.relatedTarget)) el.classList.remove("drop-target");
+  };
   el.ondrop = async (e) => {
     e.preventDefault();
     el.classList.remove("drop-target");
-    let todoText = "";
+    const items = [];
     try {
       const fileRaw = e.dataTransfer.getData("text/diatonic-file");
       const emailRaw = e.dataTransfer.getData("text/diatonic-email");
       if (fileRaw) {
         const f = JSON.parse(fileRaw);
-        todoText = `Review file: ${f.name}`;
+        items.push(`Review file: ${f.name || f.path || "file"}`);
       } else if (emailRaw) {
         const em = JSON.parse(emailRaw);
-        todoText = `Follow up on email: ${em.subject}`;
+        items.push(`Follow up on email: ${em.subject || "Email"}`);
+      } else if (e.dataTransfer.files && e.dataTransfer.files.length) {
+        for (const f of e.dataTransfer.files) {
+          if (f.name) items.push(`Review file: ${f.name}`);
+        }
       } else {
-        todoText = e.dataTransfer.getData("text/plain");
+        const txt = e.dataTransfer.getData("text/plain");
+        if (txt && txt.trim()) items.push(txt.trim());
       }
     } catch {
-      todoText = e.dataTransfer.getData("text/plain");
+      const txt = e.dataTransfer.getData("text/plain");
+      if (txt && txt.trim()) items.push(txt.trim());
     }
-    if (todoText && todoText.trim()) {
+    if (items.length) {
       try {
-        await api.post(`${B}/todos`, { title: todoText.trim() });
+        for (const titleText of items) {
+          await api.post(`${BASE}/create`, { title: titleText });
+        }
         reload();
       } catch (err) {
-        toast(err.message, "error");
+        toast?.(err.message, "error");
       }
     }
   };

@@ -7,6 +7,7 @@ import { initVoiceUI, paintSpeakToggle, setSpeak, updateHint } from "./voiceui.j
 import { initSettings, openSettings } from "./settings.js";
 import { initPalette, openPalette } from "./palette.js";
 import { registerCore } from "./commands-core.js";
+import { list as listCommands, labelOf } from "./commands.js";
 import { initKeymap } from "./keymap.js";
 import { initNav } from "./nav.js";
 import { initPanel, openPanel, closePanel, refreshPanel, setFull } from "./panel.js";
@@ -21,6 +22,21 @@ import { verify } from "./verify.js";
 import { initStatusBar } from "./statusbar.js";
 import { loadModels } from "./settings-models.js";
 import { initMacros } from "./macros.js";
+import { initPermAsk } from "./perm-ask.js";
+
+/* ---------- shell protection ---------- */
+if (typeof document !== "undefined" && document.body) {
+  const origReplaceChildren = document.body.replaceChildren.bind(document.body);
+  document.body.replaceChildren = (...nodes) => {
+    const shell = document.getElementById("shell");
+    if (shell && !nodes.includes(shell)) {
+      console.warn("Blocked attempt to remove #shell via document.body.replaceChildren; preserving shell.");
+      origReplaceChildren(shell, ...nodes);
+      return;
+    }
+    origReplaceChildren(...nodes);
+  };
+}
 
 /* ---------- theme ---------- */
 const mq = matchMedia("(prefers-color-scheme: light)");
@@ -149,7 +165,7 @@ function renderStatus() {
   if (!g) a.replaceChildren(h("i", { class: "dot" }), "Checking…");
   else if (!g.ok) a.replaceChildren(h("i", { class: "dot bad" }), g.error);
   else if (!g.model_present) a.replaceChildren(h("i", { class: "dot warn" }), g.error);
-  else a.replaceChildren(h("i", { class: "dot ok" }), g.label || g.model, g.cloud ? h("span", { class: "pill cloud" }, "cloud") : ` · ${g.provider}`);
+  else a.replaceChildren(h("i", { class: "dot ok" }), g.label || g.model, g.cloud ? h("span", { class: "pill cloud" }, "cloud") : (g.provider ? ` · ${g.provider}` : ""));
   a.title = "Switch model";
   const vs = $("#st-voice");
   if (!v) return vs.replaceChildren();
@@ -180,7 +196,10 @@ async function refreshHealth() {
 }
 
 /* ---------- commands (the registry lives in commands.js; the built-ins in commands-core.js) ---------- */
-function toggleSidebar() { setSidebar(state.config.appearance.sidebar === "hide" ? "show" : "hide"); }
+function toggleSidebar() {
+  if (workspace?.toggleChatsSplit) return workspace.toggleChatsSplit();
+  setSidebar(state.config.appearance.sidebar === "hide" ? "show" : "hide");
+}
 function setSidebar(next) {
   if (matchMedia("(max-width: 820px)").matches) return $("#sidebar").classList.toggle("show", next === "show");
   if (state.config.appearance.sidebar === next) return;
@@ -200,7 +219,7 @@ async function boot() {
   const s = await api.state();
   state.config = s.config; state.apps = s.apps;
   applyTheme(); applyAppearance();
-  setIcon($("#new-chat"), "plus", 18); setIcon($("#toggle-sidebar"), "menu", 18); setIcon($("#palette-btn"), "command", 18);
+  setIcon($("#new-chat"), "plus", 18); setIcon($("#topbar-new-chat"), "plus", 18); setIcon($("#toggle-sidebar"), "menu", 18);
   paintSpeakToggle(); paintSend();
   initSettings(); initPalette(); initPanel(); initDock(); initNav();
   initMentions();
@@ -210,13 +229,16 @@ async function boot() {
   registerCore({ toggleSidebar, setSidebar, toggleRail, setRail, setTheme, setSpeak, openModelMenu, focusComposer: () => (dockVisible() ? focusDock() : input.focus()) });
   initKeymap();
   initMacros();
+  initPermAsk();
+  /* the agent looks commands up in the server's catalog, so tell it which ones exist */
+  api.post("/api/catalog/commands", listCommands({ all: true }).map((c) => ({ id: c.id, title: labelOf(c), group: c.group }))).catch(() => {});
   $("#new-chat").onclick = () => chat.newChat();
+  $("#topbar-new-chat").onclick = () => chat.newChat();
   $("#rail-chat").onclick = () => {
     openPanel("chat");
     setTimeout(() => input.focus(), 50);
   };
   $("#rail-settings").onclick = () => openSettings();
-  $("#palette-btn").onclick = () => openPalette();
   $("#toggle-sidebar").onclick = toggleSidebar;
   $("#speak-toggle").onclick = () => setSpeak(!state.config.voice.speak_summary);
 
@@ -232,7 +254,10 @@ async function boot() {
     }
   });
   on("notification", inbox.onNotification);
-  on("app_changed", (ev) => { if (state.panelApp === ev.app && !$("#panel-body")?.dataset?.dirty) refreshPanel(); });
+  on("app_changed", (ev) => {
+    if (ev?.app) api.invalidateApp(ev.app);
+    if (state.panelApp === ev.app && !$("#panel-body")?.dataset?.dirty) refreshPanel();
+  });
   on("runs-changed", paintRuns);
   on("conversations-changed", loadConvs);
   on("apps", () => { renderRail(); if (!document.querySelector("#messages .msg")) chat.renderEmpty?.(); });   // never wipe a chat in view
@@ -240,7 +265,10 @@ async function boot() {
   on("health", refreshHealth);
   on("config", () => { applyTheme(); applyAppearance(); updateHint(); paintSpeakToggle(); renderRail(); if (!document.querySelector("#messages .msg")) chat.renderEmpty(); });
   on("rail-changed", renderRail);
-  on("open-file", () => (state.panelApp === "files" ? refreshPanel() : openPanel("files")));
+  on("open-file", () => {
+    api.invalidateApp("files");
+    state.panelApp === "files" ? refreshPanel() : openPanel("files");
+  });
   on("prefill", (t) => { setInput(t); });
   $("#st-agent").addEventListener("click", openModelMenu);
   on("model_changed", async () => { try { state.config = (await api.state()).config; } catch {} refreshHealth(); });

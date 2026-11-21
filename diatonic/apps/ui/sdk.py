@@ -1,36 +1,12 @@
-"""What a small model needs to write a panel that works: the few things `diatonic` offers, and three small panels to copy.
-
-The text goes into the add_panel tool description, so every word costs context on each build request. Keep it short, and
-keep every template correct: tests/test_ui.py syntax-checks them, and the build eval runs what the model makes from them.
-"""
+"""The few words every build request carries in the write_app_file tool description. The rest is in the skills (`skills/app-creator.md`)
+and the recipes (`recipes/`), which the agent reads on demand, so every word here costs context on each build request."""
 from __future__ import annotations
 
-SDK = (
-    "In the code: `el` is the empty panel. diatonic.h(tag, {attrs, onclick}, ...children) builds an element "
-    "(h('button', {class: 'btn', onclick: fn}, 'Go')); append with el.append(...). Style with style attrs; text input: "
-    "h('input', {type: 'text'}). diatonic.every(ms, fn) repeats; ctx.state.get(key, default) and ctx.state.set(key, value) keep data between visits "
-    "(use them, not localStorage). Do not use fetch. Always await server calls. The user's own data: const todos = await ctx.tool('todos_list_todos', {}) (any app's read-only tool: <app>_<tool>, e.g. gcal_list_events, notes_list_notes); only trackers made with create_app use await ctx.data('app-id').get() or .add(list, {field: value}). Results: todos_list_todos gives [{id, title, status, due}], notes_list_notes [{title, tags}], gcal_list_events {events: [{title, start, end, where}]}. A tool with nothing to list returns a text message, not a list, so check Array.isArray first. Write plain JavaScript, no imports.")
+# Everything else on `ctx` is looked up with ui_platform_search / ui_platform_describe (diatonic/ctxapi.py); a worked example is a recipe.
+FILE_HINT = (
+    "index.js must be: export async function render(el, ctx) { ... } and fill `el`; keep everything inside render (no module-level variables, no imports). "
+    "ctx.h(tag, {attrs, onclick}, ...children) builds an element. Always await ctx calls. Before writing, read ui_read_skill(\"app-creator\") and the closest recipe "
+    "(ui_read_skill(\"recipes\")); look up the exact calls with ui_platform_search then ui_platform_describe. The manifest must declare what the app uses. "
+    "Give the whole file, finished, not a sketch.")
 
-TEMPLATES = [
-    ("a counter or timer",
-     "let n = 0;\n"
-     "const out = diatonic.h('div', {style: 'font-size:32px;margin:12px 0'}, '0');\n"
-     "const btn = diatonic.h('button', {class: 'btn primary', onclick: () => { n += 1; out.textContent = String(n); }}, '+1');\n"
-     "el.append(out, btn);"),
-    ("something that works out a result as you type",
-     "const inp = diatonic.h('input', {type: 'text', placeholder: 'kilometres'});\n"
-     "const out = diatonic.h('div', {style: 'margin-top:10px'}, '0 miles');\n"
-     "inp.addEventListener('input', () => { out.textContent = ((parseFloat(inp.value) || 0) * 0.621371).toFixed(2) + ' miles'; });\n"
-     "el.append(inp, out);"),
-    ("a list you add to and keep",
-     "const items = ctx.state.get('items', []);\n"
-     "const list = diatonic.h('div');\n"
-     "const inp = diatonic.h('input', {type: 'text', placeholder: 'Add an item'});\n"
-     "const paint = () => list.replaceChildren(...items.map((t) => diatonic.h('div', {style: 'padding:6px 0'}, t)));\n"
-     "inp.addEventListener('keydown', (e) => { if (e.key === 'Enter' && inp.value.trim()) { items.push(inp.value.trim()); ctx.state.set('items', items); inp.value = ''; paint(); } });\n"
-     "paint(); el.append(inp, list);"),
-]
-
-
-def examples() -> str:
-    return " Examples of the code argument, by what is asked for: " + " ".join(f"({i}) {what}: {code}" for i, (what, code) in enumerate(TEMPLATES, 1))
+SUMMARY = {"type": "string", "description": "One plain sentence for the user: what this shows or does"}

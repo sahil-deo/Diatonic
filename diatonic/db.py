@@ -63,13 +63,19 @@ class Database:
             CREATE TABLE IF NOT EXISTS shell_log (      -- every command the agent ran or tried (the Terminal panel's History)
               id INTEGER PRIMARY KEY AUTOINCREMENT, at REAL NOT NULL, source TEXT NOT NULL, conv_id TEXT, cwd TEXT,
               command TEXT NOT NULL, decision TEXT NOT NULL, exit_code INTEGER, seconds REAL, output TEXT NOT NULL DEFAULT '');
-            CREATE TABLE IF NOT EXISTS app_items (     -- rows of the data apps the agent builds (one table for all of them)
-              id INTEGER PRIMARY KEY AUTOINCREMENT, app TEXT NOT NULL, list TEXT NOT NULL, parent INTEGER,
-              data TEXT NOT NULL DEFAULT '{}', pos REAL NOT NULL DEFAULT 0, created_at REAL NOT NULL, updated_at REAL NOT NULL);
-            CREATE INDEX IF NOT EXISTS idx_items_app ON app_items(app, list);
             PRAGMA foreign_keys = ON;
             """
         )
+        self._drop_tracker_rows(Path(path))
+
+    def _drop_tracker_rows(self, path: Path) -> None:
+        """The tracker table went with the trackers (v3). It is dropped only when it is empty or exports/trackers.json exists, so rows are never lost."""
+        if not self.conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='app_items'").fetchone():
+            return
+        if self.conn.execute("SELECT 1 FROM app_items LIMIT 1").fetchone() and not (path.parent / "exports" / "trackers.json").exists():
+            return
+        self.conn.execute("DROP TABLE app_items")
+        self.conn.commit()
 
     # ---- shell log -----------------------------------------------------------
     def log_shell(self, **row) -> None:
@@ -81,39 +87,6 @@ class Database:
 
     def shell_log(self, limit: int = 100) -> list[dict]:
         return [dict(r) for r in self.conn.execute("SELECT * FROM shell_log ORDER BY id DESC LIMIT ?", (limit,))]
-
-    # ---- data apps ---------------------------------------------------------
-    def items(self, app: str, lst: str | None = None) -> list[dict]:
-        q, args = "SELECT * FROM app_items WHERE app=?", [app]
-        if lst:
-            q += " AND list=?"; args.append(lst)
-        return [{**dict(r), "data": json.loads(r["data"])} for r in self.conn.execute(q + " ORDER BY pos, id", args)]
-
-    def item(self, app: str, iid: int) -> dict | None:
-        r = self.conn.execute("SELECT * FROM app_items WHERE app=? AND id=?", (app, iid)).fetchone()
-        return {**dict(r), "data": json.loads(r["data"])} if r else None
-
-    def add_item(self, app: str, lst: str, data: dict, parent: int | None = None) -> dict:
-        now = time.time()
-        cur = self.conn.execute("INSERT INTO app_items (app, list, parent, data, pos, created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
-                                (app, lst, parent, json.dumps(data), now, now, now))
-        self.conn.commit()
-        return self.item(app, cur.lastrowid)
-
-    def update_item(self, app: str, iid: int, data: dict) -> dict | None:
-        self.conn.execute("UPDATE app_items SET data=?, updated_at=? WHERE app=? AND id=?", (json.dumps(data), time.time(), app, iid))
-        self.conn.commit()
-        return self.item(app, iid)
-
-    def delete_item(self, app: str, iid: int) -> int:
-        """Delete an item and everything under it. Returns how many rows went."""
-        ids, todo = [], [iid]
-        while todo:
-            ids += todo
-            todo = [r["id"] for r in self.conn.execute(f"SELECT id FROM app_items WHERE app=? AND parent IN ({','.join('?' * len(todo))})", (app, *todo))]
-        self.conn.execute(f"DELETE FROM app_items WHERE app=? AND id IN ({','.join('?' * len(ids))})", (app, *ids))
-        self.conn.commit()
-        return len(ids)
 
     def create_conversation(self, title: str = "New chat") -> dict:
         cid, now = uuid.uuid4().hex[:12], time.time()
@@ -170,6 +143,15 @@ class Database:
         for r in self.conn.execute("SELECT meta FROM messages WHERE conversation_id=? AND role='assistant'", (cid,)):
             used.update(t["name"] for t in json.loads(r["meta"]).get("tools", []) if t.get("name"))
         return used
+
+    def recent_tool_args(self, cid: str, names) -> list[dict]:
+        """The arguments of this conversation's calls to the named tools, newest first."""
+        out: list[dict] = []
+        for r in self.conn.execute("SELECT meta FROM messages WHERE conversation_id=? AND role='assistant' ORDER BY id DESC", (cid,)):
+            for t in reversed(json.loads(r["meta"]).get("tools", [])):
+                if t.get("name") in names and isinstance(t.get("args"), dict):
+                    out.append(t["args"])
+        return out
 
     def apps_used(self, cid: str) -> set[str]:
         used: set[str] = set()

@@ -1,0 +1,2 @@
+{"id": "tools", "name": "Open to-dos", "version": 1, "description": "Show another app's data through ctx.tool and change it with a button.",
+ "permissions": {"tools": ["todos_complete_todo"]}}

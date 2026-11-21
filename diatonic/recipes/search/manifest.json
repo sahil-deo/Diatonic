@@ -1,0 +1,2 @@
+{"id": "search", "name": "Wikipedia search", "version": 1, "description": "Search a public API through ctx.fetch and show the results.",
+ "permissions": {"fetch": ["en.wikipedia.org"]}}

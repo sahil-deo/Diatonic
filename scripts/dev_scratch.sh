@@ -22,7 +22,7 @@ start() {
   rm -rf "$SCRATCH"; mkdir -p "$SCRATCH/home" "$SCRATCH/chrome"
   DIATONIC_HOME="$SCRATCH/home" DIATONIC_SECRETS_BACKEND=file DIATONIC_NO_NATIVE=1 \
     nohup .venv/bin/diatonic run --port "$PORT" > "$SCRATCH/server.log" 2>&1 &
-  nohup "$CHROME" --headless=new --disable-gpu --disable-backgrounding-occluded-windows --disable-renderer-backgrounding \
+  nohup "$CHROME" --headless=new --no-sandbox --disable-gpu --disable-backgrounding-occluded-windows --disable-renderer-backgrounding \
     --remote-debugging-port="$CDP_PORT" --user-data-dir="$SCRATCH/chrome" --no-first-run \
     --window-size=1400,900 about:blank > "$SCRATCH/chrome.log" 2>&1 &
   for _ in $(seq 1 40); do

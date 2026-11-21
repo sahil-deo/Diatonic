@@ -14,6 +14,8 @@ const spec = JSON.parse(fs.readFileSync(new URL("./build_prompts.json", import.m
 const prompts = spec.prompts.filter((p) => !only.length || only.includes(p.id));
 const base = `http://localhost:${PORT}`;
 const get = (u) => fetch(base + u).then((r) => r.json());
+const del = (u) => fetch(base + u, { method: "DELETE", headers: { "X-Diatonic": "1" } });
+const fileApps = async () => Object.fromEntries((await get("/api/custom-apps")).map((a) => [a.id, a]));   // apps the agent builds are folders now (docs/panels.md)
 
 const page = await open(base + "/", CHROME);
 await page.wait(2500);
@@ -34,14 +36,19 @@ async function sendAndWait(prompt) {
 const results = [];
 for (const p of prompts) {
   const before = new Set((await get("/api/mods")).map((m) => m.name)), appsBefore = new Set((await get("/api/state")).apps.map((a) => a.id));
+  let filesBefore = await fileApps();
   const r = { id: p.id, kind: p.kind, fail: [] };
   page.errors.length = 0;
   if (p.seed) await fetch(base + p.seed.post, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(p.seed.body) });   // data the panel should show
-  if (p.setup) await sendAndWait(spec.prompts.find((x) => x.id === p.setup).prompt);   // an edit starts from something already built
+  if (p.setup) { await sendAndWait(spec.prompts.find((x) => x.id === p.setup).prompt); filesBefore = await fileApps(); }   // an edit starts from something already built
+  const setupApps = await fileApps();
   const run = await sendAndWait(p.prompt);
   r.ms = run.ms;
   if (run.timeout) r.fail.push("timed out");
   const mods = (await get("/api/mods")).filter((m) => !before.has(m.name));
+  const filesAfter = await fileApps();
+  const madeFiles = Object.values(filesAfter).filter((a) => !(a.id in setupApps));       // folders created by this prompt
+  const editedFiles = Object.values(filesAfter).filter((a) => a.id in setupApps && a.version > setupApps[a.id].version);
   const newApps = (await get("/api/state")).apps.filter((a) => !appsBefore.has(a.id));
   const convs = await get("/api/conversations");
   const msgs = convs[0] ? (await get(`/api/conversations/${convs[0].id}`)).messages : [];
@@ -51,24 +58,33 @@ for (const p of prompts) {
     if (!mods.length) r.fail.push("nothing was added");
     else await ev(`import("/js/mods.js").then((m) => m.loadMods())`);
   } else {
-    const target = p.kind === "panel" || p.kind === "edit" ? mods.find((m) => m.kind === "panel") : null;
-    if (p.kind === "edit" && target && !(mods.filter((m) => m.kind === "panel").length === 1 && target.version >= 2)) r.fail.push("did not change the existing panel in place");
-    const appId = target ? `mod-${target.name}` : newApps.find((a) => a.panel)?.id || mods[0] && `mod-${mods[0].name}`;
+    const target = p.kind === "panel" ? madeFiles[0] : p.kind === "edit" ? editedFiles[0] : null;
+    if (p.kind === "edit" && !target) r.fail.push("did not change the existing app in place");
+    if (target && target.files && !target.files.includes("index.js")) r.fail.push("the app has no index.js");
+    const appId = target?.id || newApps.find((a) => a.panel)?.id || mods[0] && `mod-${mods[0].name}`;
     if (!appId) r.fail.push("nothing was built");
     else {
+      const bodies = () => ev(`[...document.querySelectorAll("[data-body-for]")].map((b) => b.dataset.bodyFor)`);
+      const seen = new Set(await bodies());
       await ev(`import("/js/panel.js").then((m) => m.openPanel(${JSON.stringify(appId)}))`);
-      await page.wait(1200);
+      await page.wait(1500);
+      const fresh = (await bodies()).find((id) => !seen.has(id)) || (await bodies()).pop();
+      const BODY = `[data-body-for="${fresh}"]`;
+      if (target) {   // the placeholder `create_file_app` writes is not a build: a check that only asks "did it render" would pass it
+        const src = await get(`/api/custom-apps/${target.id}/file?path=index.js`).then((x) => x.content || "").catch(() => "");
+        if (/class: "p-empty"/.test(src) && src.length < 400) r.fail.push("index.js is still the empty placeholder");
+      }
       // What a person can read in the panel: its text plus placeholders and labels (an empty text box still says what it is for).
-      const readable = () => ev(`(() => { const b = document.querySelector("#panel-body"); return b ? b.innerText + " " + [...b.querySelectorAll("[placeholder],[aria-label],[title]")].map((e) => [e.placeholder, e.ariaLabel, e.title].filter(Boolean).join(" ")).join(" ") : ""; })()`);
+      const readable = () => ev(`(() => { const b = document.querySelector(${JSON.stringify(BODY)}); return b ? b.innerText + " " + [...b.querySelectorAll("[placeholder],[aria-label],[title]")].map((e) => [e.placeholder, e.ariaLabel, e.title].filter(Boolean).join(" ")).join(" ") : ""; })()`);
       const body = await readable();
-      const built = await ev(`document.querySelector("#panel-body")?.children.length || 0`);
+      const built = await ev(`document.querySelector(${JSON.stringify(BODY)})?.children.length || 0`);
       if (c.renders && (!built || /Couldn't load/.test(body))) r.fail.push(`did not render: ${body.slice(0, 80)}`);
       for (const t of c.text || []) if (!body.toLowerCase().includes(t.toLowerCase())) r.fail.push(`missing text "${t}"`);
-      for (const s of c.selectors || []) if (!(await ev(`!!document.querySelector("#panel-body ${s}")`))) r.fail.push(`missing ${s}`);
+      for (const s of c.selectors || []) if (!(await ev(`!!document.querySelector(${JSON.stringify(BODY + " " + s)})`))) r.fail.push(`missing ${s}`);
       for (const step of c.interact || []) {
         const sel = step.click || step.type;
-        if (step.click) await ev(`document.querySelector("#panel-body ${step.click}")?.click()`);
-        if (step.type) await ev(`(() => { const i = document.querySelector("#panel-body ${step.type}"); if (i) { i.value = ${JSON.stringify(step.value)}; i.dispatchEvent(new Event("input", {bubbles: true})); } })()`);
+        if (step.click) await ev(`document.querySelector(${JSON.stringify(BODY + " " + step.click)})?.click()`);
+        if (step.type) await ev(`(() => { const i = document.querySelector(${JSON.stringify(BODY + " " + step.type)}); if (i) { i.value = ${JSON.stringify(step.value)}; i.dispatchEvent(new Event("input", {bubbles: true})); } })()`);
         await page.wait(1300);
         const now = await readable();
         if (step.expect_text && !now.includes(step.expect_text)) r.fail.push(`after ${step.click ? "click" : "typing"} ${sel}: expected "${step.expect_text}"`);
@@ -80,7 +96,8 @@ for (const p of prompts) {
   results.push(r);
   console.log(`${r.ok ? "PASS" : "FAIL"}  ${p.id.padEnd(18)} ${String(Math.round(r.ms / 1000)).padStart(3)}s  ${r.fail.join("; ")}${r.ok ? "" : `   (said: ${r.said})`}`);
   await ev(`import("/js/panel.js").then((m) => m.closePanel())`);
-  for (const m of mods) await fetch(`${base}/api/mods/${encodeURIComponent(m.name)}`, { method: "DELETE" });   // leave nothing behind
+  for (const m of mods) await del(`/api/mods/${encodeURIComponent(m.name)}`);   // leave nothing behind
+  for (const a of Object.values(await fileApps())) if (!(a.id in filesBefore) || p.setup) await del(`/api/custom-apps/${a.id}`);
 }
 const passed = results.filter((r) => r.ok).length;
 console.log(`\n${passed}/${results.length} passed`);

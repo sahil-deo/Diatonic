@@ -18,6 +18,8 @@ Afterwards, `./diatonic.sh` starts the server from the project folder. `--port` 
 
 The server binds to `127.0.0.1` only, and rejects requests with a foreign `Host` or `Origin` header (DNS-rebinding and cross-site protection).
 
+To reach it through `tailscale serve` (or another proxy), keep the bind as it is and add the name the proxy forwards to `server.allowed_hosts` in `~/.diatonic/config.json`, for example `["box.tailnet.ts.net"]`. `["*"]` accepts any host name; a write must then still come from the same origin it was sent to. The app has no login, so anyone who can reach the proxy controls it. Restart the server after the change.
+
 ### Voice setup
 
 ```bash
@@ -35,6 +37,9 @@ Downloads Whisper `small.en` (about 500 MB) and the Piper voice `en_US-lessac-me
 
 ### GitHub
 Settings → Apps → GitHub. Paste a personal access token with the `repo` scope, or leave it empty to reuse your `gh auth login` session. Optionally set a default owner so "my-repo" resolves to "owner/my-repo".
+
+### Antigravity (Google)
+Sign in once via `agy acp --login` in your terminal. In **Settings → Models**, select Antigravity to configure its model, thinking level, and **Permissions mode** (*Auto* for local-model level convenience where safe file edits and reads run automatically, or *Strict* to approve every action). In **Settings → Apps**, choose which Diatonic apps to share with Antigravity over local MCP.
 
 ### Google accounts (Calendar and Gmail, any number of accounts)
 Settings → **Accounts** manages every Google account in one place; Calendar and Mail both use it.

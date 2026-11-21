@@ -133,11 +133,11 @@ class WebApp(App):
                  "Then use read on the best link.",
                  {"properties": {"query": {"type": "string", "description": "What to search for, in a few words"},
                                  "count": {"type": "integer", "description": "How many results, 1 to 10 (default 5)"}},
-                  "required": ["query"]}, self.search, title="Search the web", describe=lambda a: f"Search the web for “{a.get('query')}”"),
+                  "required": ["query"]}, self.search, effects={"read", "external"}, title="Search the web", describe=lambda a: f"Search the web for “{a.get('query')}”"),
             Tool("read", "Open a web page and return its text and links. Works for articles and documentation; not for pages that need "
                  "JavaScript or a login.",
                  {"properties": {"url": {"type": "string", "description": "Full address, https://..."}},
-                  "required": ["url"]}, self.read, title="Read a web page", describe=lambda a: f"Read {a.get('url')}"),
+                  "required": ["url"]}, self.read, effects={"read", "external"}, title="Read a web page", describe=lambda a: f"Read {a.get('url')}"),
         ]
 
     # --- fetching -------------------------------------------------------------------------------------------------

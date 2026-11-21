@@ -119,15 +119,14 @@ function toolCard(t, live) {
 const AsyncFn = Object.getPrototypeOf(async function () {}).constructor;
 /** For a card that installs interface code: say so if the code won't even parse, before anyone approves it. */
 export function codeProblem(ev) {
-  if (!["ui_add_script", "ui_add_panel"].includes(ev.name)) return null;
+  if (ev.name !== "ui_add_script") return null;
   try { new AsyncFn("diatonic", "el", "ctx", ev.args?.code || ""); return null; } catch (e) { return `This code has a syntax error (${e.message}). Deny it and ask the agent to fix it.`; }
 }
 function approvalBox(ev, v) {
-  const box = h("div", { class: `approval ${ev.risk === "destructive" ? "destructive" : ""}` });
   const bad = codeProblem(ev);
   const decide = (ok, scope) => api.approve(ev.id, ok, scope).catch(() => toast("Couldn't send your decision", "error"));
-  if (ev.share) box.classList.add("share");
-  box.append(
+  const cls = `approval ${ev.risk === "destructive" ? "destructive" : ""} ${ev.share ? "share" : ""}`.trim();
+  const box = h("div", { class: cls },
     h("div", { class: "a-top", html: `${icon("shield", 15)} ${ev.share ? "Share private data with a cloud model?" : ev.risk === "destructive" ? "Needs approval · irreversible" : "Needs approval"}` }),
     h("div", { class: "a-what" }, ev.describe || ev.title),
     ev.preview ? h("pre", { class: "diff", html: highlight(ev.preview, "diff") }) : null,
@@ -166,7 +165,7 @@ function newSeg(v) { v.seg = h("div", { class: "md cursor" }); v.segText = ""; v
 function paint(v) { v.raf = 0; if (v.seg) { v.seg.innerHTML = md(v.segText); scroll(); } }
 
 function newView(cid) {
-  const v = { cid, wrap: h("div", { class: "msg assistant" }), seg: null, segText: "", raf: 0, cards: new Map(), approvals: new Map(), lastSeq: 0, live: true };
+  const v = { cid, wrap: h("div", { class: "msg assistant" }), seg: null, segText: "", raf: 0, cards: new Map(), approvals: new Map(), lastSeq: 0, live: true, thoughtBox: null, thoughtBody: null, thoughtText: "", thoughtSummary: null };
   msgs.append(v.wrap); newSeg(v);
   view = v; pending = [];
   return v;
@@ -177,7 +176,33 @@ function applyEvent(v, ev) {
   v.lastSeq = Math.max(v.lastSeq, ev.seq || 0);
   queueMicrotask(() => emit("view-event", { ev, v }));   // the bottom dock mirrors what this conversation is saying
   switch (ev.type) {
+    case "thought": {
+      if (!v.thoughtBox) {
+        v.thoughtSummary = h("summary", { class: "thought-summary" }, "Thinking…");
+        v.thoughtBody = h("div", { class: "thought-body md" });
+        v.thoughtBox = h("details", { class: "thought-box", open: true }, v.thoughtSummary, v.thoughtBody);
+        v.wrap.prepend(v.thoughtBox);
+      }
+      v.thoughtText = (v.thoughtText || "") + ev.text;
+      v.thoughtBody.innerHTML = md(v.thoughtText);
+      scroll(); break;
+    }
+    case "title": {
+      if (v.cid && ev.title) {
+        const titleEl = $("#chat-title");
+        if (titleEl) titleEl.textContent = ev.title;
+        if (state.runs[v.cid]) state.runs[v.cid].title = ev.title;
+        const conv = (state.conversations || []).find((c) => c.id === v.cid);
+        if (conv) conv.title = ev.title;
+        emit("conversations-changed");
+      }
+      break;
+    }
     case "token":
+      if (v.thoughtBox && v.thoughtBox.open) {
+        v.thoughtBox.open = false;
+        if (v.thoughtSummary) v.thoughtSummary.textContent = "Thought process";
+      }
       if (!v.seg) newSeg(v);
       v.segText += ev.text; if (!v.raf) v.raf = requestAnimationFrame(() => paint(v)); break;
     case "rewrite": // the server cut a runaway reply: replace this step's text
@@ -208,6 +233,10 @@ function applyEvent(v, ev) {
     }
     case "done":
       cancelAnimationFrame(v.raf);
+      if (v.thoughtBox && v.thoughtBox.open) {
+        v.thoughtBox.open = false;
+        if (v.thoughtSummary) v.thoughtSummary.textContent = "Thought process";
+      }
       if (v.seg) { v.seg.innerHTML = md(v.segText); v.seg.classList.remove("cursor"); if (!v.segText.trim()) v.seg.remove(); }
       [...v.approvals.keys()].forEach((id) => dropApproval(v, id));
       { const pl = perfLine(ev.perf); if (pl) v.wrap.append(pl); }
@@ -272,7 +301,7 @@ function onEvent(ev) {
     return;
   }
   if (ev.type === "ui") return ev.target === CLIENT_ID ? emit("ui", ev) : undefined;   // screen control from a run this window started
-  if (["notification", "app_changed", "custom_app_changed", "mods_changed", "keymap_changed", "model_changed", "script_output", "script_done"].includes(ev.type)) return emit(ev.type, ev); // not tied to a chat
+  if (["notification", "app_changed", "custom_app_changed", "mods_changed", "keymap_changed", "model_changed", "script_output", "script_done", "perm_ask", "perm_ask_done", "tool_ask", "app_event"].includes(ev.type)) return emit(ev.type, ev); // not tied to a chat
   const cid = ev.conversation_id;
   const title = ev.type === "run_start" ? ev.title : titleOf(cid); // other events' `title` is a tool title
 
@@ -338,6 +367,12 @@ export async function openConversation(id) {
     if (m.role === "user") msgs.append(userBubble(m.content));
     else {
       const wrap = h("div", { class: "msg assistant" });
+      if (m.meta?.thoughts?.length) {
+        const thoughtText = m.meta.thoughts.join("\n\n");
+        wrap.append(h("details", { class: "thought-box" },
+          h("summary", { class: "thought-summary" }, "Thought process"),
+          h("div", { class: "thought-body md", html: md(thoughtText) })));
+      }
       (m.meta.tools || []).forEach((t) => wrap.append(toolCard(t, false).el));
       if (m.content) wrap.append(h("div", { class: "md", html: md(m.content) }));
       if (m.meta.error) wrap.append(h("div", { class: "err" }, m.meta.error));

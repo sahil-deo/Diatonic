@@ -65,7 +65,7 @@ class GitHubApp(App):
             except Exception:
                 msg = r.text
             raise ToolError(f"GitHub {r.status_code}: {msg[:300]}", bad_args=r.status_code in (400, 422))
-        if "diff" in headers["Accept"]:
+        if "diff" in headers["Accept"] or "raw" in headers["Accept"]:
             return r.text
         return r.json() if r.content else {}
 
@@ -165,6 +165,31 @@ class GitHubApp(App):
                                  "method": {"type": "string", "enum": ["merge", "squash", "rebase"]}},
                   "required": ["repo", "number"]}, self.merge_pull, DESTRUCTIVE,
                  describe=lambda a: f"Merge PR {a.get('repo')}#{a.get('number')} ({a.get('method', 'squash')})"),
+            Tool("create_pull", "Create a new pull request.",
+                 {"properties": {"repo": REPO, "title": _str("Pull request title"),
+                                 "head": _str("The branch containing the changes"),
+                                 "base": _str("The branch to pull changes into"),
+                                 "body": _str("Pull request description"),
+                                 "draft": {"type": "boolean", "description": "Create as draft PR"}},
+                  "required": ["repo", "title", "head", "base"]}, self.create_pull, WRITE,
+                 describe=lambda a: f"Create PR “{a.get('title')}” in {a.get('repo')} ({a.get('head')} → {a.get('base')})"),
+            Tool("close_pull", "Close or reopen a pull request.",
+                 {"properties": {"repo": REPO, "number": NUM,
+                                 "state": {"type": "string", "enum": ["closed", "open"]}},
+                  "required": ["repo", "number"]}, self.close_pull, WRITE,
+                 describe=lambda a: f"{'Reopen' if a.get('state') == 'open' else 'Close'} PR {a.get('repo')}#{a.get('number')}"),
+            Tool("list_branches", "List branches in a repository.",
+                 {"properties": {"repo": REPO, "limit": {"type": "integer", "minimum": 1, "maximum": 100}},
+                  "required": ["repo"]}, self.list_branches),
+            Tool("create_branch", "Create a new branch in a repository.",
+                 {"properties": {"repo": REPO, "branch": _str("New branch name"),
+                                 "from_branch": _str("Base branch or commit SHA (defaults to default branch)")},
+                  "required": ["repo", "branch"]}, self.create_branch, WRITE,
+                 describe=lambda a: f"Create branch {a.get('branch')} in {a.get('repo')}"),
+            Tool("delete_branch", "Delete a branch from a repository.",
+                 {"properties": {"repo": REPO, "branch": _str("Branch name to delete")},
+                  "required": ["repo", "branch"]}, self.delete_branch, DESTRUCTIVE,
+                 describe=lambda a: f"Delete branch {a.get('branch')} in {a.get('repo')}"),
         ]
 
     async def list_repos(self, a):
@@ -261,7 +286,54 @@ class GitHubApp(App):
                             json={"merge_method": a.get("method", "squash")})
         return {"merged": r.get("merged", False), "message": r.get("message")}
 
-    # ---- panel route -------------------------------------------------
+    async def create_pull(self, a):
+        repo = await self._repo(a["repo"])
+        payload = {
+            "title": a["title"],
+            "head": a["head"],
+            "base": a["base"],
+            "body": a.get("body", ""),
+        }
+        if "draft" in a:
+            payload["draft"] = a["draft"]
+        p = await self._req("POST", f"/repos/{repo}/pulls", json=payload)
+        return {"created": f"{repo}#{p['number']}", "number": p["number"], "url": p["html_url"]}
+
+    async def close_pull(self, a):
+        repo = await self._repo(a["repo"])
+        st = a.get("state", "closed")
+        p = await self._req("PATCH", f"/repos/{repo}/pulls/{a['number']}", json={"state": st})
+        return {"status": p["state"], "number": p["number"], "repo": repo}
+
+    async def list_branches(self, a):
+        repo = await self._repo(a["repo"])
+        data = await self._req("GET", f"/repos/{repo}/branches", params={"per_page": a.get("limit", 30)})
+        return [{"name": b["name"], "protected": b.get("protected", False), "commit_sha": b.get("commit", {}).get("sha")} for b in data]
+
+    async def create_branch(self, a):
+        repo = await self._repo(a["repo"])
+        from_ref = a.get("from_branch")
+        if not from_ref:
+            r = await self._req("GET", f"/repos/{repo}")
+            from_ref = r["default_branch"]
+        if len(from_ref) != 40 or not all(c in "0123456789abcdefABCDEF" for c in from_ref):
+            ref_data = await self._req("GET", f"/repos/{repo}/git/ref/heads/{from_ref}")
+            sha = ref_data["object"]["sha"]
+        else:
+            sha = from_ref
+        res = await self._req("POST", f"/repos/{repo}/git/refs", json={
+            "ref": f"refs/heads/{a['branch']}",
+            "sha": sha
+        })
+        return {"created": a["branch"], "ref": res.get("ref"), "sha": sha}
+
+    async def delete_branch(self, a):
+        repo = await self._repo(a["repo"])
+        branch = a["branch"]
+        await self._req("DELETE", f"/repos/{repo}/git/refs/heads/{branch}")
+        return {"deleted": branch, "repo": repo}
+
+    # ---- panel routes -------------------------------------------------
     async def panel_data(self, request: Request):
         try:
             issues = await self._req("GET", "/search/issues", params={
@@ -273,5 +345,257 @@ class GitHubApp(App):
         return JSONResponse({"issues": [self._issue(i) for i in issues["items"]],
                              "prs": [self._issue(i) for i in prs["items"]]})
 
+    async def route_repos(self, request: Request):
+        try:
+            limit = min(int(request.query_params.get("limit", 50)), 100)
+            repos = await self.list_repos({"limit": limit})
+            return JSONResponse({"repos": repos})
+        except ToolError as e:
+            return JSONResponse({"error": str(e)}, 400)
+
+    async def route_repo(self, request: Request):
+        owner = request.path_params["owner"]
+        name = request.path_params["name"]
+        repo_slug = f"{owner}/{name}"
+        try:
+            repo_info = await self.get_repo({"repo": repo_slug})
+            return JSONResponse(repo_info)
+        except ToolError as e:
+            return JSONResponse({"error": str(e)}, 400)
+
+    async def route_readme(self, request: Request):
+        owner = request.path_params["owner"]
+        name = request.path_params["name"]
+        repo_slug = f"{owner}/{name}"
+        try:
+            content = await self._req("GET", f"/repos/{repo_slug}/readme", accept="application/vnd.github.raw+json")
+            return JSONResponse({"readme": content if isinstance(content, str) else str(content)})
+        except ToolError as e:
+            return JSONResponse({"error": str(e), "readme": ""}, 200)
+
+    async def route_branches(self, request: Request):
+        owner = request.path_params["owner"]
+        name = request.path_params["name"]
+        repo_slug = f"{owner}/{name}"
+        if request.method == "POST":
+            try:
+                body = await request.json()
+                res = await self.create_branch({
+                    "repo": repo_slug,
+                    "branch": body["branch"],
+                    "from_branch": body.get("from_branch")
+                })
+                return JSONResponse(res)
+            except ToolError as e:
+                return JSONResponse({"error": str(e)}, 400)
+        try:
+            branches = await self.list_branches({"repo": repo_slug, "limit": 100})
+            return JSONResponse({"branches": branches})
+        except ToolError as e:
+            return JSONResponse({"error": str(e)}, 400)
+
+    async def route_branch_delete(self, request: Request):
+        owner = request.path_params["owner"]
+        name = request.path_params["name"]
+        branch = request.path_params["branch"]
+        repo_slug = f"{owner}/{name}"
+        try:
+            res = await self.delete_branch({"repo": repo_slug, "branch": branch})
+            return JSONResponse(res)
+        except ToolError as e:
+            return JSONResponse({"error": str(e)}, 400)
+
+    async def route_pulls(self, request: Request):
+        owner = request.path_params["owner"]
+        name = request.path_params["name"]
+        repo_slug = f"{owner}/{name}"
+        if request.method == "POST":
+            try:
+                body = await request.json()
+                res = await self.create_pull({
+                    "repo": repo_slug,
+                    "title": body["title"],
+                    "head": body["head"],
+                    "base": body["base"],
+                    "body": body.get("body", ""),
+                    "draft": body.get("draft", False)
+                })
+                return JSONResponse(res)
+            except ToolError as e:
+                return JSONResponse({"error": str(e)}, 400)
+        try:
+            state = request.query_params.get("state", "open")
+            prs = await self.list_pulls({"repo": repo_slug, "state": state, "limit": 50})
+            return JSONResponse({"pulls": prs})
+        except ToolError as e:
+            return JSONResponse({"error": str(e)}, 400)
+
+    async def route_pull(self, request: Request):
+        owner = request.path_params["owner"]
+        name = request.path_params["name"]
+        number = request.path_params["number"]
+        repo_slug = f"{owner}/{name}"
+        try:
+            pull = await self.get_pull({"repo": repo_slug, "number": number})
+            comments = await self._req("GET", f"/repos/{repo_slug}/issues/{number}/comments", params={"per_page": 50})
+            pull["comments"] = [{
+                "id": c["id"],
+                "author": c["user"]["login"],
+                "author_avatar": c["user"].get("avatar_url"),
+                "body": c["body"],
+                "created_at": c["created_at"]
+            } for c in comments]
+            return JSONResponse(pull)
+        except ToolError as e:
+            return JSONResponse({"error": str(e)}, 400)
+
+    async def route_pull_diff(self, request: Request):
+        owner = request.path_params["owner"]
+        name = request.path_params["name"]
+        number = request.path_params["number"]
+        repo_slug = f"{owner}/{name}"
+        try:
+            diff = await self._req("GET", f"/repos/{repo_slug}/pulls/{number}",
+                                   accept="application/vnd.github.diff")
+            return JSONResponse({"diff": diff})
+        except ToolError as e:
+            return JSONResponse({"error": str(e)}, 400)
+
+    async def route_pull_merge(self, request: Request):
+        owner = request.path_params["owner"]
+        name = request.path_params["name"]
+        number = request.path_params["number"]
+        repo_slug = f"{owner}/{name}"
+        try:
+            body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+            res = await self.merge_pull({
+                "repo": repo_slug,
+                "number": number,
+                "method": body.get("method", "squash")
+            })
+            return JSONResponse(res)
+        except ToolError as e:
+            return JSONResponse({"error": str(e)}, 400)
+
+    async def route_pull_close(self, request: Request):
+        owner = request.path_params["owner"]
+        name = request.path_params["name"]
+        number = request.path_params["number"]
+        repo_slug = f"{owner}/{name}"
+        try:
+            body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+            res = await self.close_pull({
+                "repo": repo_slug,
+                "number": number,
+                "state": body.get("state", "closed")
+            })
+            return JSONResponse(res)
+        except ToolError as e:
+            return JSONResponse({"error": str(e)}, 400)
+
+    async def route_pull_comment(self, request: Request):
+        owner = request.path_params["owner"]
+        name = request.path_params["name"]
+        number = request.path_params["number"]
+        repo_slug = f"{owner}/{name}"
+        try:
+            body = await request.json()
+            res = await self.comment({"repo": repo_slug, "number": number, "body": body["body"]})
+            return JSONResponse(res)
+        except ToolError as e:
+            return JSONResponse({"error": str(e)}, 400)
+
+    async def route_issues(self, request: Request):
+        owner = request.path_params["owner"]
+        name = request.path_params["name"]
+        repo_slug = f"{owner}/{name}"
+        if request.method == "POST":
+            try:
+                body = await request.json()
+                res = await self.create_issue({
+                    "repo": repo_slug,
+                    "title": body["title"],
+                    "body": body.get("body", ""),
+                    "labels": body.get("labels", [])
+                })
+                return JSONResponse(res)
+            except ToolError as e:
+                return JSONResponse({"error": str(e)}, 400)
+        try:
+            state = request.query_params.get("state", "open")
+            issues = await self.list_issues({"repo": repo_slug, "state": state, "limit": 50})
+            return JSONResponse({"issues": issues})
+        except ToolError as e:
+            return JSONResponse({"error": str(e)}, 400)
+
+    async def route_issue(self, request: Request):
+        owner = request.path_params["owner"]
+        name = request.path_params["name"]
+        number = request.path_params["number"]
+        repo_slug = f"{owner}/{name}"
+        try:
+            issue = await self.get_issue({"repo": repo_slug, "number": number})
+            comments = await self._req("GET", f"/repos/{repo_slug}/issues/{number}/comments", params={"per_page": 50})
+            issue["comments"] = [{
+                "id": c["id"],
+                "author": c["user"]["login"],
+                "author_avatar": c["user"].get("avatar_url"),
+                "body": c["body"],
+                "created_at": c["created_at"]
+            } for c in comments]
+            return JSONResponse(issue)
+        except ToolError as e:
+            return JSONResponse({"error": str(e)}, 400)
+
+    async def route_issue_close(self, request: Request):
+        owner = request.path_params["owner"]
+        name = request.path_params["name"]
+        number = request.path_params["number"]
+        repo_slug = f"{owner}/{name}"
+        try:
+            body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+            state = body.get("state", "closed")
+            if state == "open":
+                await self._req("PATCH", f"/repos/{repo_slug}/issues/{number}", json={"state": "open"})
+                return JSONResponse({"opened": f"{repo_slug}#{number}"})
+            else:
+                res = await self.close_issue({
+                    "repo": repo_slug,
+                    "number": number,
+                    "reason": body.get("reason", "completed")
+                })
+                return JSONResponse(res)
+        except ToolError as e:
+            return JSONResponse({"error": str(e)}, 400)
+
+    async def route_issue_comment(self, request: Request):
+        owner = request.path_params["owner"]
+        name = request.path_params["name"]
+        number = request.path_params["number"]
+        repo_slug = f"{owner}/{name}"
+        try:
+            body = await request.json()
+            res = await self.comment({"repo": repo_slug, "number": number, "body": body["body"]})
+            return JSONResponse(res)
+        except ToolError as e:
+            return JSONResponse({"error": str(e)}, 400)
+
     def routes(self):
-        return [Route("/panel", self.panel_data)]
+        return [
+            Route("/panel", self.panel_data),
+            Route("/repos", self.route_repos, methods=["GET"]),
+            Route("/repo/{owner}/{name}", self.route_repo, methods=["GET"]),
+            Route("/repo/{owner}/{name}/readme", self.route_readme, methods=["GET"]),
+            Route("/repo/{owner}/{name}/branches", self.route_branches, methods=["GET", "POST"]),
+            Route("/repo/{owner}/{name}/branches/{branch:path}", self.route_branch_delete, methods=["DELETE"]),
+            Route("/repo/{owner}/{name}/pulls", self.route_pulls, methods=["GET", "POST"]),
+            Route("/repo/{owner}/{name}/pulls/{number:int}", self.route_pull, methods=["GET"]),
+            Route("/repo/{owner}/{name}/pulls/{number:int}/diff", self.route_pull_diff, methods=["GET"]),
+            Route("/repo/{owner}/{name}/pulls/{number:int}/merge", self.route_pull_merge, methods=["POST"]),
+            Route("/repo/{owner}/{name}/pulls/{number:int}/close", self.route_pull_close, methods=["POST", "PATCH"]),
+            Route("/repo/{owner}/{name}/pulls/{number:int}/comment", self.route_pull_comment, methods=["POST"]),
+            Route("/repo/{owner}/{name}/issues", self.route_issues, methods=["GET", "POST"]),
+            Route("/repo/{owner}/{name}/issues/{number:int}", self.route_issue, methods=["GET"]),
+            Route("/repo/{owner}/{name}/issues/{number:int}/close", self.route_issue_close, methods=["POST", "PATCH"]),
+            Route("/repo/{owner}/{name}/issues/{number:int}/comment", self.route_issue_comment, methods=["POST"]),
+        ]

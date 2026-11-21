@@ -148,10 +148,10 @@ class RunGuard:
     def key(name: str, args: dict) -> str:
         return name + json.dumps(args, sort_keys=True, default=str)
 
-    def remember(self, key: str, *, ok: bool, content: str, risk: str) -> None:
-        if ok and risk != "read":  # a successful change makes earlier reads stale
-            self.seen = {k: v for k, v in self.seen.items() if v["risk"] != "read"}
-        self.seen[key] = {"ok": ok, "content": content, "risk": risk}
+    def remember(self, key: str, *, ok: bool, content: str, changes: bool) -> None:
+        if ok and changes:  # a successful change makes earlier reads stale
+            self.seen = {k: v for k, v in self.seen.items() if v["changes"]}
+        self.seen[key] = {"ok": ok, "content": content, "changes": changes}
 
     @property
     def must_finalize(self) -> bool:

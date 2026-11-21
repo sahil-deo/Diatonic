@@ -284,6 +284,60 @@ def test_unattended_approval_times_out_as_denied(env, monkeypatch):
     assert app.calls == [] and [e for e in ev if e["type"] == "tool_status"][0]["status"] == "denied"
 
 
+def test_unattended_approval_notification_has_approval_id_and_resolves(sched, monkeypatch):
+    from diatonic.agent import approvals
+    ctx, reg, scheduler, store, runs, events = sched
+    app = reg.apps["fake"]
+    p = ScriptedProvider([[{"tool_calls": [{"name": "fake_nuke", "arguments": {"id": 1}}]}], [{"content": "approved, done"}]])
+    monkeypatch.setattr(loop, "make_provider", lambda c: p)
+    conv = ctx.db.create_conversation()
+
+    async def go():
+        gen = loop.run_agent(ctx, reg, conv["id"], "do it", approval_timeout=5.0)
+        evs = []
+        async for e in gen:
+            evs.append(e)
+            if e["type"] == "notify" and "approval" in e.get("text", "").lower():
+                nots = store.notifications()
+                app_not = next((n for n in nots if n["kind"] == "approval"), None)
+                assert app_not is not None
+                aid = app_not["data"].get("approval_id")
+                assert aid is not None
+                approvals.resolve(aid, True)
+        return evs
+
+    ev = asyncio.run(go())
+    assert app.calls == [("nuke", {"id": 1})]
+    assert [e for e in ev if e["type"] == "tool_status"][0]["status"] == "approved"
+
+
+def test_unattended_approval_notification_can_be_rejected(sched, monkeypatch):
+    from diatonic.agent import approvals
+    ctx, reg, scheduler, store, runs, events = sched
+    app = reg.apps["fake"]
+    p = ScriptedProvider([[{"tool_calls": [{"name": "fake_nuke", "arguments": {"id": 2}}]}], [{"content": "denied, understood"}]])
+    monkeypatch.setattr(loop, "make_provider", lambda c: p)
+    conv = ctx.db.create_conversation()
+
+    async def go():
+        gen = loop.run_agent(ctx, reg, conv["id"], "do it", approval_timeout=5.0)
+        evs = []
+        async for e in gen:
+            evs.append(e)
+            if e["type"] == "notify" and "approval" in e.get("text", "").lower():
+                nots = store.notifications()
+                app_not = next((n for n in nots if n["kind"] == "approval"), None)
+                assert app_not is not None
+                aid = app_not["data"].get("approval_id")
+                assert aid is not None
+                approvals.resolve(aid, False)
+        return evs
+
+    ev = asyncio.run(go())
+    assert app.calls == []
+    assert [e for e in ev if e["type"] == "tool_status"][0]["status"] == "denied"
+
+
 def test_old_scheduled_chats_are_pruned(sched, monkeypatch):
     ctx, reg, eng, store, runs, events = sched
     ctx.config.data["scheduler"]["keep_prompt_chats"] = 2

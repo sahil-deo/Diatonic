@@ -73,7 +73,7 @@ function editor(a0) {
       a.shortcut = k; hk.blur();
     });
     const ta = (key, ph, mono, rows) => { const t = h("textarea", { placeholder: ph, class: mono ? "mono" : "", rows, oninput: (e) => { a[key] = e.target.value; } }, a[key]); return t; };
-    body.replaceChildren(
+    body.replaceChildren(...[
       h("div", { class: "row", style: "margin-bottom:6px" }, h("button", { class: "btn sm", onclick: () => { editing = null; rerenderSettings(); } }, "← Back"), h("strong", {}, isNew ? "New action" : "Edit action")),
       field("Type", select(a.kind, [["prompt", "Saved prompt: fills (or sends) a message"], ["script", "Script: runs a shell command"]], (v) => { a.kind = v; draw(); })),
       h("div", { class: "row" },
@@ -100,7 +100,8 @@ function editor(a0) {
         } }, "Save"),
         !isNew && h("button", { class: "btn", onclick: async () => { const l = state.config.actions.find((x) => x.id === a.id); if (l && await persist([...state.config.actions, { ...l, id: "", label: l.label + " copy", name: "", shortcut: "" }])) { editing = null; rerenderSettings(); } } }, "Duplicate"),
         !isNew && h("button", { class: "btn danger", onclick: async () => { if (confirm(`Delete “${a.label}”?`) && await persist(state.config.actions.filter((x) => x.id !== a.id))) { editing = null; rerenderSettings(); } } }, "Delete"),
-        !isNew && a.kind === "script" && h("button", { class: "btn", title: "Run the saved version", onclick: () => { document.querySelector("#settings").close(); invoke(a); } }, "Test run")));
+        !isNew && a.kind === "script" && h("button", { class: "btn", title: "Run the saved version", onclick: () => { document.querySelector("#settings").close(); invoke(a); } }, "Test run")),
+    ].filter(Boolean));
   };
   draw();
   return body;

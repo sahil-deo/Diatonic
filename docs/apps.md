@@ -66,11 +66,19 @@ Say what you want in plain words ("remind me to call mom tomorrow at 9", "every 
 
 ![Home screen: live tiles for telemetry, to-dos, GitHub and notes](images/Agent.png)
 
-An empty chat shows live tiles from your apps: to-dos, calendar, latest mail, upcoming reminders and jobs, GitHub issues assigned to you, a telemetry summary, recent notes, and the apps you built (progress for data apps, the latest values for API apps). Click an item to open it in its app. **Customize** (below the tiles) picks the layout, 4 small, 2 stacked, 2 side by side or 1 big (or the old suggestion chips), and the app in each tile; or ask the agent ("put my mail and GitHub issues side by side on the home screen"). Tiles refresh every two minutes and when their app's data changes; mail and GitHub are cached for a minute. Any app can offer a tile by implementing `snapshot(n)`.
+An empty chat shows live tiles from your apps: to-dos, calendar, latest mail, upcoming reminders and jobs, GitHub issues assigned to you, a telemetry summary, recent notes, and the apps you built. Click an item to open it in its app. **Customize** (below the tiles) picks the layout, 4 small, 2 stacked, 2 side by side or 1 big (or the old suggestion chips), and the app in each tile; or ask the agent ("put my mail and GitHub issues side by side on the home screen"). Tiles refresh every two minutes and when their app's data changes; mail and GitHub are cached for a minute. Any app can offer a tile by implementing `snapshot(n)`.
 
 ![New Tab: app launcher and recent conversations](images/Home.png)
 
-The **New Tab** page (or the Home icon) provides a fast launcher across all built-in apps, custom data apps, and recent conversations with quick search filtering.
+The **New Tab** page (or the Home icon) provides a fast launcher across all built-in apps, apps you built, and recent conversations with quick search filtering.
+
+## Screen and layout management
+
+Manage your workspace by hand or ask the agent ("split mail with notes", "zoom the calendar", "unzoom", "hide sidebar"). The agent controls panels using the `ui_set_layout` tool:
+
+- **Non-destructive window zoom (`mode="zoom"` / `mode="unzoom"`)**: Zooming an app expands it to fill the entire workspace while preserving your existing multi-panel layout tree behind the scenes. When you or the agent trigger "unzoom", the previous split layout is restored exactly as it was.
+- **Split & arrange (`mode="split"`, `mode="single"`)**: Split panels side by side (`direction="horizontal"`) or stacked (`direction="vertical"`), or collapse back to a single panel.
+- **Manual control**: The tab bar menu (`···`) and right-click tab menus provide direct controls to Split, Zoom, Duplicate, Move, Pin, or Detach panels to separate browser windows.
 
 ## Terminal and shell access
 
@@ -103,3 +111,11 @@ Two things keep the agent from repeating the same mistakes, and neither grows in
    - **Facts** about you or your setup ("my default repo is owner/project"), 200 characters each, 30 at most. Per request only facts for *everywhere* plus the apps that request involves are added to the prompt, capped at 8 facts / 600 characters (about 150 tokens). With no memory the prompt is byte-identical to before, so Ollama's cache still works.
    - **Learned tool quirks.** When a tool *rejects* an argument and the retry with a different number, switch or fixed choice *works*, the harness records that for that one tool and appends it to that tool's description only. Learned without a model call, only from numbers/booleans/choices (never free text from a web page or an issue), never from outages or auth errors, shown in the chat as "Learned for next time: …", de-duplicated, forgotten after 90 days unused.
    - You can see, edit, pin, disable or delete everything. Turn memory or auto-learning off in the same tab. Memory is only text in the prompt: it can't change approvals or any setting.
+
+## Exposing apps to outside agents (MCP)
+
+Diatonic includes a Streamable HTTP Model Context Protocol (MCP) server running at `/mcp` (`diatonic/mcp.py`). Outside agents like Google Antigravity (`agy`) can discover and invoke Diatonic apps as native tools:
+
+- **Per-app toggles**: In **Settings → Apps**, choose which apps expose their tools over MCP. By default, private apps (mail, calendar, files, notes) are protected.
+- **Per-conversation bearer token**: External agent calls authenticate with a scoped bearer token generated for each run.
+- **Safety and approvals**: Invocations via MCP obey Diatonic's effect system. Read tools return data directly; write and destructive tools prompt for approval cards in Diatonic (or run automatically under Antigravity's Auto Permissions Mode while preserving cards for sensitive actions).

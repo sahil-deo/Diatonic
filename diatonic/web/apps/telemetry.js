@@ -14,7 +14,7 @@ export async function render(el, ctx) {
 
   const head = h("div", { class: "tel-head" }, range, h("div", { class: "grow" }),
     h("label", { class: "chk" }, h("input", { type: "checkbox", checked: s.cfg.enabled, onchange: async (e) => { await api.put("/api/config", { telemetry: { enabled: e.target.checked } }); toast(e.target.checked ? "Telemetry on" : "Telemetry off"); } }), "Record"));
-  el.append(head);
+  el.replaceChildren(head);
   if (!s.runs) return el.append(h("div", { class: "p-empty" }, s.cfg.enabled ? "No runs in this period yet. Send a message and come back." : "Telemetry is off. Tick “Record” to start."), footer());
 
   const stat = (label, value, sub, tone) => h("div", { class: `stat ${tone || ""}` }, h("div", { class: "stat-v" }, value), h("div", { class: "stat-l" }, label), sub && h("div", { class: "stat-s" }, sub));

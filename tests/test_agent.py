@@ -271,3 +271,93 @@ def test_spoken_output_is_tagged_for_exactly_one_ui(env, monkeypatch):
         assert runs.focus is None
 
     asyncio.run(go())
+
+
+class OptionsProvider(ScriptedProvider):
+    """A scripted model that also records the options of each call."""
+
+    def __init__(self, script):
+        super().__init__(script)
+        self.options = []
+
+    async def stream(self, messages, tools=None, model=None, options=None):
+        self.options.append(options)
+        async for chunk in super().stream(messages, tools, model, options):
+            yield chunk
+
+
+def _with_ui(ctx, reg):
+    from diatonic.apps.ui import create as create_ui
+    ctx.registry = reg
+    reg.register(create_ui(ctx))
+
+
+def test_claiming_an_app_is_built_when_nothing_was_written_becomes_a_failure(env, monkeypatch):
+    ctx, reg, _, db = env
+    _with_ui(ctx, reg)
+    claim = [{"content": "I built your pomodoro timer app! It is ready to use."}]
+    p = OptionsProvider([claim, claim])                  # the second reply answers the harness's "you called no tool" nudge
+    conv, ev = asyncio.run(collect(ctx, reg, db, p, monkeypatch, text="make a pomodoro timer"))
+    final = db.messages(conv["id"])[-1]
+    assert "I did not build that" in final["content"] and "ready to use" not in final["content"]
+    assert [e["kind"] for e in ev if e["type"] == "guard"] == ["unbuilt"]
+
+
+def test_a_run_that_can_build_gets_a_longer_reply_and_context(env, monkeypatch):
+    ctx, reg, _, db = env
+    _with_ui(ctx, reg)
+    ctx.config.data["agent"].update(max_tokens=1024, num_ctx=8192)
+    p = OptionsProvider([[{"content": "ok"}], [{"content": "ok"}]])
+    asyncio.run(collect(ctx, reg, db, p, monkeypatch, text="make a pomodoro timer"))
+    assert p.options[0] == {"num_predict": 4096, "num_ctx": 16384}
+    p = OptionsProvider([[{"content": "hi"}]])
+    asyncio.run(collect(ctx, reg, db, p, monkeypatch, text="hello"))
+    assert p.options[0] is None                      # ordinary chat keeps the small, fast settings
+
+
+def test_unbuilt_check_leaves_other_runs_alone():
+    from types import SimpleNamespace
+    ui = SimpleNamespace(builds_something=lambda t: "make" in t)
+    reg = SimpleNamespace(apps={"ui": ui})
+    tm = {"ui_write_app_file": (None, None)}
+    built = [{"name": "ui_write_app_file", "ok": True, "args": {"path": "index.js"}}]
+    assert loop.unbuilt_failure("make a timer", built, tm, reg) is None                                     # it was built
+    assert loop.unbuilt_failure("show my todos", [], tm, reg) is None                                       # not a build request
+    assert loop.unbuilt_failure("make a timer", [{"name": "ui_create_file_app", "ok": False, "status": "denied"}], tm, reg) is None   # the user said no
+    css_only = [{"name": "ui_create_file_app", "ok": True}, {"name": "ui_write_app_file", "ok": True, "args": {"path": "style.css"}}]
+    assert "empty placeholder" in loop.unbuilt_failure("make a timer", css_only, tm, reg)                   # styling is not building
+    failed = [{"name": "ui_write_app_file", "ok": False, "preview": "Error: must export render"}]
+    assert "must export render" in loop.unbuilt_failure("make a timer", failed, tm, reg)
+
+
+def test_arguments_that_are_not_json_are_reported_not_turned_into_empty(env, monkeypatch):
+    ctx, reg, app, db = env
+    p = ScriptedProvider([[{"tool_calls": [{"name": "fake_read", "arguments": '{"text": "abc'}]}], [{"content": "ok"}]])
+    _, ev = asyncio.run(collect(ctx, reg, db, p, monkeypatch))
+    res = [e for e in ev if e["type"] == "tool_result"][0]
+    assert "not valid JSON" in res["preview"] and app.calls == []
+
+
+def test_a_build_run_does_not_run_a_tool_it_was_not_offered(env, monkeypatch):
+    ctx, reg, app, db = env
+    _with_ui(ctx, reg)
+    p = OptionsProvider([[call("fake_read", text="x")], [{"content": "ok"}]])      # a real tool, but not offered for "make a ... timer"
+    conv, ev = asyncio.run(collect(ctx, reg, db, p, monkeypatch, text="make a pomodoro timer"))
+    assert app.calls == []
+    assert any("not a tool you can call" in m["content"] for m in p.seen[1] if m.get("role") == "tool")
+
+
+def test_a_build_request_is_not_widened_to_the_panel_that_happens_to_be_open(env, monkeypatch):
+    ctx, reg, app, db = env
+    _with_ui(ctx, reg)
+    app.panel = True                                   # the open panel belongs to another app
+    monkeypatch.setattr(loop, "make_provider", lambda c: p)
+    p = OptionsProvider([[{"content": "ok"}], [{"content": "ok"}]])
+
+    async def go():
+        conv = db.create_conversation()
+        async for _ in loop.run_agent(ctx, reg, conv["id"], "Make a panel that lists my open items.", screen={"app": app.id}):
+            pass
+    asyncio.run(go())
+    offered = {t["function"]["name"] for t in p.tools_seen[0]}
+    assert "ui_write_app_file" in offered and not [n for n in offered if n.startswith("fake_")]

@@ -1,0 +1,2 @@
+{"id": "timer", "name": "Timer", "version": 1, "description": "Countdown timers that keep running when the panel is closed and notify when they end.",
+ "permissions": {"timer": true}}

@@ -20,8 +20,13 @@ export const wide = true; export const width = 560; export const full = false; e
 | `command({id, title, run, when?})` | add a command (palette, keys); removed when the panel closes |
 | `list({items, open?})` | arrow keys, Home/End and Enter step through the panel's rows |
 | `onClose(fn)` | run `fn` when the panel is replaced or closed: remove document-level listeners, clear timers |
-| `tool("gcal_list_events", args)` | run any app's read-only tool; resolves to its result (tools that change things are refused: only the agent does those, with approval) |
-| `data("app-id")` | the user's own tracker apps: `.get()`, `.add(list, {field: value})`, `.update(id, {field: value})` |
+| `store.get/set/keys/remove`, `store.add/addMany/update/updateMany/delete/query/tables` | the app's own data on the server: single values and tables of rows (`await ctx.store.addMany("topics", rows)`). Survives closing the panel and the browser, is deleted with the app, never reaches another app's data. No approval. Limits: 256 KB per value or row, 1000 rows per call, 20,000 rows per table |
+| `fetch(url)` | read a web page or public API through the server: `const r = await ctx.fetch(url); r.json()` (also `status`, `ok`, `text`). GET only; text, HTML and JSON only (show images with an `img` tag); 2 MB and 15 seconds at most; never a local or private address (checked again after every redirect). The domain must be in the manifest's `permissions.fetch` and approved by the user, on every redirect too. A refusal throws an `Error` with a readable message: catch it and show it |
+| `notify(title, body)` | tell the user something (inbox and a system banner). No card, but it must be declared (`permissions.notify`); 20 a minute at most |
+| `timer.start(seconds, {label})`, `pause(id)`, `resume(id)`, `cancel(id)`, `list()`, `onDone(fn)` | countdowns that run on the server, so they keep going with the panel or the browser closed (and across a server restart). The user gets a notification when one ends and `onDone` fires if the panel is open. `list()` gives `{id, label, state, remaining}`, so a reopened panel shows the right time. Declare `permissions.timer`. 1 second to 7 days, 50 per app |
+| `ui.*` | the UI kit: `ui.card`, `section`, `row`, `list`, `table`, `tabs`, `form`, `field`, `button`, `kv`, `stat`, `badge`, `empty`, `modal`, `chart`, plus `ui.listApp(spec)` (a whole list view) and `ui.run(label, fn, button?)` (see "The UI kit" below) |
+| `on(event, fn)` | listen for `"timer:done"` (this app's timers), `"todo:changed"` or `"<app>:changed"` (that app's data changed). Removed when the panel closes. There is no mail event yet |
+| `tool("gcal_list_events", args)` | run another app's tool; resolves to its result. Read tools just run. A tool that **changes** things must be in the manifest's `permissions.tools`, and **every call** shows the user an approval card naming the app (the same words as the chat card). The terminal and the interface tools are never available |
 
 Everything registered through `ctx` is undone when the panel is replaced or closed.
 
@@ -37,7 +42,7 @@ A panel's content (its `el`) is **not** a child of the stack you see: it lives i
 
 ## Chat panels
 
-The first chat panel adopts the main chat (`#main`: streaming, approval cards, tool output, the home tiles). Any further chat panel is self-contained: it keeps its own conversation id in `ctx.state` (`cid`), sends with its own id, shows "Working…" while its run is active and loads the finished reply. It does not stream, show approval cards or tool output; use the main chat for those. It never touches `state.convId`, which belongs to the main chat. Full streaming in every chat needs `js/chat.js` split away from its single message list (still open, see `todo.md`).
+There is one chat in the app. The chat panel shows the main chat (`#main`: streaming, approval cards, tool output, the home tiles). Opening, splitting or duplicating Chat while a chat panel is open focuses that panel instead of making a second one, and a saved layout with more than one chat keeps the first.
 
 ## Styling a panel
 
@@ -63,3 +68,34 @@ In the code, "workspace" only names the area of the window that shows the layout
 
 Every command should have a place to click, so nothing depends on knowing a key. The places are the status bar (Layouts, Scratchpad, command bar and Settings buttons on the right; a **+** after the pinned apps to pin or unpin any app), Settings (Layouts and Macros pages next to Keyboard), and the tab bar (split, add tab, and the **⋯ panel menu**: split, zoom, duplicate, move and swap towards a neighbour, pin, reload, open in its own window, close tab or close the others; right-click a tab for the same menu). Zoom only changes what is shown, never the saved layout. A command that needs a name, such as `layout.save` or `macro.record.start`, opens the page that has a name box and does not use a browser `prompt()`; a test checks the core commands for that. When you add a command, add its button or menu in the same change.
 
+
+
+## The UI kit (`ctx.ui`)
+
+Components in `web/js/ui/index.js` are plain functions: you give them props and get an element back, and everything is styled from the `:root` tokens, so light and dark both work. What each one takes is declared once in `web/js/ui/components.json` (docs, props, one example); the catalog (`platform_search "card"`), the **Components** panel (the gallery: every component with its live example) and the tests all read that file. To add a component, write the function, add its entry to the JSON, and the test in `tests/js/ui-kit.test.mjs` tells you what is missing.
+
+- **`ui.listApp({rows, columns?, detail?, actions?, filters?, search?, marks?, empty?})`** builds a whole list view: search box, filter buttons, rows (a table when `columns` is given), check marks bound to `row[marks.key]`, a detail pane for the selected row, and the same `actions` on each row and in the detail. Arrow keys and Enter step through the rows (it registers `ctx.list` for you). It returns an element with `set(rows)` (show new data) and `selected()`. Every row needs a unique `id` and a `title`.
+- **`ui.run(label, fn, button?)`** is how an action should run: the button is disabled meanwhile, a returned string is shown as the result, and a failure is shown to the user and written to the app's log (`read_app_logs`). `listApp` runs every action and mark through it.
+- Examples that use all of this: `diatonic/recipes/timer`, `tracker` (on `ctx.store`) and `search` (on `ctx.fetch`). `scripts/render_recipes.mjs` installs each on a fresh scratch server, uses it and checks it in dark and light.
+- Inside the test run before approval (`js/verify.js`) `ctx.ui` knows the component names only: a wrong name fails the run with the list of real ones.
+
+## Apps the agent builds (file apps)
+
+The agent builds an app as a folder in `~/.diatonic/apps/<id>/` (`manifest.json`, `index.js`, `style.css`, optional `tools.py`). It is a panel like any other: `index.js` exports `render(el, ctx)` with the `ctx` above and keeps no module-level state.
+
+- **Building:** `create_file_app` makes an empty placeholder, `write_app_file` writes the whole `index.js`, `patch_app_file` changes one piece, `delete_file_app` removes the folder. An app is built only once `index.js` has been written; if a run asked for an app and none was written, the chat says it failed.
+- **Checks:** the file rules and a test run of `index.js` in the sandboxed frame happen before the approval card, so the user is only asked about code that runs.
+- **Permissions:** an app that uses notifications, timers, web domains or tools that change things lists them in `manifest.json`: `"permissions": {"notify": true, "timer": true, "fetch": ["youtube.com"], "tools": ["todos_add_todo"]}`. The user approves the whole list once (a card in the corner); the approved copy is kept in the user's settings, not in the app's folder, so the agent cannot grant itself anything. If the manifest later asks for more, the card shows again with the new items marked. Using something that was not declared fails with a message that says what to add. `ctx.store`, `ctx.state` and read tools need no declaration.
+- **Edits show up:** the module URL carries the manifest version, so a panel opened after an edit loads the new code.
+- **Deleting:** closes the app's tabs and removes its settings (switch, rail slot, status bar pin, home tile).
+- **`tools.py`:** code the agent wrote. Its tools always ask for approval and a panel cannot call them.
+- **Things that keep records** (trackers, logs, habits) are built as file apps like everything else. They keep data in `ctx.store` (on the server). `ctx.state` is for view settings only: it lives in the browser.
+
+## For the agent
+
+- Start from a recipe (`ui_read_skill("recipes")`): timer, tracker or search. Copy it, give it a new id, and change only what the request needs.
+- `export async function render(el, ctx)`. No module-level variables, no imports, no `fetch` or `localStorage`. Always `await` `ctx` calls.
+- Build with `ctx.ui` components and the tokens (`var(--accent)`); never write colours.
+- Save records with `ctx.store`, reach the web with `ctx.fetch`, run countdowns with `ctx.timer`. Put many rows in one call (`addMany`).
+- Declare what the app uses in `manifest.json` `permissions`.
+- To change an app, `ui_read_app_file`, then `ui_patch_app_file` with the exact old text. When something fails, `ui_read_app_logs` and fix only what it names.

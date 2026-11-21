@@ -18,6 +18,9 @@ REQUEST: ContextVar[str] = ContextVar("run_request", default="")
 UNTRUSTED: ContextVar[dict | None] = ContextVar("run_untrusted", default=None)
 
 
+UNTRUSTED_NOTE = "This run has read email, whose text anyone can write, so it can't change the interface. Ask again in a new chat."
+
+
 def mark_untrusted(source: str) -> None:
     box = UNTRUSTED.get()
     if box is not None:

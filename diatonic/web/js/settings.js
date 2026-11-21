@@ -127,6 +127,17 @@ function appsPane() {
     const st = a.status;
     return h("div", { class: "app-card" },
       h("header", {}, h("h3", {}, a.name), h("div", { class: "grow" }),
+        a.file_app ? h("button", { class: "btn danger sm", style: "margin-right:8px", onclick: async () => {
+          if (confirm(`Delete app "${a.name}" and all its files?`)) {
+            try {
+              await api.del(`/api/custom-apps/${a.id}`);
+              await refreshApps();
+              toast(`Deleted ${a.name}`);
+            } catch (err) {
+              toast(err.message, "error");
+            }
+          }
+        } }, "Delete App") : null,
         h("span", { class: "switch" }, h("input", { type: "checkbox", checked: a.enabled, "aria-label": `Enable ${a.name}`,
           onchange: async (e) => { await api.putApp(a.id, { enabled: e.target.checked }); await refreshApps(); } }))),
       h("div", { class: "muted", style: "margin-bottom:10px" }, a.description),
@@ -137,6 +148,12 @@ function appsPane() {
       fields.length ? h("button", { class: "btn", onclick: saveApp }, "Save") : null,
       a.enabled && toggle("Private", "A cloud model must ask before it reads or changes anything here.", a.private,
         async (v) => { await api.putApp(a.id, { private: v }); await refreshApps(); }),
+      a.enabled && a.id !== "shell" && toggle("Share with Antigravity (MCP)", "Let Antigravity reach this app's tools over MCP.", (state.config.mcp?.apps || []).includes(a.id),
+        async (v) => {
+          const cur = new Set(state.config.mcp?.apps || []);
+          if (v) cur.add(a.id); else cur.delete(a.id);
+          await save({ mcp: { apps: [...cur] } });
+        }),
       a.enabled && h("div", { class: "p-section" }, "Tools"),
       ...(a.enabled ? a.tools.map((t) => h("div", { class: "tool-row", title: t.description },
         h("span", { class: "n" }, t.title), h("span", { class: `pill ${t.risk}` }, t.risk),
@@ -193,7 +210,13 @@ export async function refreshApps() {
 function renderPane() {
   const pane = $(".set-pane", dlg()); if (!pane) return;
   const top = pane.scrollTop;
-  pane.replaceChildren(...TABS.find((t) => t[0] === tab)[2]());
+  try {
+    const entry = TABS.find((t) => t[0] === tab);
+    pane.replaceChildren(...(entry ? entry[2]().flat(Infinity).filter(Boolean) : []));
+  } catch (err) {
+    console.error("Settings render error:", err);
+    pane.replaceChildren(h("div", { class: "notice warn" }, `Failed to render ${tab} settings: ${err.message}`));
+  }
   pane.scrollTop = top;
   $$nav().forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
 }
@@ -201,7 +224,6 @@ const $$nav = () => [...dlg().querySelectorAll(".set-nav button")];
 
 export async function openSettings(which) {
   if (which && TABS.some((t) => t[0] === which)) tab = which;
-  state.health = await api.health().catch(() => state.health);
   const d = dlg();
   d.replaceChildren(
     h("div", { class: "set-head" }, "Settings", h("div", { class: "grow" }),
@@ -211,6 +233,7 @@ export async function openSettings(which) {
       h("div", { class: "set-pane" })));
   if (!d.open) d.showModal();
   renderPane();
+  api.health().then((h) => { state.health = h; if (dlg().open) renderPane(); }).catch(() => {});
 }
 
 export { renderPane as rerenderSettings };

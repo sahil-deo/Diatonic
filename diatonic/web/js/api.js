@@ -1,18 +1,100 @@
 import { CLIENT_ID } from "./store.js";
-async function j(method, url, body) {
+
+export const DEFAULT_BUFFER_TTL = 30000;
+
+const buffer = new Map();
+
+function clone(data) {
+  if (data === undefined || data === null) return data;
+  if (typeof structuredClone === "function") {
+    try { return structuredClone(data); } catch {}
+  }
+  try { return JSON.parse(JSON.stringify(data)); } catch { return data; }
+}
+
+function invalidateMatching(urlOrPattern) {
+  if (!urlOrPattern || typeof urlOrPattern !== "string") return;
+  buffer.delete(urlOrPattern);
+  const m = urlOrPattern.match(/^(\/api\/(?:apps\/[^\/]+|[^\/]+))/);
+  const prefix = m ? m[1] : urlOrPattern;
+  for (const k of [...buffer.keys()]) {
+    if (k.startsWith(prefix) || (prefix.startsWith("/api/apps/") && k.startsWith(prefix.replace("/api/apps/", "/api/")))) {
+      buffer.delete(k);
+    }
+  }
+  if (urlOrPattern.startsWith("/api/panel/tools/")) {
+    const parts = urlOrPattern.split("/");
+    if (parts[4]) invalidateApp(parts[4]);
+  }
+}
+
+export function invalidateApp(appId) {
+  if (!appId) return;
+  const target = (appId === "tiles" || appId === "launcher") ? "home" : appId;
+  const prefixes = [
+    `/api/${target}`,
+    `/api/apps/${target}`,
+  ];
+  for (const k of [...buffer.keys()]) {
+    if (prefixes.some((p) => k.startsWith(p))) {
+      buffer.delete(k);
+    }
+  }
+}
+
+export function clearBuffer() {
+  buffer.clear();
+}
+
+export function getBufferEntry(url) {
+  return buffer.get(url);
+}
+
+async function j(method, url, body, extra) {
   // X-Diatonic: proves the request comes from this page (a cross-site page can't send it); the terminal requires it.
-  const r = await fetch(url, { method, headers: { "X-Diatonic": "1", ...(body ? { "Content-Type": "application/json" } : {}) }, body: body ? JSON.stringify(body) : undefined });
+  const r = await fetch(url, { method, headers: { "X-Diatonic": "1", ...(body ? { "Content-Type": "application/json" } : {}), ...extra }, body: body ? JSON.stringify(body) : undefined });
   const data = await r.json().catch(() => ({}));
+  if (method !== "GET" && r.ok) invalidateMatching(url);
   if (!r.ok) throw Object.assign(new Error(data.error || data.detail || `${r.status} ${r.statusText}`), { status: r.status, data });
   return data;
 }
 
+async function bufferedGet(url, opts = {}) {
+  const force = Boolean(opts?.force);
+  const ttl = typeof opts?.ttl === "number" ? opts.ttl : DEFAULT_BUFFER_TTL;
+  const now = Date.now();
+
+  if (!force && ttl > 0 && buffer.has(url)) {
+    const entry = buffer.get(url);
+    if (entry.promise) return entry.promise.then(clone);
+    if (now - entry.time < ttl) {
+      return clone(entry.data);
+    }
+  }
+
+  const promise = j("GET", url).then((data) => {
+    buffer.set(url, { data, time: Date.now() });
+    return clone(data);
+  }).catch((err) => {
+    buffer.delete(url);
+    throw err;
+  });
+
+  buffer.set(url, { promise, time: now });
+  return promise;
+}
+
 export const api = {
-  get: (u) => j("GET", u),
-  post: (u, b) => j("POST", u, b || {}),
+  BUFFER_TTL: DEFAULT_BUFFER_TTL,
+  get: (u, opts) => bufferedGet(u, opts),
+  post: (u, b, extra) => j("POST", u, b || {}, extra),
   put: (u, b) => j("PUT", u, b || {}),
   patch: (u, b) => j("PATCH", u, b || {}),
   del: (u) => j("DELETE", u),
+  invalidate: (urlOrPattern) => invalidateMatching(urlOrPattern),
+  invalidateApp: (appId) => invalidateApp(appId),
+  clearBuffer: () => clearBuffer(),
+  getBufferEntry: (url) => getBufferEntry(url),
   state: () => j("GET", "/api/state"),
   health: () => j("GET", "/api/health"),
   putConfig: (patch) => j("PUT", "/api/config", patch),

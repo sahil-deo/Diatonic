@@ -121,6 +121,7 @@ export function validate(tree) {
   const t = clone(tree);
   t.v = 1;
   const seenIds = new Set();
+  let haveChat = false;   // there is one chat in the app; a saved layout with more keeps the first
 
   function fixNode(node) {
     if (!node || typeof node !== "object") return null;
@@ -132,6 +133,10 @@ export function validate(tree) {
       const validTabs = [];
       for (const tab of node.tabs || []) {
         if (!tab || typeof tab !== "object" || !tab.app) continue;
+        if (tab.app === "chat") {
+          if (haveChat) continue;
+          haveChat = true;
+        }
         if (!tab.id || seenIds.has(tab.id)) tab.id = nextId("t");
         seenIds.add(tab.id);
         tab.params = tab.params || {};
@@ -271,7 +276,7 @@ export function closePanel(tree, tabId) {
 }
 
 /** Split an existing panel or stack into two adjacent panels. */
-export function split(tree, panelId, dir = "row", newTabSpec) {
+export function split(tree, panelId, dir = "row", newTabSpec, position = "after") {
   if (!newTabSpec || !newTabSpec.app || !newTabSpec.app.trim()) return tree;
   const t = clone(tree);
   const found = findTab(t, panelId);
@@ -295,9 +300,40 @@ export function split(tree, panelId, dir = "row", newTabSpec) {
   Object.keys(stack).forEach((k) => delete stack[k]);
   stack.type = "split";
   stack.dir = dir;
-  stack.sizes = [0.5, 0.5];
-  stack.children = [oldStackCopy, newStack];
+  stack.sizes = position === "before" ? [0.3, 0.7] : [0.5, 0.5];
+  stack.children = position === "before" ? [newStack, oldStackCopy] : [oldStackCopy, newStack];
 
+  return validate(t);
+}
+
+/** Split the entire workspace tree globally on the left with a new panel. */
+export function splitRootLeft(tree, newTabSpec, ratio = 0.24) {
+  if (!newTabSpec || !newTabSpec.app || !newTabSpec.app.trim()) return tree;
+  const t = clone(tree);
+  const newTab = {
+    id: newTabSpec.id || nextId("t"),
+    app: newTabSpec.app.trim(),
+    params: newTabSpec.params || {},
+  };
+  const newStack = {
+    type: "stack",
+    id: nextId("s"),
+    active: 0,
+    tabs: [newTab],
+  };
+
+  if (!t.root) {
+    t.root = newStack;
+    return validate(t);
+  }
+
+  const oldRoot = clone(t.root);
+  t.root = {
+    type: "split",
+    dir: "row",
+    sizes: [ratio, 1 - ratio],
+    children: [newStack, oldRoot],
+  };
   return validate(t);
 }
 

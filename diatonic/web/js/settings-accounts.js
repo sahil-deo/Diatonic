@@ -27,20 +27,38 @@ export function accountsPane() {
     const accts = data.accounts;
 
     const row = (a) => {
-      const label = h("input", { type: "text", value: a.label, placeholder: a.name || a.email.split("@")[0], class: "acct-label", "aria-label": `Label for ${a.email}`, maxlength: 30,
+      const label = h("input", { type: "text", value: a.label, placeholder: a.name || a.email.split("@")[0], class: "acct-label-input", "aria-label": `Label for ${a.email}`, maxlength: 30,
         onchange: (e) => act(() => api.post(`/api/google/accounts/${encodeURIComponent(a.email)}`, { label: e.target.value })) });
       const dot = h("input", { type: "color", value: a.color, class: "acct-color", title: "Colour", onchange: (e) => act(() => api.post(`/api/google/accounts/${encodeURIComponent(a.email)}`, { color: e.target.value })) });
       const chips = [a.services.calendar && h("span", { class: "pill" }, "Calendar"), a.services.gmail && h("span", { class: "pill" }, `Gmail · ${a.services.gmail}`),
         a.needs_reauth && h("span", { class: "pill st-error" }, "needs reconnecting")];
-      return h("div", { class: `acct-row ${a.enabled ? "" : "dim"}` },
-        dot, h("div", { class: "grow" }, h("div", { class: "acct-top" }, h("strong", {}, a.name || a.email), a.default && h("span", { class: "pill st-ok" }, "default for writes")),
-          h("div", { class: "p-s" }, a.email), h("div", { class: "chips", style: "margin-top:4px" }, ...chips.filter(Boolean))),
-        h("div", { class: "acct-side" }, label,
-          h("div", { class: "row", style: "gap:6px;margin-top:6px;flex:none" },
-            !a.default && h("button", { class: "btn sm", title: "Used for creating events and sending mail when you don't say which account", onclick: () => act(() => api.put("/api/google/default", { email: a.email }), "Default account set") }, "Make default"),
-            h("a", { class: "btn sm", style: "text-decoration:none", href: connectUrl(a.services.calendar, a.services.gmail ? `gmail:${a.services.gmail}` : "", a.email), title: "Reconnect, or grant more access" }, a.needs_reauth ? "Reconnect" : "Change access"),
-            h("span", { class: "switch", title: a.enabled ? "Included" : "Ignored" }, h("input", { type: "checkbox", checked: a.enabled, "aria-label": `Use ${a.email}`, onchange: (e) => act(() => api.post(`/api/google/accounts/${encodeURIComponent(a.email)}`, { enabled: e.target.checked })) })),
-            h("button", { class: "icon-btn sm", title: "Remove", "aria-label": `Remove ${a.email}`, onclick: () => { if (confirm(`Remove ${a.email}? Its saved login is deleted and Google is told to revoke it.`)) act(() => api.del(`/api/google/accounts/${encodeURIComponent(a.email)}`), "Removed"); }, html: "✕" }))));
+      return h("div", { class: `acct-card ${a.enabled ? "" : "dim"}` },
+        h("div", { class: "acct-head" },
+          h("div", { class: "acct-ident" },
+            dot,
+            h("div", { class: "acct-info" },
+              h("div", { class: "acct-top" },
+                h("strong", { class: "acct-name" }, a.name || a.email),
+                a.default && h("span", { class: "pill st-ok" }, "default for writes")),
+              h("div", { class: "acct-sub" },
+                h("span", { class: "acct-email" }, a.email),
+                chips.some(Boolean) && h("div", { class: "chips" }, ...chips.filter(Boolean))))),
+          h("div", { class: "acct-status-cluster" },
+            h("span", { class: "acct-state-label" }, a.enabled ? "Active" : "Disabled"),
+            h("span", { class: "switch", title: a.enabled ? "Account is active" : "Account is disabled" },
+              h("input", { type: "checkbox", checked: a.enabled, "aria-label": `Use ${a.email}`,
+                onchange: (e) => act(() => api.post(`/api/google/accounts/${encodeURIComponent(a.email)}`, { enabled: e.target.checked })) })),
+            h("button", { class: "icon-btn sm acct-del", title: `Remove ${a.email}`, "aria-label": `Remove ${a.email}`,
+              onclick: () => { if (confirm(`Remove ${a.email}? Its saved login is deleted and Google is told to revoke it.`)) act(() => api.del(`/api/google/accounts/${encodeURIComponent(a.email)}`), "Removed"); }, html: "✕" }))),
+        h("div", { class: "acct-foot" },
+          h("div", { class: "acct-alias" },
+            h("span", { class: "acct-alias-lbl" }, "Label:"),
+            label),
+          h("div", { class: "acct-actions" },
+            !a.default && h("button", { class: "btn sm", title: "Used for creating events and sending mail when you don't say which account",
+              onclick: () => act(() => api.put("/api/google/default", { email: a.email }), "Default account set") }, "Make default"),
+            h("a", { class: "btn sm", style: "text-decoration:none", href: connectUrl(a.services.calendar, a.services.gmail ? `gmail:${a.services.gmail}` : "", a.email),
+              title: "Reconnect, or grant more access" }, a.needs_reauth ? "Reconnect" : "Change access"))));
     };
 
     body.replaceChildren(...[
@@ -55,9 +73,10 @@ export function accountsPane() {
             h("li", {}, "Paste the client ID and secret below."),
             h("li", {}, h("b", {}, "Important: "), "while the consent screen is in “Testing”, Google expires logins after 7 days. Set Publishing status to “In production” (it will warn that the app is unverified; that's fine for personal use) so accounts stay connected.")))),
       h("div", { class: "field", style: "margin-top:10px" }, h("label", {}, "Redirect URI sent to Google"),
-        h("select", { onchange: (e) => act(() => api.put("/api/google/redirect", { path: e.target.value }), "Redirect URI changed") },
-          ...data.redirect_choices.map((c) => h("option", { value: c.path, selected: c.path === data.redirect_path }, `${c.uri}${c.path.includes("/apps/gcal") ? "  (original Calendar setup)" : ""}`))),
-        h("div", { class: "help" }, "Seeing “redirect_uri_mismatch”? A Web-application OAuth client only accepts URIs you registered. Pick the one that's registered, or add this one in Google Cloud Console (Desktop-app clients accept any localhost URI). Changes in Google can take a few minutes.")),
+        h("div", { class: "row", style: "gap:8px;align-items:center" },
+          h("input", { type: "text", readonly: true, value: data.redirect_uri || "", style: "font-family:var(--mono);font-size:12.5px;flex:1", "aria-label": "Redirect URI" }),
+          h("button", { class: "btn sm", onclick: () => { navigator.clipboard.writeText(data.redirect_uri || ""); toast("Copied redirect URI"); } }, "Copy")),
+        h("div", { class: "help" }, "With a Web-application OAuth client, add this URI under “Authorized redirect URIs” in Google Cloud Console (Desktop-app clients accept any localhost URI).")),
       h("div", { class: "row", style: "margin-top:10px" }, field("Client ID", id), field("Client secret", sec),
         h("button", { class: "btn primary", onclick: () => (id.value || sec.value) && act(() => api.put("/api/google/client", { client_id: id.value, client_secret: sec.value }), "Saved") }, "Save")),
 

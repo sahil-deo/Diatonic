@@ -7,6 +7,7 @@ import {
   openPanel,
   closePanel,
   split,
+  splitRootLeft,
   moveTab,
   swapPanels,
   resize,
@@ -104,6 +105,18 @@ test("split turns a stack into a split node with two stacks", () => {
   assert.deepEqual(tree.root.sizes, [0.5, 0.5]);
 });
 
+test("splitRootLeft splits the root tree globally on the left", () => {
+  let tree = fromPreset("current");
+  tree = splitRootLeft(tree, { app: "chats" }, 0.24);
+  assert.equal(tree.root.type, "split");
+  assert.equal(tree.root.dir, "row");
+  assert.equal(tree.root.children.length, 2);
+  assert.equal(tree.root.children[0].type, "stack");
+  assert.equal(tree.root.children[0].tabs[0].app, "chats");
+  assert.equal(tree.root.children[1].type, "split");
+  assert.equal(tree.root.sizes[0], 0.24);
+});
+
 test("moveTab moves tab between stacks", () => {
   let tree = fromPreset("current");
   const tabs = allTabs(tree);
@@ -176,4 +189,20 @@ test("closed tab history captures app and restores into tree", () => {
   const entry = history.pop();
   tree = openPanel(tree, { app: entry.app, params: entry.params }, entry.stackId);
   assert.equal(allTabs(tree).some((t) => t.app === "files"), true);
+});
+
+test("a layout holds one chat: extra chat tabs are dropped", () => {
+  const tree = validate({
+    v: 1,
+    root: {
+      type: "split", dir: "row", sizes: [0.5, 0.5],
+      children: [
+        { type: "stack", id: "s1", active: 0, tabs: [{ id: "t1", app: "chat" }, { id: "t2", app: "files" }] },
+        { type: "stack", id: "s2", active: 0, tabs: [{ id: "t3", app: "chat" }] },
+      ],
+    },
+  });
+  const apps = allTabs(tree).map((t) => t.app);
+  assert.deepEqual(apps, ["chat", "files"]);
+  assert.equal(tree.root.type, "stack");
 });

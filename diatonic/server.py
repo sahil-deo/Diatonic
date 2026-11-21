@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -23,11 +24,15 @@ from .agent.runs import RunBusy, RunManager
 from . import keymap
 from . import macros
 from . import layouts
+from .agent.antigravity import Connector as AntigravityConnector
+from .mcp import McpHub, endpoint as mcp_endpoint
 from .mods import ModError
 from . import models as M
 from . import secrets
-from .apiapps import call as api_call, pick as api_pick
 from .apps.base import ToolError
+from . import appfetch, appperms, instructions
+from .fileapps import FileAppError, validate_app_id
+from .catalog import KINDS
 from .agent.providers import ProviderError, make_provider
 from .apps.registry import Registry
 from .config import Config, home
@@ -55,10 +60,13 @@ class LocalOnly:
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http":
             h = {k.decode().lower(): v.decode() for k, v in scope["headers"]}
-            bad = h.get("host", "") not in self.hosts
+            host = h.get("host", "")
+            anyhost = "*" in self.hosts   # opt-in via server.allowed_hosts; the Origin must then still match the Host
+            bad = not host if anyhost else host not in self.hosts
             origin = h.get("origin")
             if not bad and scope["method"] not in ("GET", "HEAD", "OPTIONS") and origin:
-                bad = origin.split("://", 1)[-1] not in self.hosts
+                o = origin.split("://", 1)[-1]
+                bad = o != host if anyhost else o not in self.hosts
             if bad:
                 await Response("Forbidden", status_code=403)(scope, receive, send)
                 return
@@ -88,17 +96,40 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
     ctx.notifier = Notifier(ctx, store, runs.broadcast)
     registry = registry or Registry(ctx).discover()
     ctx.registry = registry
-    ctx.mods.on_change = registry.sync_api_apps   # API apps the agent makes become real apps (tools, panel) at once
     ctx.mods.on_layout_revert = lambda layout: ctx.broadcast({"type": "undo_layout", "tree": layout})
-    registry.sync_api_apps()
+    def forget_file_app(app_id: str) -> None:
+        """A deleted app leaves nothing behind in settings: its switch, rail slot, status bar pin and home tile."""
+        d = ctx.config.data
+        d["apps"].pop(app_id, None)
+        ap = d["appearance"]
+        for key in ("rail_hidden", "rail_order"):
+            ap[key] = [x for x in ap.get(key, []) if x != app_id]
+        ap["statusbar_pins"] = [p for p in ap.get("statusbar_pins", []) if not (isinstance(p, dict) and p.get("appId") == app_id)]
+        home = ap.get("home") or {}
+        home["slots"] = [x for x in home.get("slots", []) if x != app_id and not (isinstance(x, dict) and app_id in (x.get("app"), x.get("id")))]
+        ctx.config.save()
+        ctx.appstore.drop_app(app_id)
+        ctx.apptimers.drop_app(app_id)
+
+    ctx.fileapps.on_delete = forget_file_app
+
+    def drop_orphan_settings() -> None:
+        """Settings for an app that no longer exists (a tracker or API app removed, a folder deleted by hand): nothing else would ever clear them."""
+        known = set(registry.apps) | set(ctx.mods.data.get("mods", {})) | {a["id"] for a in ctx.fileapps.list_apps()}
+        gone = [k for k in ctx.config.data["apps"] if k not in known]
+        for k in gone:
+            forget_file_app(k)
+    ctx.fileapps.prune_empty()
     ctx.fileapps.on_change = lambda app_id: (registry.sync_file_apps(), ctx.broadcast({"type": "custom_app_changed", "id": app_id}))
     registry.sync_file_apps()
+    drop_orphan_settings()
     ctx.scheduler = Scheduler(ctx, registry, runs, ctx.notifier, store)
     action_runner = ActionRunner(ctx)
     stt, tts = STT(), TTS()
     setup = VoiceSetup(stt, tts)
     port = config.data["server"]["port"]
-    hosts = allowed_hosts or {f"localhost:{port}", f"127.0.0.1:{port}", f"[::1]:{port}"}
+    extra = {str(x).strip().lower() for x in config.data["server"].get("allowed_hosts", []) if str(x).strip()}
+    hosts = allowed_hosts or {f"localhost:{port}", f"127.0.0.1:{port}", f"[::1]:{port}"} | extra | {f"{x}:{port}" for x in extra}
 
     def app_or_404(app_id: str):
         a = registry.apps.get(app_id)
@@ -150,6 +181,11 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
             except (ValueError, TypeError) as e:
                 return JSONResponse({"error": str(e)}, 400)
         patch.pop("actions", None)  # actions go through the validating endpoint
+        if "antigravity" in patch:
+            if isinstance(patch["antigravity"], dict):
+                patch["antigravity"].pop("command", None)   # names a program Diatonic starts: only the config file may set it, never a request
+            else:
+                patch.pop("antigravity", None)
         return JSONResponse(config.update(patch))
 
     # ---- interface mods (the agent's own changes to the UI) ----------------------
@@ -183,26 +219,148 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
         mods_changed(what)
         return JSONResponse({"ok": True, "what": what})
 
+    NOTIFY_PER_MINUTE = 20
+    notify_times: dict[str, list[float]] = {}
+
+    def file_app_id(request) -> str | None:
+        """The file app a panel call comes from (the page says so in X-Diatonic-App), or None when it is not an existing file app."""
+        try:
+            app_id = validate_app_id(request.headers.get("x-diatonic-app", ""))
+        except FileAppError:
+            return None
+        return app_id if ctx.fileapps.exists(app_id) else None
+
     async def panel_tool(request):
-        """A panel the user approved may read through an app's read-only tools (calendar events, notes, to-dos...). Anything that changes
-        data is the agent's job, with its approval card; the terminal and the interface tools are never available to panels."""
+        """A panel the user approved may read through an app's read-only tools (calendar events, notes, to-dos...). A file app that declared
+        a tool in its manifest permissions may also call one that changes things, but every such call shows an approval card naming the app.
+        The terminal and the interface tools are never available to panels."""
         app = registry.apps.get(request.path_params["app_id"])
         if app is None or app not in registry.enabled() or app.id in ("shell", "ui"):
             return JSONResponse({"error": "No such app."}, 404)
         tool = next((t for t in app.tools() if t.name == request.path_params["tool"]), None)
         if tool is None:
             return JSONResponse({"error": f"{app.name} has no tool '{request.path_params['tool']}'."}, 404)
-        if tool.risk != "read":
+        caller = file_app_id(request)
+        if tool.changes and caller is None:
             return JSONResponse({"error": f"{tool.title} changes things. A panel can only read; ask the agent to do it."}, 403)
         args = await request.json()
         try:
             jsonschema.validate(args, tool.parameters)
+            if tool.changes:
+                await appperms.require(ctx, caller, "tools", f"{app.id}_{tool.name}")
+                if not await ask_tool(caller, app, tool, args):
+                    return JSONResponse({"error": f"You did not allow that: {tool.title}."}, 403)
             result = await asyncio.wait_for(tool.handler(args), tool.timeout or 60)
         except jsonschema.ValidationError as e:
             return JSONResponse({"error": f"Invalid arguments: {e.message}"}, 400)
         except ToolError as e:
             return JSONResponse({"error": str(e)}, 400)
         return Response(json.dumps({"result": result}, default=str), media_type="application/json")
+
+    async def ask_tool(caller: str, app, tool, args) -> bool:
+        """The approval card for one change a panel asks for: the same words the chat card would use, plus which app is asking."""
+        name = next((a["name"] for a in ctx.fileapps.list_apps() if a["id"] == caller), caller)
+        aid = "ptool_" + uuid.uuid4().hex[:12]
+        fut = approvals.request(aid)
+        describe = tool.describe(args) if tool.describe else tool.title
+        ctx.broadcast({"type": "tool_ask", "id": aid, "app": caller, "name": name, "describe": describe, "risk": tool.risk})
+        try:
+            return bool(await asyncio.wait_for(fut, appperms.ASK_TIMEOUT))
+        except asyncio.TimeoutError:
+            return False
+        finally:
+            approvals.discard(aid)
+            ctx.broadcast({"type": "perm_ask_done", "id": aid})
+
+    async def app_notify(request):
+        """ctx.notify: an app tells the user something. It only notifies, so it needs no approval, but it must be declared and is rate limited."""
+        try:
+            app_id = validate_app_id(request.path_params["app_id"])
+            if not ctx.fileapps.exists(app_id):
+                return JSONResponse({"error": f"There is no app '{app_id}'."}, 404)
+            a = await request.json()
+            title, body = str((a or {}).get("title") or "").strip(), str((a or {}).get("body") or "").strip()
+            if not title:
+                return JSONResponse({"error": "ctx.notify needs a title: ctx.notify(\"Done\", \"The timer ended\")."}, 400)
+            await appperms.require(ctx, app_id, "notify")
+            now = time.time()
+            recent = notify_times[app_id] = [t for t in notify_times.get(app_id, []) if now - t < 60]
+            if len(recent) >= NOTIFY_PER_MINUTE:
+                return JSONResponse({"error": f"An app can send {NOTIFY_PER_MINUTE} notifications a minute. Wait a moment."}, 429)
+            recent.append(now)
+            row = await ctx.notifier.send(title, body, kind="info", data={"app": app_id})
+            return JSONResponse({"result": {"id": row["id"]}})
+        except (ToolError, FileAppError) as e:
+            return JSONResponse({"error": str(e)}, 400)
+        except (ValueError, AttributeError):
+            return JSONResponse({"error": "Send a JSON object with a title and a body."}, 400)
+
+    async def app_timer(request):
+        """ctx.timer: start, pause, resume, cancel and list an app's countdowns (they run on the server; see apptimers.py)."""
+        op = request.path_params["op"]
+        try:
+            app_id = validate_app_id(request.path_params["app_id"])
+            if not ctx.fileapps.exists(app_id):
+                return JSONResponse({"error": f"There is no app '{app_id}'."}, 404)
+            a, t = await request.json(), ctx.apptimers
+            if not isinstance(a, dict):
+                return JSONResponse({"error": "Send a JSON object."}, 400)
+            ops = {"start": lambda: t.start(app_id, a.get("seconds"), a.get("label", "")), "pause": lambda: t.pause(app_id, a.get("id")),
+                   "resume": lambda: t.resume(app_id, a.get("id")), "cancel": lambda: t.cancel(app_id, a.get("id")), "list": lambda: t.list(app_id)}
+            if op not in ops:
+                return JSONResponse({"error": f"Unknown timer call '{op}'. Use: {', '.join(ops)}."}, 404)
+            await appperms.require(ctx, app_id, "timer")
+            return JSONResponse({"result": ops[op]()})
+        except (ToolError, FileAppError) as e:
+            return JSONResponse({"error": str(e)}, 400)
+        except ValueError:
+            return JSONResponse({"error": "Send a JSON object."}, 400)
+
+    async def app_store(request):
+        """ctx.store: a file app's own data (key/value and tables). Plain data, so no approval; only apps that exist have a store."""
+        op = request.path_params["op"]
+        try:
+            app_id = validate_app_id(request.path_params["app_id"])   # the same spelling the folder uses, so "My_App" and "my-app" are one store
+            if not ctx.fileapps.exists(app_id):
+                return JSONResponse({"error": f"There is no app '{app_id}' to store data for."}, 404)
+            a, s = await request.json(), ctx.appstore
+            if not isinstance(a, dict):
+                return JSONResponse({"error": "Send a JSON object."}, 400)
+            ops = {
+                "get": lambda: s.get(app_id, a.get("key"), a.get("default")),
+                "set": lambda: s.set(app_id, a.get("key"), a.get("value")),
+                "keys": lambda: s.keys(app_id),
+                "remove": lambda: s.remove(app_id, a.get("key")),
+                "add": lambda: s.add(app_id, a.get("table"), a.get("row")),
+                "addMany": lambda: s.add_many(app_id, a.get("table"), a.get("rows")),
+                "update": lambda: s.update(app_id, a.get("table"), a.get("id"), a.get("patch")),
+                "updateMany": lambda: s.update_many(app_id, a.get("table"), a.get("rows")),
+                "delete": lambda: s.delete(app_id, a.get("table"), a.get("ids", a.get("id"))),
+                "query": lambda: s.query(app_id, a.get("table"), a.get("where"), a.get("order", ""), a.get("limit", 200), a.get("offset", 0)),
+                "tables": lambda: s.tables(app_id),
+            }
+            if op not in ops:
+                return JSONResponse({"error": f"Unknown store call '{op}'. Use: {', '.join(ops)}."}, 404)
+            return JSONResponse({"result": ops[op]()})
+        except (ToolError, FileAppError) as e:
+            return JSONResponse({"error": str(e)}, 400)
+        except (ValueError, TypeError):
+            return JSONResponse({"error": "That call has a wrong argument type. Check the names and types in the docs."}, 400)
+
+    async def app_fetch(request):
+        """ctx.fetch: read a web address for a file app (GET only). The domain must be declared in the manifest and approved by the user; see appfetch.py and appperms.py."""
+        try:
+            app_id = validate_app_id(request.path_params["app_id"])
+            if not ctx.fileapps.exists(app_id):
+                return JSONResponse({"error": f"There is no app '{app_id}'."}, 404)
+            a = await request.json()
+            if not isinstance(a, dict):
+                return JSONResponse({"error": "Send a JSON object with a url."}, 400)
+            return JSONResponse({"result": await appfetch.fetch(ctx, app_id, a.get("url"), a.get("method", "GET"))})
+        except (ToolError, FileAppError) as e:
+            return JSONResponse({"error": str(e)}, 400)
+        except ValueError:
+            return JSONResponse({"error": "Send a JSON object with a url."}, 400)
 
     async def mods_verified(request):
         """The window's report on code it test-ran for the agent (see UiApp._verify)."""
@@ -340,6 +498,29 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
         ctx.broadcast({"type": "keymap_changed"})
         return JSONResponse({"path": str(keymap.path()), "keymap": saved})
 
+    # ---- catalog: everything the platform can do, searchable (see catalog.py) ----
+    async def catalog_search(request):
+        q = request.query_params
+        if q.get("name"):
+            e = ctx.catalog.describe(q["name"])
+            return JSONResponse(e.full()) if e else JSONResponse({"error": f"Nothing is called '{q['name']}'."}, 404)
+        if q.get("kind") and q["kind"] not in KINDS:
+            return JSONResponse({"error": f"kind must be one of: {', '.join(KINDS)}."}, 400)
+        try:
+            found = ctx.catalog.search(q.get("q", ""), q.get("kind"), int(q.get("limit", 8)))
+        except ValueError:
+            return JSONResponse({"error": "limit must be a number."}, 400)
+        return JSONResponse({"results": [e.short() for e in found]})
+
+    async def prompt_sections(request):
+        """The system prompt, section by section, with sizes (the "Show the system prompt" command)."""
+        secs = instructions.sections()
+        return JSONResponse({"sections": secs, "chars": sum(x["chars"] for x in secs)})
+
+    async def catalog_commands(request):
+        """The page lists its commands once at load, so the agent can look them up."""
+        return JSONResponse({"ok": True, "count": ctx.catalog.set_commands(await request.json())})
+
     # ---- macros: declarative sequences of commands, kept in macros.json in the Diatonic home folder ----
     async def macros_get(request):
         return JSONResponse({"path": str(macros.path()), "macros": macros.load()})
@@ -363,103 +544,6 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
             return JSONResponse({"error": str(e)}, 400)
         ctx.broadcast({"type": "layouts_changed"})
         return JSONResponse({"path": str(layouts.path()), "layouts": saved})
-
-    # ---- API apps: the generic panel reads the definition and runs actions through the server -------------
-    def api_app(request):
-        a = registry.apps.get(request.path_params["app_id"])
-        if not getattr(a, "api_app", False):
-            raise HTTPException(404, "No such API app")
-        return a
-
-    async def xapp_info(request):
-        a = api_app(request)
-        return JSONResponse({"id": a.id, "manifest": a.m, "needs_key": bool(a.settings), "key_set": bool(a.key())})
-
-    def data_app(request):
-        a = registry.apps.get(request.path_params["app_id"])
-        if not getattr(a, "data_app", False):
-            raise HTTPException(404, "No such app")
-        return a
-
-    async def dapp_get(request):
-        a = data_app(request)
-        return JSONResponse({"id": a.id, "manifest": a.m, "items": ctx.db.items(a.id)})
-
-    async def dapp_add(request):   # the user typed it in the panel
-        a, b = data_app(request), await request.json()
-        lst = request.path_params["list"]
-        if lst not in a.m["lists"]:
-            raise HTTPException(404, "No such list")
-        from .dataapps import coerce
-        try:
-            data = {f["name"]: coerce(f, b.get("data", {}).get(f["name"]), ctx.now().date()) for f in a.m["lists"][lst]["fields"]}
-        except ToolError as e:
-            return JSONResponse({"error": str(e)}, 400)
-        if not data.get(a.m["lists"][lst]["fields"][0]["name"]):
-            return JSONResponse({"error": "Give it a name."}, 400)
-        return JSONResponse(ctx.db.add_item(a.id, lst, {k: v for k, v in data.items() if v is not None}, b.get("parent")))
-
-    async def dapp_patch(request):
-        a, iid = data_app(request), int(request.path_params["iid"])
-        it = ctx.db.item(a.id, iid)
-        if not it:
-            raise HTTPException(404, "No such item")
-        from .dataapps import coerce
-        fields = {f["name"]: f for f in a.m["lists"][it["list"]]["fields"]}
-        try:
-            changes = {k: coerce(fields[k], v, ctx.now().date()) for k, v in ((await request.json()).get("data") or {}).items() if k in fields}
-        except ToolError as e:
-            return JSONResponse({"error": str(e)}, 400)
-        return JSONResponse(ctx.db.update_item(a.id, iid, {**it["data"], **changes}))
-
-    async def dapp_delete(request):
-        a = data_app(request)
-        return JSONResponse({"deleted": ctx.db.delete_item(a.id, int(request.path_params["iid"]))})
-
-    async def xapp_call(request):
-        a = api_app(request)
-        action = request.path_params["action"]
-        try:
-            r = await api_call(ctx.http, a.m, action, (await request.json()).get("args") or {}, a.key())   # the user pressed Run
-        except ToolError as e:
-            return JSONResponse({"error": str(e)}, 400)
-        act = a.m["actions"][action]
-        fields = {f: api_pick(r["data"], f) for f in act["fields"]} if act["fields"] else None
-        return JSONResponse({"status": r["status"], "data": r["data"], "fields": fields})
-
-    # ---- tool apps: built from Diatonic's own tools; the panel runs their actions here -----------------------
-    def tool_app(request):
-        a = registry.apps.get(request.path_params["app_id"])
-        if not getattr(a, "tool_app", False):
-            raise HTTPException(404, "No such app")
-        return a
-
-    async def tapp_info(request):
-        a = tool_app(request)
-        from .toolapps import REF_PARAMS
-        acts = {}
-        for n, act in a.m["actions"].items():
-            try:
-                sch, (_, _, t) = a.schema(n), a._under(n)
-            except ToolError as e:
-                acts[n] = {"title": act["title"], "error": str(e)}
-                continue
-            acts[n] = {"title": act["title"], "risk": t.risk, "schema": sch, "fixed": act["fixed"],
-                       "ref": next((p for p in sch["required"] if p in REF_PARAMS), None)}
-        return JSONResponse({"id": a.id, "title": a.m["title"], "description": a.m["description"], "actions": acts})
-
-    async def tapp_call(request):   # the user pressed a button in the app's panel: that's the approval
-        a, b = tool_app(request), await request.json()
-        action = request.path_params["action"]
-        try:
-            _, _, t = a._under(action)
-            if t.risk == "destructive" and not b.get("confirm"):
-                return JSONResponse({"error": "Confirm first."}, 400)
-            r = await a.run(action, b.get("args") or {})
-        except ToolError as e:
-            return JSONResponse({"error": str(e)}, 400)
-        ctx.broadcast({"type": "app_changed", "app": a.id}) if t.risk != "read" else None
-        return JSONResponse({"result": r})
 
     # ---- saved models: switch from the status bar, manage in Settings → Models ------------------------------
     async def models_list(request):
@@ -527,6 +611,35 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
         except Exception as e:
             return JSONResponse({"names": [], "error": str(e)})
         return JSONResponse({"names": names[:300]})
+
+    async def models_routing_get(request):
+        from .agent import router
+        return JSONResponse(config.data.get("model_routing") or {"enabled": False, "rules": router.DEFAULT_RULES, "custom_rules": []})
+
+    async def models_routing_put(request):
+        from .agent import router
+        try:
+            cleaned = router.clean_routing_config(await request.json())
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, 400)
+        config.data["model_routing"] = cleaned
+        config.save()
+        ctx.broadcast({"type": "routing_changed", "routing": cleaned})
+        return JSONResponse(cleaned)
+
+    async def models_routing_test(request):
+        from .agent import router
+        b = await request.json()
+        text = str(b.get("text") or "").strip()
+        screen = b.get("screen") if isinstance(b.get("screen"), dict) else None
+        cat_id, rule_name = router.classify_task(ctx, text, screen=screen)
+        model_m, route_info = router.resolve_model(ctx, text, screen=screen)
+        return JSONResponse({
+            "category": cat_id,
+            "rule_name": rule_name,
+            "resolved_model": model_m,
+            "route_info": route_info,
+        })
 
     # ---- home screen tiles: a small live snapshot from any app that offers one ------------------------------
     snap_cache: dict[tuple, tuple[float, dict]] = {}
@@ -807,9 +920,13 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
                                 speak_text="This is a test notification.")
         return JSONResponse({"ok": True})
 
-    google_mounted, google_legacy = google_auth.build(ctx, ctx.google)
+    google_mounted = google_auth.build(ctx, ctx.google)
+
+    ctx.mcp = McpHub(ctx, registry, runs)
+    ctx.antigravity = AntigravityConnector(ctx)
 
     routes = [
+        Route("/mcp", mcp_endpoint(ctx.mcp), methods=["POST", "GET", "DELETE"]),
         Route("/api/memories", list_memories),
         Route("/api/memories", add_memory, methods=["POST"]),
         Route("/api/memories/{mid}", update_memory, methods=["PUT"]),
@@ -829,14 +946,6 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
         Route("/api/actions/{aid}/run", run_action, methods=["POST"]),
         Route("/api/customization/export", export_custom),
         Route("/api/customization/import", import_custom, methods=["POST"]),
-        Route("/api/dapps/{app_id}", dapp_get),
-        Route("/api/dapps/{app_id}/items/{iid:int}", dapp_patch, methods=["PATCH"]),
-        Route("/api/dapps/{app_id}/items/{iid:int}", dapp_delete, methods=["DELETE"]),
-        Route("/api/dapps/{app_id}/{list}", dapp_add, methods=["POST"]),
-        Route("/api/tapps/{app_id}", tapp_info),
-        Route("/api/tapps/{app_id}/call/{action}", tapp_call, methods=["POST"]),
-        Route("/api/xapps/{app_id}", xapp_info),
-        Route("/api/xapps/{app_id}/call/{action}", xapp_call, methods=["POST"]),
         Route("/api/home", home_catalog),
         Route("/api/home/{app_id}", home_tile),
         Route("/api/models", models_list),
@@ -844,7 +953,13 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
         Route("/api/models/active", models_activate, methods=["PUT"]),
         Route("/api/models/test", models_test, methods=["POST"]),
         Route("/api/models/available", models_available),
+        Route("/api/models/routing", models_routing_get),
+        Route("/api/models/routing", models_routing_put, methods=["PUT"]),
+        Route("/api/models/routing/test", models_routing_test, methods=["POST"]),
         Route("/api/models/{mid}", models_delete, methods=["DELETE"]),
+        Route("/api/catalog", catalog_search),
+        Route("/api/prompt", prompt_sections),
+        Route("/api/catalog/commands", catalog_commands, methods=["POST"]),
         Route("/api/keymap", keymap_get),
         Route("/api/keymap", keymap_put, methods=["PUT"]),
         Route("/api/macros", macros_get),
@@ -858,6 +973,10 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
         Route("/api/mods/{name}", mods_set, methods=["PUT"]),
         Route("/api/mods/{name}", mods_delete, methods=["DELETE"]),
         Route("/custom-apps/{app_id}/{path:path}", custom_app_file),
+        Route("/api/store/{app_id}/{op}", app_store, methods=["POST"]),
+        Route("/api/fetch/{app_id}", app_fetch, methods=["POST"]),
+        Route("/api/notify/{app_id}", app_notify, methods=["POST"]),
+        Route("/api/timers/{app_id}/{op}", app_timer, methods=["POST"]),
         Route("/api/custom-apps", custom_apps_list),
         Route("/api/custom-apps", custom_apps_create, methods=["POST"]),
         Route("/api/custom-apps/import", custom_apps_import, methods=["POST"]),
@@ -886,7 +1005,6 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
         Route("/api/voice/transcribe", transcribe, methods=["POST"]),
         Route("/api/voice/tts", speak, methods=["POST"]),
         Route("/api/voice/setup", voice_setup, methods=["POST"]),
-        google_legacy,
         Mount("/api/google", routes=google_mounted),
         *[Mount(f"/api/apps/{a.id}", routes=a.routes()) for a in registry.apps.values() if a.routes()],
         Mount("/", NoCacheStatic(directory=WEB, html=True)),
@@ -897,10 +1015,13 @@ def create_app(config: Config | None = None, db: Database | None = None, *,
         ctx.memory.prune()
         await ctx.google.adopt_legacy()
         ctx.scheduler.start()
+        ctx.apptimers.start_all()
         yield
         await ctx.scheduler.stop()
+        await ctx.apptimers.stop()
         await action_runner.shutdown()
         await runs.shutdown()
+        await ctx.antigravity.close_all()
         if hasattr(registry.apps.get("shell"), "terms"):
             registry.apps["shell"].terms.shutdown()   # don't leave login shells behind
         await ctx.http.aclose()

@@ -15,7 +15,7 @@ export async function render(el, { api, h, toast, reload }) {
   const add = () => text.value.trim() && when.value.trim() && submit({ kind: "notify", text: text.value.trim(), when: when.value.trim() });
   [text, when].forEach((i) => i.addEventListener("keydown", (e) => e.key === "Enter" && add()));
 
-  el.append(
+  el.replaceChildren(
     h("div", { class: "p-section" }, "New reminder"),
     h("div", { class: "quick-add" }, text, when, h("button", { class: "btn primary sm", onclick: add }, "Add")),
     err,

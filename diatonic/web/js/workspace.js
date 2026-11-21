@@ -6,7 +6,6 @@ import { state, emit, on } from "./store.js";
 import { api } from "./api.js";
 import { register } from "./commands.js";
 import { registerList } from "./nav.js";
-import { runPanel } from "./mods.js";
 import { panelContext } from "./panel.js";
 import { pickApp } from "./palette.js";
 import {
@@ -15,6 +14,7 @@ import {
   openPanel as treeOpenPanel,
   closePanel as treeClosePanel,
   split as treeSplit,
+  splitRootLeft as treeSplitRootLeft,
   moveTab as treeMoveTab,
   swapPanels as treeSwapPanels,
   focusNeighbor as treeFocusNeighbor,
@@ -103,7 +103,27 @@ export function ensureCustomAppStyles(appId, href) {
   }
 }
 
+export function cleanupCustomAppStyles(appId = null) {
+  const tree = getTree();
+  const tabs = allTabs(tree);
+  if (appId) {
+    if (!tabs.some((t) => t.app === appId)) {
+      const link = document.querySelector(`link[data-custom-app="${CSS.escape(appId)}"]`);
+      link?.remove();
+    }
+  } else {
+    const links = document.querySelectorAll("link[data-custom-app]");
+    for (const link of links) {
+      const id = link.dataset.customApp;
+      if (id && !tabs.some((t) => t.app === id)) {
+        link.remove();
+      }
+    }
+  }
+}
+
 export function reloadAppTabs(appId) {
+  api.invalidateApp(appId);
   const link = document.querySelector(`link[data-custom-app="${CSS.escape(appId)}"]`);
   if (link) {
     try {
@@ -119,43 +139,89 @@ export function reloadAppTabs(appId) {
   }
 }
 
+function renderTabError(tabId, appName, message) {
+  return h("div", { class: "p-empty", style: "display:flex;flex-direction:column;align-items:center;gap:12px;padding:32px 16px;text-align:center" },
+    h("div", { style: "font-weight:500" }, `Couldn't load ${appName}: ${message}`),
+    h("div", { style: "display:flex;gap:8px" },
+      h("button", { class: "btn small", onclick: () => replaceTab(tabId, "chat") }, "Return to Chat"),
+      h("button", { class: "btn small ghost", onclick: () => closePanel(tabId) }, "Close Panel")
+    )
+  );
+}
+
 export async function reloadTab(tabId, reimport = false) {
   const currentInst = instances.get(tabId);
   if (!currentInst) return;
-  currentInst.pctx?.dispose?.();
-  currentInst.body.replaceChildren();
-  const appMeta = [...state.apps, ...(state.modApps || [])].find((a) => a.id === currentInst.tab.app);
-  if (reimport || appMeta?.file_app) {
-    try {
-      const modPath = appMeta?.module || `/apps/${currentInst.tab.app}.js`;
-      const url = new URL(modPath, location.origin);
-      url.searchParams.set("v", Date.now());
-      currentInst.mod = await import(url.pathname + url.search);
-    } catch (e) {
-      if (appMeta?.file_app) {
-        api.post(`/api/custom-apps/${currentInst.tab.app}/logs`, {
-          error: `Import failed: ${e.message}\n${e.stack || ""}`,
-          source: "client_import",
-        }).catch(() => {});
+
+  if (currentInst.reloading) {
+    currentInst.pendingReload = { reimport: Boolean(currentInst.pendingReload?.reimport || reimport) };
+    return currentInst.reloading;
+  }
+
+  const runReload = async (shouldReimport) => {
+    if (!instances.has(tabId)) return;
+    api.invalidateApp(currentInst.tab.app);
+    currentInst.pctx?.dispose?.();
+    currentInst.body.replaceChildren();
+    const appMeta = state.apps.find((a) => a.id === currentInst.tab.app);
+    if (shouldReimport || appMeta?.file_app) {
+      try {
+        const modPath = appMeta?.module || `/apps/${currentInst.tab.app}.js`;
+        const url = new URL(modPath, location.origin);
+        url.searchParams.set("v", Date.now());
+        const imported = await import(url.pathname + url.search);
+        if (!instances.has(tabId)) return;
+        currentInst.mod = imported;
+      } catch (e) {
+        if (!instances.has(tabId)) return;
+        if (appMeta?.file_app) {
+          api.post(`/api/custom-apps/${currentInst.tab.app}/logs`, {
+            error: `Import failed: ${e.message}\n${e.stack || ""}`,
+            source: "client_import",
+          }).catch(() => {});
+        }
+        currentInst.mod = null;
+        currentInst.body.replaceChildren(renderTabError(currentInst.tab.id, currentInst.tab.app, e.message));
+        return;
       }
     }
-  }
-  if (currentInst.mod) {
-    try {
-      await currentInst.mod.render(currentInst.body, currentInst.pctx);
-      if (currentInst.tab.params && currentInst.mod.navigate) {
-        await currentInst.mod.navigate(currentInst.tab.params, currentInst.pctx);
+    if (currentInst.mod) {
+      try {
+        if (typeof currentInst.mod.render !== "function") {
+          throw new Error(`Module does not export a render(el, ctx) function`);
+        }
+        await currentInst.mod.render(currentInst.body, currentInst.pctx);
+        if (!instances.has(tabId)) return;
+        if (currentInst.tab.params && currentInst.mod.navigate) {
+          await currentInst.mod.navigate(currentInst.tab.params, currentInst.pctx);
+        }
+      } catch (e) {
+        if (!instances.has(tabId)) return;
+        if (appMeta?.file_app) {
+          api.post(`/api/custom-apps/${currentInst.tab.app}/logs`, {
+            error: `${e.message}\n${e.stack || ""}`,
+            source: "client_render",
+          }).catch(() => {});
+        }
+        currentInst.body.replaceChildren(renderTabError(currentInst.tab.id, currentInst.tab.app, e.message));
       }
-    } catch (e) {
-      if (appMeta?.file_app) {
-        api.post(`/api/custom-apps/${currentInst.tab.app}/logs`, {
-          error: `${e.message}\n${e.stack || ""}`,
-          source: "client_render",
-        }).catch(() => {});
-      }
-      currentInst.body.replaceChildren(h("div", { class: "p-empty" }, `Couldn't load ${currentInst.tab.app}: ${e.message}`));
     }
-  }
+  };
+
+  currentInst.reloading = (async () => {
+    try {
+      await runReload(reimport);
+      while (currentInst.pendingReload && instances.has(tabId)) {
+        const next = currentInst.pendingReload;
+        currentInst.pendingReload = null;
+        await runReload(next.reimport);
+      }
+    } finally {
+      currentInst.reloading = null;
+    }
+  })();
+
+  return currentInst.reloading;
 }
 
 async function mountTab(tab) {
@@ -166,11 +232,13 @@ async function mountTab(tab) {
     layerEl.append(body);
     const appMeta = tab.app === "chat"
       ? { id: "chat", name: "Chat", icon: "chat" }
+      : tab.app === "chats"
+      ? { id: "chats", name: "Chats", icon: "chat" }
       : tab.app === "launcher"
       ? { id: "launcher", name: "New Tab", icon: "plus" }
       : tab.app === "tiles" || tab.app === "home"
       ? { id: "tiles", name: "Home", icon: "layout" }
-      : [...state.apps, ...(state.modApps || [])].find((a) => a.id === tab.app) || { id: tab.app, name: tab.app, icon: "box" };
+      : state.apps.find((a) => a.id === tab.app) || { id: tab.app, name: tab.app, icon: "box" };
     const appObj = {
       ...appMeta,
       instanceId: tab.id,
@@ -186,12 +254,12 @@ async function mountTab(tab) {
       let mod;
       if (tab.app === "chat") {
         mod = await import("/apps/chat.js").catch(() => import("../apps/chat.js"));
+      } else if (tab.app === "chats") {
+        mod = await import("/apps/chats.js").catch(() => import("../apps/chats.js"));
       } else if (tab.app === "launcher") {
         mod = await import("/apps/launcher.js").catch(() => import("../apps/launcher.js"));
       } else if (tab.app === "tiles" || tab.app === "home") {
         mod = await import("/apps/tiles.js").catch(() => import("../apps/tiles.js"));
-      } else if (appMeta?.mod) {
-        mod = { render: (el, c) => runPanel(appMeta.code, el, c) };
       } else {
         const modPath = appMeta?.module || (appMeta?.file_app ? `/custom-apps/${tab.app}/index.js` : `/apps/${tab.app}.js`);
         if (appMeta?.file_app || modPath.startsWith("/custom-apps/")) {
@@ -207,6 +275,9 @@ async function mountTab(tab) {
       }
       inst.mod = mod;
       body.classList.toggle("flush", !!mod.flush);
+      if (typeof mod?.render !== "function") {
+        throw new Error(`Module does not export a render(el, ctx) function`);
+      }
       await mod.render(body, pctx);
       if (tab.params && mod.navigate) await mod.navigate(tab.params, pctx);
     } catch (e) {
@@ -216,7 +287,7 @@ async function mountTab(tab) {
           source: "client_render",
         }).catch(() => {});
       }
-      body.replaceChildren(h("div", { class: "p-empty" }, `Couldn't load ${tab.app}: ${e.message}`));
+      body.replaceChildren(renderTabError(tab.id, tab.app, e.message));
     }
   } else if (!layerEl.contains(inst.body)) {
     layerEl.append(inst.body);
@@ -227,11 +298,14 @@ async function mountTab(tab) {
 export function disposeTab(tabId) {
   const inst = instances.get(tabId);
   if (!inst) return;
+  inst.pendingReload = null;
+  const appId = inst.tab?.app;
   inst.pctx?.dispose?.();
   inst.cleanups.forEach((f) => { try { f(); } catch {} });
   inst.body.remove();
   instances.delete(tabId);
   slots.delete(tabId);
+  if (appId) cleanupCustomAppStyles(appId);
 }
 
 function renderNode(node, tree) {
@@ -325,6 +399,14 @@ function renderNode(node, tree) {
     const stackEl = h("div", { class: "workspace-stack" });
     const tabbar = h("div", { class: "workspace-tabbar" });
     const tabsEl = h("div", { class: "workspace-tabs" });   // scrolls on its own so the buttons on the right stay in reach
+    tabsEl.addEventListener("wheel", (e) => {
+      if (tabsEl.scrollWidth <= tabsEl.clientWidth) return;
+      if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+        e.preventDefault();
+        const delta = e.deltaMode === 1 ? e.deltaY * 20 : (e.deltaMode === 2 ? tabsEl.clientWidth * Math.sign(e.deltaY) : e.deltaY);
+        tabsEl.scrollLeft += delta;
+      }
+    }, { passive: false });
     const content = h("div", { class: "workspace-stack-content" });
 
     node.tabs.forEach((tab, idx) => {
@@ -335,17 +417,23 @@ function renderNode(node, tree) {
       }
       const appMeta = tab.app === "chat"
         ? { id: "chat", name: "Chat", icon: "chat" }
+        : tab.app === "chats"
+        ? { id: "chats", name: "Chats", icon: "chat" }
         : tab.app === "launcher"
         ? { id: "launcher", name: "New Tab", icon: "plus" }
         : tab.app === "tiles" || tab.app === "home"
         ? { id: "tiles", name: "Home", icon: "layout" }
-        : [...state.apps, ...(state.modApps || [])].find((a) => a.id === tab.app) || { id: tab.app, name: tab.app, icon: "box" };
+        : state.apps.find((a) => a.id === tab.app) || { id: tab.app, name: tab.app, icon: "box" };
 
       const tabBtn = h("div", {
         class: `workspace-tab ${isActive ? "active" : ""} ${tab.id === activeTabId ? "focused" : ""}`,
         title: appMeta.name || tab.app,
         draggable: "true",
         oncontextmenu: async (e) => { e.preventDefault(); const tabEl = e.currentTarget; (await import("./panel-menu.js")).openPanelMenu(tabEl, tab.id, node.id); },
+        ondblclick: (e) => {
+          if (e.target.closest("button")) return;
+          toggleZoom(tab.id);
+        },
         "data-tab-id": tab.id,
         "data-stack-id": node.id,
         onclick: () => {
@@ -363,6 +451,7 @@ function renderNode(node, tree) {
           class: "icon-btn sm",
           type: "button",
           title: "Close",
+          ondblclick: (e) => e.stopPropagation(),
           onclick: (e) => {
             e.stopPropagation();
             closePanel(tab.id);
@@ -603,7 +692,7 @@ export function getScreenContext(forTabId = null) {
 
   const inst = instances.get(targetTab.id);
   const item = inst?.mod?.current?.(inst.pctx);
-  const appMeta = [...state.apps, ...(state.modApps || [])].find((a) => a.id === targetTab.app) || { id: targetTab.app, name: targetTab.app };
+  const appMeta = state.apps.find((a) => a.id === targetTab.app) || { id: targetTab.app, name: targetTab.app };
   return { app: targetTab.app, kind: "app", title: appMeta.name || targetTab.app, ...(item || {}) };
 }
 
@@ -618,6 +707,7 @@ export function renderWorkspace(host, tree = null) {
   for (const [id] of instances) {
     if (!liveTabIds.has(id)) disposeTab(id);
   }
+  cleanupCustomAppStyles();
 
   const zoomed = zoomedStackId && findStack(t, zoomedStackId);
   if (zoomedStackId && !zoomed) zoomedStackId = null;   // that panel was closed
@@ -636,7 +726,7 @@ export function openPanel(appId, params = {}, targetStackId = null) {
   const tree = getTree();
   const tabs = allTabs(tree);
   const existing = appId === "launcher" ? null : tabs.find((t) => t.app === appId);
-  if (existing && !targetStackId) {
+  if (existing && (!targetStackId || appId === "chat")) {
     focusTab(existing.id);
     const inst = instances.get(existing.id);
     if (params && Object.keys(params).length && inst?.mod?.navigate) {
@@ -656,6 +746,10 @@ export async function replaceTab(tabId, newAppId, params = {}) {
   const tree = getTree();
   const found = findTab(tree, tabId);
   if (!found) return;
+  if (newAppId.trim() === "chat" && found.tab.app !== "chat") {
+    const chatTab = allTabs(tree).find((t) => t.app === "chat");
+    if (chatTab) return focusTab(chatTab.id);
+  }
 
   disposeTab(tabId);
   found.tab.app = newAppId.trim();
@@ -695,11 +789,35 @@ export function closePanel(tabId) {
   renderWorkspace(hostElement, nextTree);
 }
 
-export function splitPanel(panelId, dir = "row", newAppId = null, params = {}) {
+export function splitPanel(panelId, dir = "row", newAppId = null, params = {}, position = "after") {
   if (!newAppId || !newAppId.trim()) return;
   const tree = getTree();
   const oldTabs = allTabs(tree);
-  const nextTree = treeSplit(tree, panelId, dir, { app: newAppId.trim(), params });
+  const chatTab = newAppId.trim() === "chat" && oldTabs.find((t) => t.app === "chat");
+  if (chatTab) return focusTab(chatTab.id);
+  const nextTree = treeSplit(tree, panelId, dir, { app: newAppId.trim(), params }, position);
+  const newTabs = allTabs(nextTree);
+  const newlyAdded = newTabs.find((t) => !oldTabs.some((old) => old.id === t.id));
+  if (newlyAdded) {
+    activeTabId = newlyAdded.id;
+    state.panelApp = newlyAdded.app;
+    emit("panel");
+    emit("screen");
+  }
+  saveTree(nextTree);
+  renderWorkspace(hostElement, nextTree);
+}
+
+export function toggleChatsSplit() {
+  const tree = getTree();
+  const tabs = allTabs(tree);
+  const existing = tabs.find((t) => t.app === "chats");
+  if (existing) {
+    closePanel(existing.id);
+    return;
+  }
+  const oldTabs = allTabs(tree);
+  const nextTree = treeSplitRootLeft(tree, { app: "chats" }, 0.24);
   const newTabs = allTabs(nextTree);
   const newlyAdded = newTabs.find((t) => !oldTabs.some((old) => old.id === t.id));
   if (newlyAdded) {
@@ -770,9 +888,21 @@ export const isZoomed = () => !!zoomedStackId;
 /** Shows one panel across the whole window, or brings the others back. The saved layout is untouched. */
 export function toggleZoom(tabId = activeTabId) {
   const found = findTab(getTree(), tabId);
-  zoomedStackId = zoomedStackId ? null : found?.stack.id || null;
+  if (zoomedStackId && found && found.stack.id !== zoomedStackId) {
+    zoomedStackId = found.stack.id;
+  } else {
+    zoomedStackId = zoomedStackId ? null : found?.stack.id || null;
+  }
   emit("panel");
   renderWorkspace(hostElement);
+}
+
+export function unzoom() {
+  if (zoomedStackId) {
+    zoomedStackId = null;
+    emit("panel");
+    renderWorkspace(hostElement);
+  }
 }
 
 export function getClosedTabsHistory() {
@@ -836,7 +966,7 @@ export function getOpenTabs() {
       ? { id: "launcher", name: "New Tab", icon: "plus" }
       : t.app === "tiles" || t.app === "home"
       ? { id: "tiles", name: "Home", icon: "layout" }
-      : [...state.apps, ...(state.modApps || [])].find((a) => a.id === t.app) || { id: t.app, name: t.app, icon: "box" };
+      : state.apps.find((a) => a.id === t.app) || { id: t.app, name: t.app, icon: "box" };
     return {
       tabId: t.id,
       appId: t.app,
@@ -856,7 +986,17 @@ export function getLayouts() {
 
 export function getActiveLayoutId() {
   try {
-    return localStorage.getItem(LAYOUT_ACTIVE_KEY) || null;
+    const active = localStorage.getItem(LAYOUT_ACTIVE_KEY);
+    if (!active) return null;
+    if (layoutsList.length && currentTree) {
+      const match = layoutsList.find((w) => w.id === active);
+      if (match?.tree) {
+        const t1 = JSON.stringify(validate(match.tree));
+        const t2 = JSON.stringify(validate(currentTree));
+        if (t1 !== t2) return null;
+      }
+    }
+    return active;
   } catch {
     return null;
   }
@@ -943,21 +1083,9 @@ export function initWorkspace(host) {
   hostElement = host;
   state.getScreenContext = getScreenContext;
 
-  loadLayouts().then((list) => {
-    const activeId = getActiveLayoutId();
-    if (activeId) {
-      const match = list.find((w) => w.id === activeId);
-      if (match?.tree) {
-        applyTree(match.tree);
-        return;
-      }
-    }
-    const tree = getTree();
-    renderWorkspace(hostElement, tree);
-  }).catch(() => {
-    const tree = getTree();
-    renderWorkspace(hostElement, tree);
-  });
+  const tree = getTree();
+  renderWorkspace(hostElement, tree);
+  loadLayouts().catch(() => {});
 
   on("layouts_changed", loadLayouts);
   on("undo_layout", (ev) => {
@@ -974,7 +1102,11 @@ export function initWorkspace(host) {
       if (Array.isArray(apps)) state.apps = apps;
     } catch {}
     emit("apps");
-    if (ev?.id) reloadAppTabs(ev.id);
+    if (!ev?.id) return;
+    if (state.apps.some((a) => a.id === ev.id)) return reloadAppTabs(ev.id);
+    // The app was deleted: close its tabs instead of reloading them, which asks the server for files that are gone.
+    for (const t of allTabs(getTree()).filter((t) => t.app === ev.id)) closePanel(t.id);
+    document.querySelector(`link[data-custom-app="${CSS.escape(ev.id)}"]`)?.remove();
   });
 
   return {
@@ -982,6 +1114,7 @@ export function initWorkspace(host) {
     closePanel,
     splitPanel,
     splitActive,
+    toggleChatsSplit,
     replaceTab,
     promptAndSplit,
     closeActive,

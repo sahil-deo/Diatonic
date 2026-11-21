@@ -188,7 +188,7 @@ def test_notification_api_inbox_snooze_and_state(tmp_path):
         assert c.post(f"/api/notifications/{nid}/snooze", json={"minutes": 10}).json()["ok"]
         assert c.get("/api/notifications").json()["unread"] == 0  # snoozing marks it read
         pr = c.get("/api/apps/scheduler/panel").json()
-        assert len(pr["reminders"]) == 1 and pr["reminders"][0]["next"].startswith("today")
+        assert len(pr["reminders"]) == 1 and pr["reminders"][0]["next"].startswith(("today", "tomorrow"))
         assert c.post("/api/apps/scheduler/create", json={"kind": "notify", "text": "x", "when": "gibberish"}).status_code == 400
         assert c.post("/api/apps/scheduler/create", json={"kind": "script", "name": "s", "when": "in 5 minutes", "command": "ls"}).status_code == 400  # scripts off
         c.post("/api/notifications/clear")

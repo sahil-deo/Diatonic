@@ -8,6 +8,7 @@ export const wide = true;
 const PRIMARY_APPS = [
   { id: "tiles", name: "Home", icon: "layout", desc: "Live tiles from your apps" },
   { id: "chat", name: "Chat", icon: "chat", desc: "AI assistant conversation" },
+  { id: "chats", name: "Chats", icon: "chat", desc: "Past conversations and history" },
   { id: "files", name: "Files", icon: "folder", desc: "Explore code and documents" },
   { id: "notes", name: "Notes", icon: "file-text", desc: "Quick notes and thoughts" },
   { id: "gcal", name: "Calendar", icon: "calendar", desc: "Schedules and meetings" },
@@ -60,7 +61,7 @@ export async function render(el, ctx) {
 
   // Compile all available apps
   const allApps = [...PRIMARY_APPS];
-  const customApps = [...(state.apps || []), ...(state.modApps || [])].filter((a) => a.enabled && a.panel);
+  const customApps = (state.apps || []).filter((a) => a.enabled && a.panel);
   for (const a of customApps) {
     if (!allApps.some((x) => x.id === a.id)) {
       allApps.push({

@@ -1,8 +1,7 @@
-"""Panel and script code is test-run in the user's window before the approval card: the model hears about errors first."""
+"""App code (index.js) and scripts are test-run in the user's window before the approval card: the model hears about errors first."""
 import asyncio
 import shutil
 import subprocess
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -16,7 +15,20 @@ from diatonic.config import Config
 from diatonic.db import Database
 from diatonic.server import create_app
 
-GOOD = "el.append(diatonic.h('div', {}, 'Hello'))"
+GOOD = "export async function render(el, ctx) { el.append(ctx.h('div', {}, 'Hello')); }"
+BROKEN = "export async function render(el, ctx) { el.append(nope); }"
+BLANK = "export async function render(el, ctx) { const a = 1; }"
+
+
+def write(app, code):
+    return call("ui_write_app_file", app_id=app, path="index.js", content=code)
+
+
+def with_app(env, name):
+    ctx = env[0]
+    if not ctx.fileapps.exists(name):
+        ctx.fileapps.create_app(name, name.title(), "x")
+    return ctx
 
 
 def chat(env, tmp_path, monkeypatch, script, answers):
@@ -55,29 +67,31 @@ OK = {"errors": [], "rendered": True, "usedApi": False}
 
 
 def test_working_code_goes_on_to_the_approval_card_and_is_stored(env, tmp_path, monkeypatch):
-    ctx, asked, ev = chat(env, tmp_path, monkeypatch, [[call("ui_add_panel", name="hello", title="Hello", code=GOOD)], [{"content": "ok"}]], [OK])
-    assert len(asked) == 1 and asked[0]["kind"] == "panel" and asked[0]["code"] == GOOD
-    assert ctx.mods.get("hello") is not None
+    with_app(env, "hello")
+    ctx, asked, ev = chat(env, tmp_path, monkeypatch, [[write("hello", GOOD)], [{"content": "ok"}]], [OK])
+    assert len(asked) == 1 and asked[0]["kind"] == "file_app" and asked[0]["code"] == GOOD
+    assert ctx.fileapps.read_file("hello", "index.js") == GOOD
 
 
 def test_broken_code_is_sent_back_to_the_model_and_never_shown_to_the_user(env, tmp_path, monkeypatch):
+    with_app(env, "p")
     bad = {"errors": ["nope is not defined"], "rendered": False, "usedApi": False}
-    ctx, asked, ev = chat(env, tmp_path, monkeypatch, [[call("ui_add_panel", name="p", title="P", code="el.append(nope)")],
-                                                      [call("ui_add_panel", name="p", title="P", code=GOOD)], [{"content": "ok"}]], [bad, OK])
+    ctx, asked, ev = chat(env, tmp_path, monkeypatch, [[write("p", BROKEN)], [write("p", GOOD)], [{"content": "ok"}]], [bad, OK])
     results = [e for e in ev if e.get("type") == "tool_result"]
     assert not results[0]["ok"] and "nope is not defined" in results[0]["preview"]
     cards = [e for e in ev if e.get("type") == "tool_call"]
     assert not cards[0]["needs_approval"]                    # the user was not asked to approve the broken attempt
-    assert cards[1]["needs_approval"] and ctx.mods.get("p")["code"] == GOOD   # the retry was shown, approved and kept
+    assert cards[1]["needs_approval"] and ctx.fileapps.read_file("p", "index.js") == GOOD   # the retry was shown, approved and kept
 
 
-def test_a_panel_that_shows_nothing_is_refused_unless_it_waits_on_the_server(env, tmp_path, monkeypatch):
+def test_an_app_that_shows_nothing_is_refused_unless_it_waits_on_the_server(env, tmp_path, monkeypatch):
+    with_app(env, "p")
     blank = {"errors": [], "rendered": False, "usedApi": False}
-    ctx, _, ev = chat(env, tmp_path, monkeypatch, [[call("ui_add_panel", name="p", title="P", code="const a = 1")], [{"content": "x"}]], [blank])
-    assert ctx.mods.get("p") is None and "showed nothing" in [e for e in ev if e.get("type") == "tool_result"][0]["preview"]
+    ctx, _, ev = chat(env, tmp_path, monkeypatch, [[write("p", BLANK)], [{"content": "x"}]], [blank])
+    assert ctx.fileapps.read_file("p", "index.js") != BLANK and "showed nothing" in [e for e in ev if e.get("type") == "tool_result"][0]["preview"]
     waiting = {"errors": [], "rendered": False, "usedApi": True}
-    ctx, _, ev = chat(env, tmp_path, monkeypatch, [[call("ui_add_panel", name="q", title="Q", code="await diatonic.api.get('/x')")], [{"content": "x"}]], [waiting])
-    assert ctx.mods.get("q") is not None
+    ctx, _, ev = chat(env, tmp_path, monkeypatch, [[write("p", BLANK)], [{"content": "x"}]], [waiting])
+    assert ctx.fileapps.read_file("p", "index.js") == BLANK
 
 
 def test_scripts_are_checked_too(env, tmp_path, monkeypatch):
@@ -87,12 +101,14 @@ def test_scripts_are_checked_too(env, tmp_path, monkeypatch):
 
 
 def test_no_answer_from_the_window_falls_back_to_the_approval_card(env, tmp_path, monkeypatch):
-    ctx, asked, ev = chat(env, tmp_path, monkeypatch, [[call("ui_add_panel", name="p", title="P", code=GOOD)], [{"content": "ok"}]], [None])
-    assert len(asked) == 1 and ctx.mods.get("p") is not None
+    with_app(env, "p")
+    ctx, asked, ev = chat(env, tmp_path, monkeypatch, [[write("p", GOOD)], [{"content": "ok"}]], [None])
+    assert len(asked) == 1 and ctx.fileapps.read_file("p", "index.js") == GOOD
 
 
 def test_the_same_code_is_not_tested_twice(env, tmp_path, monkeypatch):
-    ctx, asked, ev = chat(env, tmp_path, monkeypatch, [[call("ui_add_panel", name="p", title="P", code=GOOD)], [{"content": "ok"}]], [OK])
+    with_app(env, "p")
+    ctx, asked, ev = chat(env, tmp_path, monkeypatch, [[write("p", GOOD)], [{"content": "ok"}]], [OK])
     assert len(asked) == 1       # the approval card's preview tested it; running the approved tool did not test it again
 
 
@@ -103,15 +119,15 @@ def test_the_report_endpoint_ignores_unknown_ids(tmp_path):
 
 
 @pytest.mark.skipif(not shutil.which("node"), reason="node is not installed")
-def test_every_template_is_valid_javascript():
-    for what, code in sdk.TEMPLATES:
-        with tempfile.TemporaryDirectory() as d:
-            f = Path(d) / "t.js"
-            f.write_text(f"async function t(diatonic, el, ctx) {{\n{code}\n}}\n")
-            r = subprocess.run(["node", "--check", str(f)], capture_output=True, text=True)
-            assert r.returncode == 0, f"{what}: {r.stderr}"
-        assert "fetch(" not in code and "localStorage" not in code
+def test_every_recipe_is_valid_javascript_and_has_the_render_shape():
+    recipes = [d for d in (Path(sdk.__file__).parents[2] / "recipes").iterdir() if d.is_dir()]
+    assert recipes
+    for d in recipes:
+        r = subprocess.run(["node", "--check", str(d / "index.js")], capture_output=True, text=True)
+        assert r.returncode == 0, f"{d.name}: {r.stderr}"
+        code = (d / "index.js").read_text()
+        assert "export async function render(el, ctx)" in code and "localStorage" not in code and " fetch(" not in code
 
 
 def test_the_sdk_text_stays_short_enough_for_a_small_model():
-    assert len(sdk.SDK + sdk.examples()) < 2400      # characters, about 600 tokens in every build request
+    assert len(sdk.FILE_HINT) < 1200      # characters, in every build request

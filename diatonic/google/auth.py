@@ -19,25 +19,20 @@ def public(ga: GoogleAccounts, a: dict) -> dict:
             "needs_reauth": a.get("needs_reauth", False), "services": services_of(a), "default": ga.cfg["default_account"].lower() == a["email"].lower()}
 
 
-NEW_PATH = "/api/google/auth/callback"
-LEGACY_PATH = "/api/apps/gcal/auth/callback"   # what single-account Calendar setups registered with Google
+CALLBACK_PATH = "/api/google/auth/callback"
 
 
-def build(ctx, ga: GoogleAccounts) -> tuple[list[Route], Route]:
-    """Routes for /api/google plus a route at the legacy callback path, so either redirect URI works."""
+def build(ctx, ga: GoogleAccounts) -> list[Route]:
+    """Routes for /api/google."""
     pending: dict[str, dict] = {}
 
-    def redirect_path() -> str:
-        return ga.cfg.get("redirect_path") if ga.cfg.get("redirect_path") in (NEW_PATH, LEGACY_PATH) else NEW_PATH
-
     def redirect_uri(request: Request) -> str:
-        return f"{request.url.scheme}://{request.url.netloc}{redirect_path()}"
+        return f"{request.url.scheme}://{request.url.netloc}{CALLBACK_PATH}"
 
     async def state(request: Request):
         cl = ga.client()
         return JSONResponse({"client_set": bool(cl), "client_id_hint": (cl[0][:12] + "…") if cl else "", "redirect_uri": redirect_uri(request),
-                             "redirect_choices": [{"path": p, "uri": f"{request.url.scheme}://{request.url.netloc}{p}"} for p in (NEW_PATH, LEGACY_PATH)],
-                             "redirect_path": redirect_path(), "accounts": [public(ga, a) for a in ga.all()], "default_account": ga.cfg["default_account"],
+                             "accounts": [public(ga, a) for a in ga.all()], "default_account": ga.cfg["default_account"],
                              "fake": "fake" if urls()["auth"].startswith("http://localhost") or "127.0.0.1" in urls()["auth"] else ""})
 
     async def put_client(request: Request):
@@ -104,25 +99,16 @@ def build(ctx, ga: GoogleAccounts) -> tuple[list[Route], Route]:
         ga.forget()
         return await state(request)
 
-    async def put_redirect(request: Request):
-        path = (await request.json()).get("path")
-        if path in (NEW_PATH, LEGACY_PATH):
-            ga.cfg["redirect_path"] = path
-            ctx.config.save()
-        return await state(request)
-
     async def put_default(request: Request):
         email = str((await request.json()).get("email", ""))
         ga.cfg["default_account"] = email if (not email or ga.get(email)) else ga.cfg["default_account"]
         ctx.config.save()
         return await state(request)
 
-    mounted = [Route("/state", state), Route("/client", put_client, methods=["PUT"]), Route("/auth/start", start),
-               Route("/auth/callback", callback), Route("/accounts/{email}", update_account, methods=["POST"]),
-               Route("/accounts/{email}", delete_account, methods=["DELETE"]), Route("/default", put_default, methods=["PUT"]),
-               Route("/redirect", put_redirect, methods=["PUT"])]
-    return mounted, Route(LEGACY_PATH, callback)
+    return [Route("/state", state), Route("/client", put_client, methods=["PUT"]), Route("/auth/start", start),
+            Route("/auth/callback", callback), Route("/accounts/{email}", update_account, methods=["POST"]),
+            Route("/accounts/{email}", delete_account, methods=["DELETE"]), Route("/default", put_default, methods=["PUT"])]
 
 
 def routes(ctx, ga: GoogleAccounts) -> list[Route]:
-    return build(ctx, ga)[0]
+    return build(ctx, ga)
