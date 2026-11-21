@@ -98,6 +98,4 @@ More in [How it works](docs/how-it-works.md#approvals).
 - [How it works](docs/how-it-works.md): approvals, parallel chats, guardrails for small models, adding an app, code layout, development
 - [Roadmap](todo.md): what's next, and what still needs real-world testing
 
-AWS Builder Code: T538H8
-
 Python on [Starlette](https://www.starlette.io), with a plain HTML/CSS/JS frontend (no build step). The terminal uses [xterm.js](https://xtermjs.org) (MIT).
