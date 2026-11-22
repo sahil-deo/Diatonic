@@ -678,15 +678,34 @@ export function getScreenContext(forTabId = null) {
   const tabs = allTabs(tree);
   if (!tabs.length) return null;
 
+  const visibleTabs = [];
+  function collectVisible(node) {
+    if (!node) return;
+    if (node.type === "stack" && node.tabs?.length) {
+      const activeIdx = Math.max(0, Math.min(node.active || 0, node.tabs.length - 1));
+      visibleTabs.push(node.tabs[activeIdx]);
+    } else if (node.type === "split") {
+      for (const c of node.children || []) collectVisible(c);
+    }
+  }
+  collectVisible(tree?.root);
+
   let targetTab = null;
   if (forTabId) {
-    const otherTabs = tabs.filter((t) => t.id !== forTabId && t.app !== "chat");
+    const otherTabs = visibleTabs.filter((t) => t.id !== forTabId && t.app !== "chat");
     targetTab = otherTabs.find((t) => t.id === activeTabId) || otherTabs[0];
   } else {
-    const activeTab = tabs.find((t) => t.id === activeTabId);
-    targetTab = (activeTab && activeTab.app !== "chat")
-      ? activeTab
-      : tabs.find((t) => t.app !== "chat") || activeTab;
+    const activeTab = visibleTabs.find((t) => t.id === activeTabId) || tabs.find((t) => t.id === activeTabId);
+    if (activeTab && activeTab.app !== "chat") {
+      targetTab = activeTab;
+    } else {
+      const nonChatVisible = visibleTabs.filter((t) => t.app !== "chat");
+      targetTab = nonChatVisible.find((t) => {
+        const inst = instances.get(t.id);
+        const item = inst?.mod?.current?.(inst.pctx);
+        return item && item.ref;
+      }) || nonChatVisible[0] || tabs.find((t) => t.app !== "chat") || activeTab;
+    }
   }
   if (!targetTab) return null;
 

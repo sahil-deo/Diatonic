@@ -3,6 +3,7 @@ import { render as md } from "/js/md.js";
 import { lines as hlLines } from "/js/highlight.js";
 import { icon } from "/js/icons.js";
 import { state, emit } from "/js/store.js";
+import { openPanel } from "/js/panel.js";
 
 const B = "/api/apps/files";
 export const wide = true;
@@ -233,7 +234,7 @@ async function viewer(el, ctx, info, st) {
     if (isMd) {
       opts.append(h("button", { class: "btn sm", onclick: () => { st.source = !st.source; reload(); } }, st.source ? "Preview" : "Show source"));
       opts.append(h("button", { class: "btn sm", title: "Present this markdown file as slides", onclick: () => {
-        emit("ui", { action: "open", app: "presentations", params: { file: f.path } });
+        openPanel("presentations", { file: f.path });
       } }, "Present slides"));
     }
     else opts.append(h("label", { class: "chk", style: "margin:0" }, h("input", { type: "checkbox", checked: st.wrap, onchange: (e) => { st.wrap = e.target.checked; code.classList.toggle("wrap", st.wrap); } }), "wrap lines"));

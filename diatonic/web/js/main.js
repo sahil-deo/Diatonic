@@ -256,7 +256,13 @@ async function boot() {
   on("notification", inbox.onNotification);
   on("app_changed", (ev) => {
     if (ev?.app) api.invalidateApp(ev.app);
-    if (state.panelApp === ev.app && !$("#panel-body")?.dataset?.dirty) refreshPanel();
+    if (state.panelApp === ev.app) {
+      const activeTabId = workspace?.getActiveTabId?.();
+      const activeEl = activeTabId ? document.querySelector(`.workspace-panel-body[data-body-for="${activeTabId}"]`) : $("#panel-body");
+      if (activeEl?.dataset?.dirty) return;
+      if (activeEl?.contains(document.activeElement) && ["INPUT", "TEXTAREA"].includes(document.activeElement.tagName)) return;
+      refreshPanel();
+    }
   });
   on("runs-changed", paintRuns);
   on("conversations-changed", loadConvs);

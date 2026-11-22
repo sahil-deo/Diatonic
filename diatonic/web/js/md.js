@@ -8,7 +8,10 @@ const inline = (s) =>
    .replace(/!\[([^\]]*)\]\(([^\s)]+)\)/g, (m, alt, url) => { const u = OPTS.resolveImage ? OPTS.resolveImage(url) : (/^https?:/.test(url) ? url : null); return u ? `<img src="${u}" alt="${alt}" loading="lazy">` : m; })
    .replace(/\[([^\]]+)\]\((?!https?:)([^\s)#]+)(#[^\s)]*)?\)/g, (m, t, url) => OPTS.fileLink ? `<a href="#" data-file="${OPTS.fileLink(url)}">${t}</a>` : m)
    .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
+   .replace(/__([^_\n]+)__/g, "<strong>$1</strong>")
    .replace(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/g, "$1<em>$2</em>")
+   .replace(/(^|[^_\w])_([^_\n]+)_(?!\w)/g, "$1<em>$2</em>")
+   .replace(/~~([^~\n]+)~~/g, "<del>$1</del>")
    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
    .replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, '$1<a href="$2" target="_blank" rel="noopener noreferrer">$2</a>');
 
@@ -31,7 +34,7 @@ export function render(src, opts = {}) {
     const l = lines[i];
     let m;
     if (/^\u0000\d+\u0000$/.test(l.trim())) { flushPara(); flushList(); out.push(l.trim()); }
-    else if ((m = l.match(/^(#{1,3})\s+(.*)/))) { flushPara(); flushList(); out.push(`<h${m[1].length}>${inline(m[2])}</h${m[1].length}>`); }
+    else if ((m = l.match(/^(#{1,6})\s+(.*)/))) { flushPara(); flushList(); out.push(`<h${m[1].length}>${inline(m[2])}</h${m[1].length}>`); }
     else if (/^\s*(---|\*\*\*)\s*$/.test(l)) { flushPara(); flushList(); out.push("<hr>"); }
     else if ((m = l.match(/^\s*[-*•]\s+(.*)/))) {
       flushPara(); if (list !== "ul") { flushList(); out.push("<ul>"); list = "ul"; }

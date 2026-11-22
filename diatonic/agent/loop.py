@@ -55,10 +55,15 @@ _TEXT_TASK = re.compile(
     re.I,
 )
 _ACTION_AND = re.compile(r"\b(?:and|then)\s+(?:send|save|create|run|schedule|add|delete|remove|open)\b", re.I)
+_APP_NOUN = re.compile(r"\b(?:e-?mails?|mails?|files?|notes?|issues?|prs?|pull requests?|threads?|conversations?|events?|calendar)\b", re.I)
 
 
 def is_text_task(text: str) -> bool:
-    return bool(_TEXT_TASK.search(text)) and not bool(_ACTION_AND.search(text))
+    if not bool(_TEXT_TASK.search(text)) or bool(_ACTION_AND.search(text)):
+        return False
+    if _APP_NOUN.search(text) and not re.search(r":\s*\S+", text):
+        return False
+    return True
 
 
 # "summarize this", "reply to it", "delete that one": the user means what is open on their screen.
@@ -540,7 +545,7 @@ async def run_agent(ctx, registry, conv_id: str, text: str, *, speak: bool = Fal
             on_screen = ""
     if on_screen and screen_app in hidden:   # don't put an email subject or note title in a cloud prompt
         on_screen = screen_line(registry, {k: v for k, v in screen.items() if k != "title"})[0]
-    if attachments or is_text_task(text):   # textual tasks or user attachments: a no-tool reply is legitimate (no 'call a tool' nudge)
+    if attachments or (is_text_task(text) and not screen_app):   # textual tasks or user attachments: a no-tool reply is legitimate (no 'call a tool' nudge)
         expects_tool = False
     if readonly:  # unattended runs may only read; nothing can be changed without a person present
         tool_map = {n: (a, t) for n, (a, t) in tool_map.items() if (not t.needs_approval or t.ask) and a.id not in hidden}

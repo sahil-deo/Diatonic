@@ -170,11 +170,16 @@ function paintReader() {
   const a = acctOf(d.account), manage = canManage(a);
   const tb = (label, ic, fn, disabled) => h("button", { type: "button", class: "icon-btn", title: label, "aria-label": label, disabled, onclick: fn, html: icon(ic, 17) });
   const last = d.messages[d.messages.length - 1];
+  const subj = d.subject ? `“${d.subject.trim()}”` : "";
+  const sender = last?.from ? (last.from.name ? `${last.from.name} <${last.from.email}>` : last.from.email) : "";
+  const who = sender ? ` from ${sender}` : "";
+  const about = subj ? ` ${subj}${who}` : who;
+  const summarizePrompt = `Summarize the email${about} (ref: ${d.ref})`;
   pane.replaceChildren(
     h("div", { class: "mr-bar" }, h("button", { type: "button", class: "btn sm back-narrow", onclick: closeReader }, "← Back"),
       tb("Archive", "archive", () => act("archive", [d.ref], true), !manage), tb("Delete", "trash", () => act("trash", [d.ref], true), !manage), tb("Report spam", "spam", () => act("spam", [d.ref], true), !manage),
       tb("Mark as unread", "mail", () => act("mark_unread", [d.ref]).then(closeReader), !manage), h("div", { class: "grow" }),
-      h("button", { type: "button", class: "btn sm", onclick: () => M.ctx.prompt("Summarize this email.") }, "Summarize with the agent")),
+      h("button", { type: "button", class: "btn sm", onclick: () => M.ctx.prompt(summarizePrompt) }, "Summarize with the agent")),
     h("div", { class: "mr-scroll" }, h("h2", { class: "mr-subject" }, d.subject, d.account_label && M.accounts.length > 1 && h("span", { class: "pill", style: `color:${a?.color}` }, d.account_label)),
       ...d.messages.map((m, i) => messageCard(m, d, i === d.messages.length - 1 || m.unread))));
 }

@@ -7,13 +7,24 @@ from datetime import datetime
 from pathlib import Path
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import FileResponse, JSONResponse
 from starlette.routing import Route
 
 from ..base import WRITE, App, Tool, ToolError
 
 DEFAULT_DIR = "~/Documents/Diatonic Presentations"
 _FM = re.compile(r"\A---\n(.*?)\n---\n?", re.S)
+
+IMAGE_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".svg": "image/svg+xml",
+    ".webp": "image/webp",
+    ".bmp": "image/bmp",
+    ".ico": "image/x-icon",
+}
 
 
 def slugify(title: str) -> str:
@@ -80,6 +91,35 @@ def split_slides(raw_text: str) -> tuple[dict, list[dict]]:
         else:
             slides_raw[-1].append(line)
 
+    has_separator = any(line.strip() in ("---", "***") for line in lines)
+    if not has_separator and len(slides_raw) == 1:
+        # Check if we can split by major headings (# or ##) when no explicit slide breaks exist
+        heading_splits: list[list[str]] = []
+        in_c = False
+        f_char = ""
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("```") or stripped.startswith("~~~"):
+                c = stripped[:3]
+                if not in_c:
+                    in_c = True
+                    f_char = c
+                elif c == f_char:
+                    in_c = False
+                    f_char = ""
+                if not heading_splits:
+                    heading_splits.append([])
+                heading_splits[-1].append(line)
+                continue
+            if not in_c and re.match(r"^#{1,2}\s+", stripped):
+                heading_splits.append([line])
+            else:
+                if not heading_splits:
+                    heading_splits.append([])
+                heading_splits[-1].append(line)
+        if len(heading_splits) > 1:
+            slides_raw = heading_splits
+
     slides = []
     for i, slide_lines in enumerate(slides_raw):
         content = "\n".join(slide_lines).strip()
@@ -89,7 +129,7 @@ def split_slides(raw_text: str) -> tuple[dict, list[dict]]:
         # Extract title (first heading)
         slide_title = ""
         for sl in slide_lines:
-            hm = re.match(r"^#{1,3}\s+(.*)", sl.strip())
+            hm = re.match(r"^#{1,6}\s+(.*)", sl.strip())
             if hm:
                 slide_title = hm.group(1).strip()
                 break
@@ -348,15 +388,87 @@ class PresentationsApp(App):
         if file_path:
             p = Path(file_path).expanduser().resolve()
             if not p.is_file():
-                raise ToolError(f"File not found: {file_path}")
+                return JSONResponse({"error": f"File not found: {file_path}"}, 404)
             raw = p.read_text(errors="replace")
         meta, slides = split_slides(raw)
-        title = meta.get("title") or (slides[0]["title"] if slides else "Presentation")
+        title = meta.get("title") or (slides[0]["title"] if slides else (Path(file_path).stem if file_path else "Presentation"))
         return JSONResponse({
             "title": title,
             "slides": slides,
             "slides_count": len(slides),
             "meta": meta,
+        })
+
+    async def api_asset(self, request: Request):
+        """Serve an image asset referenced by a presentation."""
+        raw_path = request.query_params.get("path", "").strip()
+        if not raw_path:
+            return JSONResponse({"error": "Missing image path"}, 400)
+
+        cand = Path(raw_path).expanduser()
+        real: Path | None = None
+        if cand.is_absolute() and cand.is_file():
+            try:
+                cand_res = cand.resolve()
+                if cand_res.is_file():
+                    real = cand_res
+            except (OSError, RuntimeError):
+                pass
+
+        if not real:
+            for base in (self.root, self.root / "images", self.root / "assets"):
+                target = (base / raw_path).resolve()
+                if self.root.resolve() in target.parents or target == self.root.resolve():
+                    if target.is_file():
+                        real = target
+                        break
+
+        if not real or not real.is_file():
+            return JSONResponse({"error": f"Image not found: {raw_path}"}, 404)
+
+        suffix = real.suffix.lower()
+        media_type = IMAGE_TYPES.get(suffix, "application/octet-stream")
+        headers = {
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "max-age=3600",
+            "Content-Security-Policy": "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'",
+            "Content-Disposition": "inline",
+        }
+        return FileResponse(real, media_type=media_type, headers=headers)
+
+    async def api_upload(self, request: Request):
+        """Upload an image to the presentations images directory."""
+        import base64
+        body = await request.json()
+        name = body.get("name", "").strip() or f"image-{int(time.time())}.png"
+        data_b64 = body.get("data", "")
+        if not data_b64:
+            return JSONResponse({"error": "Missing image data"}, 400)
+
+        if "," in data_b64:
+            data_b64 = data_b64.split(",", 1)[1]
+
+        try:
+            raw_bytes = base64.b64decode(data_b64)
+        except Exception as e:
+            return JSONResponse({"error": f"Invalid base64: {e}"}, 400)
+
+        images_dir = self.root / "images"
+        images_dir.mkdir(parents=True, exist_ok=True)
+
+        safe_name = re.sub(r"[^\w\-.]+", "_", Path(name).name)
+        stem = Path(safe_name).stem
+        ext = Path(safe_name).suffix.lower() or ".png"
+        dest = images_dir / f"{stem}{ext}"
+        if dest.exists():
+            dest = images_dir / f"{stem}-{int(time.time())}{ext}"
+
+        dest.write_bytes(raw_bytes)
+        rel_path = f"images/{dest.name}"
+        return JSONResponse({
+            "name": dest.name,
+            "path": rel_path,
+            "url": f"/api/apps/presentations/asset?path={rel_path}",
         })
 
     def routes(self):
@@ -367,4 +479,6 @@ class PresentationsApp(App):
             Route("/decks/{slug}", self.api_save, methods=["PUT"]),
             Route("/decks/{slug}", self.api_delete, methods=["DELETE"]),
             Route("/parse", self.api_parse, methods=["POST"]),
+            Route("/asset", self.api_asset),
+            Route("/upload", self.api_upload, methods=["POST"]),
         ]

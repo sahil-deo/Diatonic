@@ -14,7 +14,7 @@ import re
 from typing import Any
 
 from .. import models
-from .loop import is_navigation, is_text_task
+from .loop import _DEICTIC, is_navigation, is_text_task
 
 DEFAULT_RULES = [
     {
@@ -137,7 +137,9 @@ def _is_multi_app(text: str) -> bool:
     return bool(matched_domains and RE_COORDINATED_ACTION.search(text))
 
 
-def _is_trivial(text: str) -> bool:
+def _is_trivial(text: str, screen: dict | None = None) -> bool:
+    if screen and (screen.get("ref") or (screen.get("app") and _DEICTIC.search(text))):
+        return False
     if is_text_task(text):
         return True
     stripped = text.strip()
@@ -195,7 +197,7 @@ def classify_task(ctx, text: str, screen: dict | None = None, conv_id: str | Non
         return "multi_app", "Multi-App Workflows"
 
     # 6. Trivial & Quick Text Tasks
-    if _is_trivial(clean_text):
+    if _is_trivial(clean_text, screen):
         return "trivial", "Trivial & Text Tasks"
 
     # 7. Fallback to default

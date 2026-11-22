@@ -27,6 +27,14 @@ export async function render(el, ctx) {
   const nav = { list, edit, present, presentFile };
   instances.set(ctx, { nav, getOpen: () => open });
 
+  const targetFile = ctx.params?.file || ctx.params?.path;
+  if (targetFile) {
+    ctx.params.file = ctx.params.path = null;
+    await list("");
+    await presentFile(targetFile);
+    return;
+  }
+
   if (state.openPresentation) {
     const slug = state.openPresentation;
     state.openPresentation = null;
@@ -34,10 +42,17 @@ export async function render(el, ctx) {
     return;
   }
 
+  const savedSlug = ctx.state?.get("openDeck");
+  if (savedSlug) {
+    await edit(savedSlug);
+    return;
+  }
+
   await list("");
 
   /* ---------------------------------------------------------------- Deck Library */
   async function list(q) {
+    ctx.state?.set("openDeck", null);
     el.replaceChildren(); delete el.dataset.dirty; open = null; emit("screen");
     const d = await api.get(`${BASE}/decks${q ? `?q=${encodeURIComponent(q)}` : ""}`).catch((e) => {
       toast("Couldn't load presentations: " + e.message, "error");
@@ -97,8 +112,15 @@ export async function render(el, ctx) {
     el.append(...kids);
   }
 
+  const resolveImage = (url) => {
+    if (!url) return null;
+    if (/^https?:/.test(url) || url.startsWith("data:image/")) return url;
+    return `${BASE}/asset?path=${encodeURIComponent(url)}`;
+  };
+
   /* ---------------------------------------------------------------- Editor */
   async function edit(slug, autoPresent = false) {
+    ctx.state?.set("openDeck", slug || "");
     el.replaceChildren(); delete el.dataset.dirty;
     let deck;
     if (slug) {
@@ -145,7 +167,7 @@ export async function render(el, ctx) {
       const cur = slides[previewSlideIdx];
       // strip speaker notes from preview
       const clean = cur.content.replace(/<!--\s*notes?:\s*[\s\S]*?-->/gi, "").replace(/\n+(?:Notes?|Speaker Notes?):\s*[\s\S]*\Z/gi, "");
-      slidePreview.innerHTML = md(clean);
+      slidePreview.innerHTML = md(clean, { resolveImage });
       slideCounter.textContent = `Slide ${previewSlideIdx + 1} of ${slides.length}`;
     }
 
@@ -160,6 +182,7 @@ export async function render(el, ctx) {
           ? await api.put(`${BASE}/decks/${encodeURIComponent(curSlug)}`, payload)
           : await api.post(`${BASE}/decks`, payload);
         curSlug = res.slug;
+        ctx.state?.set("openDeck", curSlug);
         open = res.title || title;
         delete el.dataset.dirty;
         status.textContent = "Saved";
@@ -196,9 +219,56 @@ export async function render(el, ctx) {
       markDirty();
     };
 
+    const fileInput = h("input", { type: "file", accept: "image/*", style: "display:none" });
+    const uploadAndInsert = async (file) => {
+      if (!file || !file.type.startsWith("image/")) {
+        toast("Please choose an image file.", "warn");
+        return;
+      }
+      status.textContent = "Uploading image…";
+      const reader = new FileReader();
+      reader.onload = async () => {
+        try {
+          const res = await api.post(`${BASE}/upload`, { name: file.name, data: reader.result });
+          insertText(`\n![${file.name.replace(/\.[^/.]+$/, "")}](${res.path})\n`);
+          status.textContent = "Image added";
+        } catch (e) {
+          toast("Image upload failed: " + e.message, "error");
+          status.textContent = "Upload failed";
+        }
+      };
+      reader.readAsDataURL(file);
+    };
+
+    fileInput.addEventListener("change", () => {
+      if (fileInput.files?.[0]) {
+        uploadAndInsert(fileInput.files[0]);
+        fileInput.value = "";
+      }
+    });
+
+    contentTextarea.addEventListener("dragover", (e) => {
+      if (e.dataTransfer?.types?.includes("Files")) e.preventDefault();
+    });
+    contentTextarea.addEventListener("drop", (e) => {
+      const file = e.dataTransfer?.files?.[0];
+      if (file && file.type.startsWith("image/")) {
+        e.preventDefault();
+        uploadAndInsert(file);
+      }
+    });
+    contentTextarea.addEventListener("paste", (e) => {
+      const file = e.clipboardData?.files?.[0];
+      if (file && file.type.startsWith("image/")) {
+        e.preventDefault();
+        uploadAndInsert(file);
+      }
+    });
+
     const addSlideBtn = h("button", { class: "btn sm", type: "button", onclick: () => insertText("\n\n---\n\n## New Slide\n\n- Point 1\n- Point 2\n") }, "+ Slide");
     const addCodeBtn = h("button", { class: "btn sm", type: "button", onclick: () => insertText("\n```python\n# code here\n```\n") }, "+ Code");
     const addNotesBtn = h("button", { class: "btn sm", type: "button", onclick: () => insertText("\n<!-- note: Speaker note here -->\n") }, "+ Note");
+    const addImageBtn = h("button", { class: "btn sm", type: "button", onclick: () => fileInput.click() }, "+ Image");
 
     const prevSlideBtn = h("button", { class: "btn sm", type: "button", onclick: () => { previewSlideIdx--; updatePreview(); } }, "‹");
     const nextSlideBtn = h("button", { class: "btn sm", type: "button", onclick: () => { previewSlideIdx++; updatePreview(); } }, "›");
@@ -209,12 +279,13 @@ export async function render(el, ctx) {
     } }, h("span", { html: icon("presentation", 14) }), "Present Deck");
 
     const navBar = h("div", { class: "pres-editor-bar" },
-      h("button", { class: "btn sm", type: "button", onclick: async () => { await save(); list(""); } }, "← Presentations"),
+      h("button", { class: "btn sm", type: "button", onclick: async () => { ctx.state?.set("openDeck", null); await save(); list(""); } }, "← Presentations"),
       h("div", { class: "grow" }),
       status,
       presentBtn,
       curSlug && h("button", { class: "btn sm danger", type: "button", onclick: async () => {
         if (confirm("Move this presentation to trash?")) {
+          ctx.state?.set("openDeck", null);
           await api.del(`${BASE}/decks/${encodeURIComponent(curSlug)}`);
           list("");
         }
@@ -223,7 +294,7 @@ export async function render(el, ctx) {
 
     const toolbar = h("div", { class: "pres-toolbar" },
       h("span", { class: "p-s muted" }, "Insert:"),
-      addSlideBtn, addCodeBtn, addNotesBtn,
+      addSlideBtn, addCodeBtn, addNotesBtn, addImageBtn, fileInput,
       h("div", { class: "grow" }),
       h("span", { class: "p-s muted" }, "Preview:"),
       prevSlideBtn, slideCounter, nextSlideBtn
@@ -311,7 +382,7 @@ export async function render(el, ctx) {
 
     function renderCurrentSlide() {
       const s = slides[currentIdx];
-      slideBox.innerHTML = md(s.content);
+      slideBox.innerHTML = md(s.content, { resolveImage });
       hudCounter.textContent = `${currentIdx + 1} / ${slides.length}`;
       
       const pct = ((currentIdx + 1) / slides.length) * 100;
