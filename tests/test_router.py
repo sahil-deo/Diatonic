@@ -91,6 +91,26 @@ def test_classification_trivial(test_ctx):
         assert cat == "trivial", f"Prompt '{p}' should be classified as 'trivial', got '{cat}'"
 
 
+def test_email_summarization_not_trivial(test_ctx):
+    screen = {"app": "gmail", "kind": "email", "ref": "work@acme.test|18cb554", "title": "Quarterly Plan"}
+    for p in [
+        'Summarize the email "Quarterly Plan" from Alice <alice@acme.test> (ref: work@acme.test|18cb554)',
+        "summarize this email",
+        "summarize this mail",
+        "summarize this",
+    ]:
+        cat, name = router.classify_task(test_ctx, p, screen=screen)
+        assert cat != "trivial", f"Prompt '{p}' with open email on screen should not be 'trivial', got '{cat}'"
+
+    for p in [
+        'Summarize the email "Quarterly Plan" (ref: work@acme.test|18cb554)',
+        "summarize this email",
+        "summarize this mail",
+    ]:
+        cat, name = router.classify_task(test_ctx, p)
+        assert cat != "trivial", f"Prompt '{p}' naming email should not be 'trivial', got '{cat}'"
+
+
 def test_custom_rule_takes_precedence(test_ctx):
     test_ctx.config.data["model_routing"] = {
         "enabled": True,

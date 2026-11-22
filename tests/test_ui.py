@@ -200,6 +200,10 @@ def test_screen_context_is_added_only_when_the_user_points_at_it(env, monkeypatc
     asyncio.run(go("summarize this email"))
     assert "me@x.com|t9" in seen["user"] and "Your submission is still waiting" in seen["user"]
     assert "gmail_list_emails" in seen["tools"]                          # the app on screen is offered even though "mail" wasn't said
+    assert not loop.is_text_task("summarize this email")
+    assert not loop.is_text_task("summarize this mail")
+    assert not loop.is_text_task('Summarize the email "Your submission" (ref: me@x.com|t9)')
+    assert loop.is_text_task("proofread this email draft: Hello boss")
     asyncio.run(go("show my calendar"))
     assert "me@x.com|t9" not in seen["user"]                             # unrelated requests don't carry it
     assert loop.screen_line(reg, {"app": "nope"}) == ("", None)

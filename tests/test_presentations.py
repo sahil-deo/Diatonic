@@ -223,3 +223,48 @@ def test_update_presentation_without_content_does_not_touch_the_slides(env, tmp_
         asyncio.run(app.update_presentation({"deck": "deck", "title": "Deck"}))
     text = (tmp_path / "upd" / "deck.md").read_text()
     assert front_blocks(text) == 1 and len(split_slides(text)[1]) == 2
+
+
+def test_presentations_image_upload_and_asset_serving(env, tmp_path):
+    import base64
+    client, folder = client_for(env, tmp_path)
+    with client:
+        # 1. Upload a PNG image
+        sample_png = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15c4\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+        b64_data = base64.b64encode(sample_png).decode("ascii")
+        res = client.post("/api/apps/presentations/upload", json={"name": "test-diagram.png", "data": b64_data})
+        assert res.status_code == 200
+        data = res.json()
+        assert data["name"] == "test-diagram.png"
+        assert data["path"] == "images/test-diagram.png"
+        assert (folder / "images" / "test-diagram.png").exists()
+
+        # 2. Serve the uploaded asset
+        asset_res = client.get(f"/api/apps/presentations/asset?path={data['path']}")
+        assert asset_res.status_code == 200
+        assert asset_res.headers["content-type"] == "image/png"
+        assert "sandbox" in asset_res.headers.get("content-security-policy", "")
+        assert asset_res.content == sample_png
+
+        # 3. Path traversal or missing image returns 404
+        bad_res = client.get("/api/apps/presentations/asset?path=../../nonexistent.png")
+        assert bad_res.status_code == 404
+
+
+def test_parse_route_splits_headings_and_returns_404_for_missing(env, tmp_path):
+    client, folder = client_for(env, tmp_path)
+    with client:
+        # Missing file returns 404 JSON, not a 500 error
+        r_miss = client.post("/api/apps/presentations/parse", json={"path": "/nonexistent/path/doc.md"})
+        assert r_miss.status_code == 404
+        assert "error" in r_miss.json()
+
+        # Content without '---' but with multiple headings splits cleanly into slides
+        md_text = "# Slide One\n\nIntro content.\n\n# Slide Two\n\nSecond point."
+        r_content = client.post("/api/apps/presentations/parse", json={"content": md_text})
+        assert r_content.status_code == 200
+        parsed = r_content.json()
+        assert parsed["slides_count"] == 2
+        assert parsed["slides"][0]["title"] == "Slide One"
+        assert parsed["slides"][1]["title"] == "Slide Two"
+
