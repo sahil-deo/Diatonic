@@ -35,13 +35,7 @@ Run the same build request (e.g. a Pomodoro timer, a unit converter) with Gemini
 
 Expected: a mix. A strong model gets further but still ships broken panels nobody notices until the user opens them.
 
-## Plan, in priority order
 
-- [ ] **Verify step for `add_panel` / `add_script`.** Render headlessly, return console errors and a DOM/text snapshot, let the model fix and retry up to N times before the user sees an approval card. Same pattern that made API apps work. *Measure:* share of built panels that render without errors on first approval card.
-- [ ] **Real SDK and templates.** One-page reference of the `diatonic` API, 3-5 working example panels the model can copy, small helpers (list, form, button, call tool, read data app) so the model composes instead of writing raw DOM.
-- [ ] **Apps as files, not strings.** App folder with manifest, JS, CSS and optional Python tools; edit/patch operations; hot reload. Opens a path to panels that expose their own agent tools.
-- [ ] **Build on a stronger model, run on the small one.** Route build intents to a bigger local or cloud model. Needs an explicit exception to the taint and private-app rules (a cloud builder must not see mail).
-- [ ] **Eval set of ~10 "build me X" prompts** with pass/fail checks (renders without errors, key elements present). Without it we can't tell whether any of the above helped.
 
 ## Open question
 

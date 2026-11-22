@@ -91,11 +91,4 @@ Goal: replace the agent-first shell (rail, conversation sidebar, one chat, one p
 - **Performance:** hidden tabs keep state but stop working; throttle resize observers.
 - **Persistence:** store the layout in server config with a versioned schema and migration, localStorage as fallback.
 
-## Staged plan (each stage ships on its own)
 
-- [ ] **1. Command registry and keymap file,** current UI unchanged. Gives keyboard control and a better palette immediately.
-- [ ] **2. Layout tree,** with the existing UI as the default preset and chat as a panel.
-- [ ] **3. Multi-instance panels:** per-instance state refactor and tab stacks. Audit which panels use module-level state first.
-- [ ] **4. Launcher, status bar pins, palette modes** (search, `/`, ask).
-- [ ] **5. Macros, saved layouts and agent layout tools.**
-- [ ] **Eval:** a handful of layout requests ("mail left, calendar top-right, chat bottom-right") run through the agent, checking the resulting tree.

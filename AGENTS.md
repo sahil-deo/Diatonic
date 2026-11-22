@@ -18,7 +18,7 @@ node evals/run_build_eval.mjs --only id,id       # real-model eval of agent-buil
 To look at the UI, drive the scratch Chrome with `scripts/cdp.mjs` (a 34-line DevTools helper: `open(url, port)`, `ev(js)`, `key(...)`, `errors`). Examples of its use are in `evals/run_build_eval.mjs` and `scripts/mount_twice.mjs`. A UI change is not done until you have loaded it in the scratch Chrome and the console shows no errors. While working through `docs/v3-plan.md` this check is made once, at the end of each phase, and the tests carry the steps in between (see "Keeping the token cost down" there).
 
 ## Hard rules
-
+- **Propose an action plan before making any changes**: Clearly state what changes are you going to make and give a step by step action plan for it (THIS RULE DOES NOT APPLY TO CLAUDE / CLAUDE CODE). 
 - **Never touch the user's real setup.** Port 5005 is their running server and `~/.diatonic` is their real data. Use only the scratch server (own port, own data folder). Never run `./diatonic.sh` or `diatonic run` without `--port` and `DIATONIC_HOME`.
 - **Do not commit, push, merge or rebase unless asked.** Work on the branch you were given. Never `git reset --hard`, `git clean` or force-push.
 - **No new dependencies.** The front end has no framework and no build step; third-party code lives in `diatonic/web/vendor/`. Python dependencies are in `pyproject.toml`; do not add any.
